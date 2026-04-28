@@ -74,6 +74,12 @@ def extract_profile(ds: xr.Dataset, time_index: int, lat: float, lon: float) -> 
     return df
 
 
+
+
+@app.get("/healthz")
+def healthz() -> dict[str, str]:
+    return {"status": "ok"}
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request) -> HTMLResponse:
     return templates.TemplateResponse("index.html", {"request": request})
