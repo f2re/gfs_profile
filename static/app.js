@@ -9,6 +9,8 @@ const cacheInfoEl = document.getElementById('cacheInfo');
 const copyCsvBtn = document.getElementById('copyCsv');
 const toastContainer = document.getElementById('toastContainer');
 const loadingOverlay = document.getElementById('loadingOverlay');
+const progressBar = document.getElementById('progressBar');
+const progressText = document.getElementById('progressText');
 
 const now = new Date();
 runDateEl.value = now.toISOString().slice(0, 10);
@@ -70,8 +72,8 @@ function showToast(message, type = 'ok') {
   setTimeout(() => el.remove(), 3200);
 }
 
-async function fetchJson(url) {
-  const resp = await fetch(url);
+async function fetchJson(url, options = {}) {
+  const resp = await fetch(url, options);
   if (!resp.ok) {
     let detail = resp.statusText;
     try {
@@ -274,6 +276,23 @@ function drawWindBarbs(rows) {
   host.appendChild(svg);
 }
 
+async function pollProfileJob(jobId) {
+  while (true) {
+    const st = await fetchJson(`/api/profile/status?job_id=${jobId}`);
+    const progress = Number(st.progress || 0);
+    progressBar.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+    progressText.textContent = `Этап: ${st.stage || '—'} | ${progress}%`;
+
+    if (st.status === 'done') {
+      return st.result;
+    }
+    if (st.status === 'error') {
+      throw new Error(st.error || 'Не удалось построить профиль');
+    }
+    await new Promise((r) => setTimeout(r, 900));
+  }
+}
+
 async function loadProfile() {
   const date = toYmd(runDateEl.value);
   const cycle = cycleEl.value;
@@ -284,6 +303,9 @@ async function loadProfile() {
   }
 
   toggleLoading(true);
+  progressBar.style.width = '0%';
+  progressText.textContent = 'Запуск задачи…';
+
   try {
     const q = new URLSearchParams({
       date,
@@ -293,14 +315,19 @@ async function loadProfile() {
       lon: selected.lon
     });
 
-    const data = await fetchJson(`/api/profile?${q.toString()}`);
-    metaEl.textContent = `Действует на: ${data.meta.valid_time_utc} UTC | Источник: ${data.meta.source} | Верх профиля: ${(data.meta.max_height_m / 1000).toFixed(1)} км`;
+    const start = await fetchJson(`/api/profile/start?${q.toString()}`, { method: 'POST' });
+    const data = await pollProfileJob(start.job_id);
+
+    progressBar.style.width = '100%';
+    progressText.textContent = 'Готово';
+    metaEl.textContent = `Действует на: ${data.meta.valid_time_utc} UTC | Источник: ${data.meta.source} | Верх профиля: ${(data.meta.max_height_m / 1000).toFixed(1)} км | строк: ${data.meta.rows}`;
 
     csvOut.value = toCsv(data.rows, data.columns);
     drawProfile(data.rows);
     drawWindBarbs(data.rows);
     showToast('Профиль успешно построен.', 'ok');
   } catch (err) {
+    progressText.textContent = 'Ошибка';
     showToast(`Ошибка построения профиля: ${err.message}`, 'err');
   } finally {
     toggleLoading(false);

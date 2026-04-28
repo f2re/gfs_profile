@@ -57,7 +57,9 @@ uvicorn main:app --reload
 
 - `GET /api/available-cycles?date=YYYYMMDD`
 - `GET /api/available-leads?date=YYYYMMDD&cycle=00|06|12|18`
-- `GET /api/profile?date=YYYYMMDD&cycle=..&lead_index=..&lat=..&lon=..`
+- `GET /api/profile?date=YYYYMMDD&cycle=..&lead_index=..&lat=..&lon=..` (синхронный режим)
+- `POST /api/profile/start?...` — запуск фоновой задачи построения профиля
+- `GET /api/profile/status?job_id=...` — статус/прогресс задачи, включая процент загрузки
 - `GET /api/cache-info` — статистика LRU-кэша данных профиля и найденных lead-часов.
 - `GET /healthz` — healthcheck для платформы деплоя.
 
@@ -71,3 +73,11 @@ uvicorn main:app --reload
 
 - Парсинг GRIB2 выполняется только для `typeOfLevel=isobaricInhPa`, чтобы не читать лишние поля и не перегружать память инстанса.
 - Загрузка ответа фильтра ограничена по размеру (`MAX_GRIB_BYTES`), чтобы избежать рестартов процесса на маленьких тарифах Railway.
+
+
+## Кэширование файлов GFS на диске
+
+- Профильные GRIB2-файлы сохраняются на диск в `.cache_gfs/`, а не в RAM.
+- При повторном запросе той же точки/lead используется кэшированный файл.
+- Срок хранения кэша: 24 часа (`CACHE_TTL_SECONDS`).
+- Старые файлы автоматически очищаются перед новыми загрузками.
