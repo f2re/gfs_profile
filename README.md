@@ -1,6 +1,10 @@
 # Профиль атмосферы GFS (веб-приложение)
 
-Интерактивный сервис для построения вертикального профиля атмосферы по модели **GFS 0.25°** через OPeNDAP (NOMADS) с визуальным UX-интерфейсом на русском языке.
+Интерактивный сервис для построения вертикального профиля атмосферы по модели **GFS 0.25°** с визуальным UX-интерфейсом на русском языке.
+
+## Что изменено в источнике данных
+
+С 2026 года OpenDAP на NOMADS прекращён, поэтому проект **переведён на GRIB Filter** (`filter_gfs_0p25_1hr.pl`) и парсинг GRIB2 через `cfgrib/eccodes`.
 
 ## Возможности
 
@@ -54,21 +58,10 @@ uvicorn main:app --reload
 - `GET /api/available-cycles?date=YYYYMMDD`
 - `GET /api/available-leads?date=YYYYMMDD&cycle=00|06|12|18`
 - `GET /api/profile?date=YYYYMMDD&cycle=..&lead_index=..&lat=..&lon=..`
-- `GET /api/cache-info` — проверка текущего состояния `lru_cache` загрузки файлов модели.
+- `GET /api/cache-info` — статистика LRU-кэша данных профиля и найденных lead-часов.
 - `GET /healthz` — healthcheck для платформы деплоя.
 
 ## Источник данных
 
-`https://nomads.ncep.noaa.gov/dods/gfs_0p25/...`
-
-Максимальная высота профиля зависит от доступных уровней давления в выбранном выпуске GFS (обычно стратосфера, порядка 70+ км).
-
-
-### Если в логах Railway ошибка `Could not import module "main"`
-
-В этом репозитории добавлен `main.py`, поэтому запуск через `main:app` должен работать из коробки.
-Если сервис всё ещё использует старую команду, откройте Railway → Service Settings → Start Command и установите:
-
-```
-uvicorn main:app --host 0.0.0.0 --port $PORT
-```
+- GRIB Filter: `https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25_1hr.pl`
+- Файлы GFS: `https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod/`

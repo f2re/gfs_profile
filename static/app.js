@@ -88,7 +88,7 @@ async function fetchJson(url) {
 async function loadCacheInfo() {
   try {
     const data = await fetchJson('/api/cache-info');
-    cacheInfoEl.textContent = `Кэш: hits ${data.hits}, misses ${data.misses}, active ${data.currsize}/${data.maxsize}`;
+    cacheInfoEl.textContent = `Кэш lead: ${data.lead_cache.currsize}/${data.lead_cache.maxsize} (h:${data.lead_cache.hits}) | profile: ${data.grib_cache.currsize}/${data.grib_cache.maxsize} (h:${data.grib_cache.hits})`;
   } catch (_) {
     cacheInfoEl.textContent = 'Кэш: недоступно';
   }
@@ -294,7 +294,7 @@ async function loadProfile() {
     });
 
     const data = await fetchJson(`/api/profile?${q.toString()}`);
-    metaEl.textContent = `Действует на: ${data.meta.valid_time_utc} UTC | Ближайшая точка сетки: ${data.meta.nearest_grid_point.lat.toFixed(3)}, ${data.meta.nearest_grid_point.lon.toFixed(3)} | Верх профиля: ${(data.meta.max_height_m / 1000).toFixed(1)} км`;
+    metaEl.textContent = `Действует на: ${data.meta.valid_time_utc} UTC | Источник: ${data.meta.source} | Верх профиля: ${(data.meta.max_height_m / 1000).toFixed(1)} км`;
 
     csvOut.value = toCsv(data.rows, data.columns);
     drawProfile(data.rows);
