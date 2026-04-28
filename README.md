@@ -19,16 +19,35 @@
 - экспорт таблицы в CSV и копирование в буфер обмена;
 - уведомления/тосты, индикатор загрузки и отображение статистики кэша сервера.
 
-## Запуск
+## Локальный запуск
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn app:app --reload
+uvicorn main:app --reload
 ```
 
 Открыть: http://127.0.0.1:8000
+
+## Бесшовный деплой на Railway
+
+Проект уже подготовлен для Railway:
+
+- `main.py` добавлен как ASGI-входная точка совместимости (`main:app`);
+- `railway.json` содержит build/deploy-конфигурацию и healthcheck `/healthz`;
+- `Procfile` задаёт старт web-процесса через `uvicorn`;
+- endpoint `GET /healthz` возвращает `{"status":"ok"}`.
+
+### Шаги деплоя
+
+1. Запушить репозиторий в GitHub.
+2. В Railway выбрать **New Project → Deploy from GitHub Repo**.
+3. Выбрать этот репозиторий (Railway автоматически подхватит `railway.json`).
+4. Дождаться билда и деплоя.
+5. Открыть вкладку **Settings → Networking** и сгенерировать публичный домен.
+
+После этого приложение будет доступно по выданному URL.
 
 ## API
 
@@ -36,9 +55,20 @@ uvicorn app:app --reload
 - `GET /api/available-leads?date=YYYYMMDD&cycle=00|06|12|18`
 - `GET /api/profile?date=YYYYMMDD&cycle=..&lead_index=..&lat=..&lon=..`
 - `GET /api/cache-info` — проверка текущего состояния `lru_cache` загрузки файлов модели.
+- `GET /healthz` — healthcheck для платформы деплоя.
 
 ## Источник данных
 
 `https://nomads.ncep.noaa.gov/dods/gfs_0p25/...`
 
 Максимальная высота профиля зависит от доступных уровней давления в выбранном выпуске GFS (обычно стратосфера, порядка 70+ км).
+
+
+### Если в логах Railway ошибка `Could not import module "main"`
+
+В этом репозитории добавлен `main.py`, поэтому запуск через `main:app` должен работать из коробки.
+Если сервис всё ещё использует старую команду, откройте Railway → Service Settings → Start Command и установите:
+
+```
+uvicorn main:app --host 0.0.0.0 --port $PORT
+```
