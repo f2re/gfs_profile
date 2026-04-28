@@ -65,3 +65,9 @@ uvicorn main:app --reload
 
 - GRIB Filter: `https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25_1hr.pl`
 - Файлы GFS: `https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod/`
+
+
+## Стабильность профиля
+
+- Парсинг GRIB2 выполняется только для `typeOfLevel=isobaricInhPa`, чтобы не читать лишние поля и не перегружать память инстанса.
+- Загрузка ответа фильтра ограничена по размеру (`MAX_GRIB_BYTES`), чтобы избежать рестартов процесса на маленьких тарифах Railway.
