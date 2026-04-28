@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Профиль атмосферы GFS</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="bg-aurora"></div>
+    <main class="app-shell">
+      <header class="hero">
+        <h1>Профиль атмосферы GFS</h1>
+        <p>Выберите дату, срок и точку на карте. Сервис построит вертикальный профиль до верхних слоёв атмосферы и покажет метеорологические перья ветра.</p>
+      </header>
+
+      <section class="panel controls-grid">
+        <label class="field">
+          <span>Дата запуска (UTC)</span>
+          <input id="runDate" type="date" />
+        </label>
+        <label class="field">
+          <span>Срок модели (cycle)</span>
+          <select id="cycle"></select>
+        </label>
+        <label class="field">
+          <span>Заблаговременность</span>
+          <select id="lead"></select>
+        </label>
+        <button id="loadBtn" class="primary-btn">Построить профиль</button>
+      </section>
+
+      <section class="panel map-panel">
+        <div class="map-header">
+          <div>
+            <strong>Точка расчёта:</strong>
+            <span id="coordText">lat: 55.750, lon: 37.620</span>
+          </div>
+          <div id="cacheInfo" class="chip">Кэш: —</div>
+        </div>
+        <div id="map"></div>
+      </section>
+
+      <section class="panel">
+        <div id="meta" class="meta"></div>
+        <div id="plot"></div>
+      </section>
+
+      <section class="panel">
+        <div class="table-header">
+          <h3>Статус загрузки профиля</h3>
+          <span id="progressText">Ожидание…</span>
+        </div>
+        <div class="progress-wrap"><div id="progressBar" class="progress-bar"></div></div>
+      </section>
+
+      <section class="panel wind-panel">
+        <h3>Ветер (метеорологическое перо)</h3>
+        <div id="windBarb"></div>
+      </section>
+
+      <section class="panel">
+        <div class="table-header">
+          <h3>Таблица профиля (CSV)</h3>
+          <button id="copyCsv" class="secondary-btn">Скопировать CSV</button>
+        </div>
+        <textarea id="csvOut" rows="14" readonly></textarea>
+      </section>
+    </main>
+
+    <div id="toastContainer" class="toast-container"></div>
+    <div id="loadingOverlay" class="loading-overlay hidden">
+      <div class="spinner"></div>
+      <p>Загрузка данных GFS…</p>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
