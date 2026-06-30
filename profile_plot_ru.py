@@ -55,7 +55,7 @@ def write_profile_png(result: ProfileResult) -> Path:
     if "dewpoint_c" in df:
         axes[0].plot(df["dewpoint_c"], pressure, label="Точка росы")
     axes[0].axvline(0, linewidth=0.8)
-    axes[0].set_xlabel("Температура, C")
+    axes[0].set_xlabel("Температура, °C")
     axes[0].set_ylabel("Давление, гПа")
     axes[0].set_title("Температура")
     axes[0].legend(loc="best", fontsize=8)
@@ -80,7 +80,7 @@ def write_profile_png(result: ProfileResult) -> Path:
             axes[3].text(
                 0.72,
                 float(row["pressure_hpa"]),
-                f"{int(round(float(row['wind_dir_deg']))) % 360:03d} / {float(row['wind_speed_ms']):.1f}",
+                f"{int(round(float(row['wind_dir_deg']))) % 360:03d}° / {float(row['wind_speed_ms']):.1f}",
                 va="center",
                 fontsize=8,
             )
