@@ -34,22 +34,22 @@ def _fmt_level(row: pd.Series) -> str:
     wind_dir = int(round(float(row["wind_dir_deg"]))) % 360
     wind_speed = float(row["wind_speed_ms"])
     height = int(round(float(row["geopotential_height_m"])))
-    dewpoint_part = f" | точка росы {dewpoint:+4.1f} C" if dewpoint is not None else ""
+    dewpoint_part = f" | точка росы {dewpoint:+4.1f} °C" if dewpoint is not None else ""
     return (
-        f"{pressure:>4} гПа | {height:>5} м | температура {temp:+5.1f} C"
-        f"{dewpoint_part} | влажн. {humidity:>3}% | ветер {wind_dir:03d} / {wind_speed:>4.1f} м/с"
+        f"{pressure:>4} гПа | {height:>5} м | температура {temp:+5.1f} °C"
+        f"{dewpoint_part} | влажн. {humidity:>3}% | ветер {wind_dir:03d}° / {wind_speed:>4.1f} м/с"
     )
 
 
 def _format_freezing_level(result: ProfileResult) -> str:
     diagnostic = freezing_level_diagnostic(result.dataframe)
     if diagnostic["status"] == "found":
-        return f"Уровень 0 C: {_fmt_float(diagnostic['height_m'], 0)} м"
+        return f"Уровень 0 °C: {_fmt_float(diagnostic['height_m'], 0)} м"
     if diagnostic["status"] == "below_lowest_level":
-        return "Уровень 0 C: ниже нижнего доступного уровня"
+        return "Уровень 0 °C: ниже нижнего доступного уровня"
     if diagnostic["status"] == "above_highest_level":
-        return "Уровень 0 C: выше верхнего доступного уровня"
-    return "Уровень 0 C: не определяется по профилю"
+        return "Уровень 0 °C: выше верхнего доступного уровня"
+    return "Уровень 0 °C: не определяется по профилю"
 
 
 def format_profile_summary(result: ProfileResult) -> str:
