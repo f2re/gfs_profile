@@ -10,7 +10,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Keyb
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from formatters import format_profile_summary, write_profile_csv
-from geocode import GeoPoint, GeocodeError, resolve_location
+from geocode import GeoPoint, GeocodeError
+from geocode_choices import search_location_candidates
 from gfs_core import GfsProfileError, GfsRun, build_profile, latest_available_run, validate_lead
 from profile_plot import write_profile_png
 
@@ -61,6 +62,13 @@ def location_keyboard() -> ReplyKeyboardMarkup:
         resize_keyboard=True,
         one_time_keyboard=True,
     )
+
+
+def _format_location_choices(candidates: list[GeoPoint]) -> str:
+    lines = ["Найдено несколько вариантов. Повторите /profile с координатами нужного варианта:"]
+    for index, point in enumerate(candidates[:3], start=1):
+        lines.append(f"{index}. {point.lat:.4f} {point.lon:.4f} — {point.label}")
+    return "\n".join(lines)
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -138,12 +146,19 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     try:
         parsed = parse_request(raw)
-        point = await asyncio.to_thread(resolve_location, parsed.location_query)
+        candidates = await asyncio.to_thread(search_location_candidates, parsed.location_query, 3)
     except (GeocodeError, ValueError, GfsProfileError) as exc:
         await message.reply_text(f"Ошибка: {exc}")
         return
 
-    await run_profile(message, point, parsed.lead_hour, parsed.run)
+    if not candidates:
+        await message.reply_text("Город или место не найдено. Пришлите координаты или геолокацию Telegram.")
+        return
+    if len(candidates) > 1:
+        await message.reply_text(_format_location_choices(candidates))
+        return
+
+    await run_profile(message, candidates[0], parsed.lead_hour, parsed.run)
 
 
 async def location_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
