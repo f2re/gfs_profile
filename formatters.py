@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from gfs_core import ProfileResult, freezing_level_m
+from gfs_core import ProfileResult, freezing_level_diagnostic
 
 KEY_LEVELS_HPA = (1000, 925, 850, 700, 500, 300)
 
@@ -29,23 +29,38 @@ def _fmt_float(value: float | None, digits: int = 1) -> str:
 def _fmt_level(row: pd.Series) -> str:
     pressure = int(round(float(row["pressure_hpa"])))
     temp = float(row["temperature_c"])
+    dewpoint = float(row["dewpoint_c"]) if "dewpoint_c" in row else None
     rh = int(round(float(row["relative_humidity_pct"])))
     wind_dir = int(round(float(row["wind_dir_deg"]))) % 360
     wind_speed = float(row["wind_speed_ms"])
     height = int(round(float(row["geopotential_height_m"])))
-    return f"{pressure:>4} гПа | {height:>5} м | {temp:+5.1f} °C | RH {rh:>3}% | {wind_dir:03d}° {wind_speed:>4.1f} м/с"
+    dewpoint_part = f" | Td {dewpoint:+4.1f} C" if dewpoint is not None else ""
+    return (
+        f"{pressure:>4} гПа | {height:>5} м | T {temp:+5.1f} C"
+        f"{dewpoint_part} | RH {rh:>3}% | ветер {wind_dir:03d} / {wind_speed:>4.1f} м/с"
+    )
+
+
+def _format_freezing_level(result: ProfileResult) -> str:
+    diagnostic = freezing_level_diagnostic(result.dataframe)
+    if diagnostic["status"] == "found":
+        return f"0 C: {_fmt_float(diagnostic['height_m'], 0)} м"
+    if diagnostic["status"] == "below_lowest_level":
+        return "0 C: ниже нижнего доступного уровня"
+    if diagnostic["status"] == "above_highest_level":
+        return "0 C: выше верхнего доступного уровня"
+    return "0 C: не определяется по профилю"
 
 
 def format_profile_summary(result: ProfileResult) -> str:
     df = result.dataframe
     run_time = result.run.run_datetime_utc.strftime("%Y-%m-%d %HZ")
     valid_time = result.valid_time_utc.strftime("%Y-%m-%d %H:%M UTC")
-    zero_level = freezing_level_m(df)
 
     lines = [
-        "GFS 0.25° профиль атмосферы",
-        f"Run: {run_time} | Lead: +{result.lead_hour} ч",
-        f"Valid: {valid_time}",
+        "GFS 0.25: модельный профиль атмосферы",
+        f"Запуск: {run_time} | срок: +{result.lead_hour} ч",
+        f"Действительно на: {valid_time}",
         f"Запрошено: {result.requested_lat:.4f}, {result.requested_lon:.4f}",
         f"Узел GFS: {result.grid_lat:.3f}, {result.grid_lon:.3f}",
         "",
@@ -65,9 +80,9 @@ def format_profile_summary(result: ProfileResult) -> str:
         lines.extend(
             [
                 "",
-                f"0 °C: {_fmt_float(zero_level, 0)} м" if zero_level is not None else "0 °C: не найден в профиле",
-                f"Max wind: {max_wind:.1f} м/с на {max_wind_level} гПа ({max_wind_height} м)",
-                f"Строк профиля: {len(df)}",
+                _format_freezing_level(result),
+                f"Макс. ветер: {max_wind:.1f} м/с на {max_wind_level} гПа ({max_wind_height} м)",
+                f"Уровней профиля: {len(df)}",
             ]
         )
 
