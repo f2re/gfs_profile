@@ -12,7 +12,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 from formatters import format_profile_summary, write_profile_csv
 from geocode import GeoPoint, GeocodeError
 from geocode_choices import search_location_candidates
-from gfs_core import GfsProfileError, GfsRun, build_profile, latest_available_run, validate_lead
+from gfs_core import GfsProfileError, GfsRun, build_profile, latest_available_run, latest_available_run_for_lead, validate_lead
 from profile_plot import write_profile_png
 
 DEFAULT_LEAD = int(os.getenv("DEFAULT_LEAD", "24"))
@@ -103,11 +103,14 @@ async def cycle_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 async def run_profile(message, point: GeoPoint, lead_hour: int, run: GfsRun | None = None) -> None:
-    status = await message.reply_text("Запрос принят. Ищу доступный цикл GFS и загружаю профиль…")
+    status = await message.reply_text("Запрос принят. Ищу опубликованный цикл GFS для нужного срока…")
     csv_path: Path | None = None
     png_path: Path | None = None
     try:
-        selected_run = run or await asyncio.to_thread(latest_available_run)
+        selected_run = run or await asyncio.to_thread(latest_available_run_for_lead, lead_hour)
+        await status.edit_text(
+            f"Выбран GFS {selected_run.date} {selected_run.cycle}Z, срок +{lead_hour} ч. Загружаю профиль…"
+        )
         async with GFS_SEMAPHORE:
             result = await asyncio.to_thread(build_profile, selected_run, lead_hour, point.lat, point.lon)
         summary = format_profile_summary(result)
