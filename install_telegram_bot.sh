@@ -26,17 +26,17 @@ STATUS_ONLY=0
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$SCRIPT_DIR"
 
-if [[ -t 1 ]]; then
+if [[ -t 2 ]]; then
   C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'; C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_BLUE=$'\033[34m'; C_CYAN=$'\033[36m'
 else
   C_RESET=""; C_BOLD=""; C_RED=""; C_GREEN=""; C_YELLOW=""; C_BLUE=""; C_CYAN=""
 fi
 
-log() { printf '%s\n' "${C_BLUE}▶${C_RESET} $*"; }
-success() { printf '%s\n' "${C_GREEN}✓${C_RESET} $*"; }
-warn() { printf '%s\n' "${C_YELLOW}!${C_RESET} $*"; }
+log() { printf '%s\n' "${C_BLUE}▶${C_RESET} $*" >&2; }
+success() { printf '%s\n' "${C_GREEN}✓${C_RESET} $*" >&2; }
+warn() { printf '%s\n' "${C_YELLOW}!${C_RESET} $*" >&2; }
 fail() { printf '%s\n' "${C_RED}✗${C_RESET} $*" >&2; exit 1; }
-section() { printf '\n%s\n' "${C_BOLD}${C_CYAN}== $* ==${C_RESET}"; }
+section() { printf '\n%s\n' "${C_BOLD}${C_CYAN}== $* ==${C_RESET}" >&2; }
 
 usage() {
   cat <<EOF
@@ -97,6 +97,16 @@ run_root() {
   fi
 }
 
+run_user() {
+  local user="$1"
+  shift
+  if [[ -n "$SUDO" ]]; then
+    sudo -u "$user" "$@"
+  else
+    runuser -u "$user" -- "$@"
+  fi
+}
+
 ask_default() {
   local prompt="$1" default="$2" value=""
   if [[ "$ASSUME_YES" -eq 1 ]]; then
@@ -149,15 +159,15 @@ print_status() {
   if [[ -f "$UNIT_PATH" ]]; then success "systemd unit: $UNIT_PATH"; else warn "systemd unit отсутствует: $UNIT_PATH"; fi
   if command -v systemctl >/dev/null 2>&1; then
     if systemctl list-unit-files "${SERVICE_NAME}.service" >/dev/null 2>&1; then
-      printf 'Активность сервиса: '
-      systemctl is-active "${SERVICE_NAME}.service" || true
-      printf 'Автозапуск: '
-      systemctl is-enabled "${SERVICE_NAME}.service" || true
+      printf 'Активность сервиса: ' >&2
+      systemctl is-active "${SERVICE_NAME}.service" >&2 || true
+      printf 'Автозапуск: ' >&2
+      systemctl is-enabled "${SERVICE_NAME}.service" >&2 || true
     fi
   fi
   if [[ -f "$STATE_FILE" ]]; then
-    echo "Состояние установки:"
-    sed 's/^/  /' "$STATE_FILE" || true
+    echo "Состояние установки:" >&2
+    sed 's/^/  /' "$STATE_FILE" >&2 || true
   fi
 }
 
@@ -211,10 +221,10 @@ copy_project() {
 
 create_venv() {
   log "Создаю Python-окружение"
-  run_root -u "$SERVICE_USER" "$PYTHON_BIN" -m venv "$VENV_DIR"
+  run_user "$SERVICE_USER" "$PYTHON_BIN" -m venv "$VENV_DIR"
   log "Обновляю pip и ставлю зависимости"
-  run_root -u "$SERVICE_USER" env HOME="$INSTALL_DIR" "$VENV_DIR/bin/python" -m pip install --upgrade pip
-  run_root -u "$SERVICE_USER" env HOME="$INSTALL_DIR" "$VENV_DIR/bin/python" -m pip install -r "$INSTALL_DIR/requirements.txt"
+  run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" "$VENV_DIR/bin/python" -m pip install --upgrade pip
+  run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" "$VENV_DIR/bin/python" -m pip install -r "$INSTALL_DIR/requirements.txt"
 }
 
 ask_token() {
@@ -242,7 +252,7 @@ ask_token() {
 
   while true; do
     read -r -s -p "Введите TELEGRAM_BOT_TOKEN: " token
-    printf '\n'
+    printf '\n' >&2
     [[ -n "$token" ]] || { warn "Токен пустой"; continue; }
     [[ "$token" == *:* ]] || warn "Токен обычно содержит двоеточие. Проверьте значение."
     printf '%s\n' "$token"
@@ -362,11 +372,11 @@ main() {
   STATE_FILE="$INSTALL_DIR/.install-state"
 
   section "План установки"
-  echo "Каталог:       $INSTALL_DIR"
-  echo "Сервис:        $SERVICE_NAME.service"
-  echo "Пользователь:  $SERVICE_USER"
-  echo "Python:        $PYTHON_BIN"
-  echo "Файл .env:     $ENV_FILE"
+  echo "Каталог:       $INSTALL_DIR" >&2
+  echo "Сервис:        $SERVICE_NAME.service" >&2
+  echo "Пользователь:  $SERVICE_USER" >&2
+  echo "Python:        $PYTHON_BIN" >&2
+  echo "Файл .env:     $ENV_FILE" >&2
   confirm "Продолжить установку?" || fail "Отменено пользователем"
 
   install_system_packages
