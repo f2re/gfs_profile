@@ -28,6 +28,30 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 GRID_STEP_DEG = 0.25
 ProgressCallback = Callable[[dict[str, Any]], None]
 
+DEFAULT_PROFILE_LEVELS_HPA = (
+    1000,
+    975,
+    950,
+    925,
+    900,
+    850,
+    800,
+    750,
+    700,
+    650,
+    600,
+    550,
+    500,
+    450,
+    400,
+    350,
+    300,
+    250,
+    200,
+    150,
+    100,
+)
+
 
 class GfsProfileError(RuntimeError):
     """Operational error while downloading or parsing a GFS profile."""
@@ -115,6 +139,44 @@ def snap_to_gfs_grid(lat: float, lon: float) -> tuple[float, float]:
     return round(grid_lat, 3), round(grid_lon, 3)
 
 
+def configured_pressure_levels_hpa() -> tuple[int, ...] | None:
+    """Return optional pressure-level subset for NOMADS or None for all levels."""
+
+    raw = os.getenv("GFS_PRESSURE_LEVELS_HPA", "").strip()
+    if not raw or raw.lower() in {"all", "all_lev", "full"}:
+        return None
+    if raw.lower() in {"profile", "default"}:
+        return DEFAULT_PROFILE_LEVELS_HPA
+
+    levels: list[int] = []
+    for token in raw.replace(";", ",").replace(" ", ",").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            level = int(token)
+        except ValueError as exc:
+            raise GfsProfileError(f"Некорректный уровень давления в GFS_PRESSURE_LEVELS_HPA: {token}") from exc
+        if level <= 0:
+            raise GfsProfileError(f"Уровень давления должен быть положительным: {level}")
+        levels.append(level)
+    if not levels:
+        return None
+    return tuple(sorted(set(levels), reverse=True))
+
+
+def level_query_params(levels_hpa: tuple[int, ...] | None) -> dict[str, str]:
+    if not levels_hpa:
+        return {"all_lev": "on"}
+    return {f"lev_{level}_mb": "on" for level in levels_hpa}
+
+
+def levels_cache_suffix(levels_hpa: tuple[int, ...] | None) -> str:
+    if not levels_hpa:
+        return "alllev"
+    return "lev" + "-".join(str(level) for level in levels_hpa)
+
+
 def run_file_name(cycle: str, lead_hour: int) -> str:
     return f"gfs.t{cycle}z.pgrb2.0p25.f{lead_hour:03d}"
 
@@ -128,17 +190,23 @@ def source_idx_url(date: str, cycle: str, lead_hour: int = 0) -> str:
     return f"{NOMADS_BASE}/pub/data/nccf/com/gfs/prod/gfs.{date}/{cycle}/atmos/{file_name}.idx"
 
 
-def cache_key(date: str, cycle: str, lead_hour: int, lat: float, lon: float) -> str:
-    return f"{date}_{cycle}_f{lead_hour:03d}_{lat:.3f}_{lon:.3f}".replace("-", "m")
+def cache_key(date: str, cycle: str, lead_hour: int, lat: float, lon: float, levels_hpa: tuple[int, ...] | None = None) -> str:
+    return f"{date}_{cycle}_f{lead_hour:03d}_{lat:.3f}_{lon:.3f}_{levels_cache_suffix(levels_hpa)}".replace("-", "m")
 
 
-def grib_filter_url(date: str, cycle: str, lead_hour: int, lat: float, lon: float) -> str:
+def grib_filter_url(
+    date: str,
+    cycle: str,
+    lead_hour: int,
+    lat: float,
+    lon: float,
+    levels_hpa: tuple[int, ...] | None = None,
+) -> str:
     lon_360 = lon % 360
     top_lat = min(90.0, lat + 0.001)
     bottom_lat = max(-90.0, lat)
     query = {
         "file": run_file_name(cycle, lead_hour),
-        "all_lev": "on",
         "var_TMP": "on",
         "var_RH": "on",
         "var_UGRD": "on",
@@ -150,6 +218,7 @@ def grib_filter_url(date: str, cycle: str, lead_hour: int, lat: float, lon: floa
         "bottomlat": f"{bottom_lat:.3f}",
         "dir": run_dir(date, cycle),
     }
+    query.update(level_query_params(levels_hpa))
     return f"{NOMADS_BASE}/cgi-bin/filter_gfs_0p25_1hr.pl?{urlencode(query)}"
 
 
@@ -214,7 +283,8 @@ def download_profile_grib_to_disk(
 ) -> Path:
     validate_lead(lead_hour)
     clean_old_cache()
-    key = cache_key(date, cycle, lead_hour, lat, lon)
+    levels_hpa = configured_pressure_levels_hpa()
+    key = cache_key(date, cycle, lead_hour, lat, lon, levels_hpa)
     out_path = CACHE_DIR / f"{key}.grib2"
     if out_path.exists():
         _emit(progress_callback, stage="cache", message="GRIB2 найден в файловом кэше", file=str(out_path), bytes=out_path.stat().st_size)
@@ -223,9 +293,17 @@ def download_profile_grib_to_disk(
     if not forecast_file_exists(date, cycle, lead_hour):
         raise GfsProfileError(f"Файл GFS для {date} {cycle}Z +{lead_hour} ч ещё не опубликован")
 
-    url = grib_filter_url(date, cycle, lead_hour, lat, lon)
+    url = grib_filter_url(date, cycle, lead_hour, lat, lon, levels_hpa)
     part_path = CACHE_DIR / f"{key}.part"
-    _emit(progress_callback, stage="download_start", message="Начинаю загрузку GRIB2", url=url, downloaded=0, total=None)
+    _emit(
+        progress_callback,
+        stage="download_start",
+        message="Начинаю загрузку GRIB2",
+        url=url,
+        downloaded=0,
+        total=None,
+        levels="all" if levels_hpa is None else list(levels_hpa),
+    )
     try:
         with requests.get(url, timeout=REQUEST_TIMEOUT, stream=True) as response:
             if response.status_code != 200:
