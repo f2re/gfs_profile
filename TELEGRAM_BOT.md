@@ -2,7 +2,7 @@
 
 Бот строит вертикальный профиль атмосферы GFS 0.25° по городу, координатам или Telegram-геолокации.
 
-Схема работы: точка → доступный цикл GFS → малый GRIB2-срез → сводка, PNG и CSV.
+Схема работы: точка → кнопочный выбор срока → опубликованный цикл GFS → малый GRIB2-срез → сводка, PNG и CSV.
 
 ## ✅ Что возвращает
 
@@ -17,29 +17,79 @@
 
 Это модельный профиль ближайшего узла GFS, не радиозонд. В горах, у моря, в городе и в приземном слое интерпретировать аккуратно.
 
+## 🚀 Лучший сценарий для пользователя
+
+```text
+/start
+📍 Отправить геолокацию
+выбрать срок: +0 / +3 / +6 / +12 / +24 / +48
+получить сводку, PNG и CSV
+```
+
+Без команды `/profile` тоже работает:
+
+```text
+Москва
+55.75 37.62
+Санкт-Петербург +48
+```
+
+Если город неоднозначный, бот показывает варианты inline-кнопками. Пользователь выбирает точку, затем выбирает срок прогноза.
+
+## 🧭 Команды
+
+```text
+/start      краткий старт и кнопка геолокации
+/help       короткая инструкция
+/cancel     сброс текущего выбора
+/cycle      последний опубликованный анализ GFS f000
+/status     доступность GFS для +0, +24, +48 и состояние кэша
+/profile    экспертный запрос с точкой, сроком и run
+```
+
+Примеры:
+
+```text
+/profile Москва +24
+/profile 59.93 30.31 +12
+/profile Москва run=20260630/06 +24
+```
+
 ## 📦 Установка
 
-### 1. Python-окружение
+Рекомендуемый способ:
+
+```bash
+bash install_telegram_bot.sh
+```
+
+Скрипт создаёт `.venv`, `.env`, systemd-сервис, пользователя `gfsbot`, сохраняет старый `.env` при повторной установке и запускает бота.
+
+Проверка:
+
+```bash
+bash install_telegram_bot.sh --status
+sudo journalctl -u gfs-profile-bot.service -f
+```
+
+Ручной запуск для разработки:
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-```
-
-### 2. Файл настроек
-
-```bash
 cp .env.telegram.example .env
+set -a && source .env && set +a
+python telegram_bot.py
 ```
 
-### 3. Минимальный `.env`
+## ⚙️ Минимальный `.env`
 
 ```text
 TELEGRAM_BOT_TOKEN=123456:AA...
 ```
 
-### 4. Рекомендуемые параметры
+Рекомендуемые параметры:
 
 ```text
 DEFAULT_LEAD=24
@@ -52,50 +102,12 @@ GEOCODE_CACHE_DIR=.cache_gfs/geocode
 GEOCODE_TIMEOUT=12
 ```
 
-### 5. Запуск
-
-```bash
-set -a && source .env && set +a
-python telegram_bot.py
-```
-
-## 🧪 Проверка
-
-Команды в Telegram:
-
-```text
-/start
-/cycle
-/profile Москва +24
-/profile 55.75 37.62 +12
-/profile Санкт-Петербург run=20260630/06 +48
-```
-
-Проверка ядра без Telegram:
+## 🧪 Проверка без Telegram
 
 ```bash
 python -m gfs_core --lat 55.75 --lon 37.62 --lead 24
 python -m gfs_core --lat 55.75 --lon 37.62 --lead 24 --csv /tmp/profile.csv
-```
-
-Тесты:
-
-```bash
 python -m unittest discover -s tests
-```
-
-## 🧭 Синтаксис `/profile`
-
-```text
-/profile Москва +24
-/profile 59.93 30.31 +12
-/profile Москва run=20260630/06 +24
-```
-
-Telegram-геолокация:
-
-```text
-/start → 📍 Отправить геолокацию → выбрать срок +0/+3/+6/+12/+24/+48
 ```
 
 ## 📊 Как читать ответ
@@ -109,28 +121,6 @@ Telegram-геолокация:
 Макс. ветер    максимум скорости ветра в профиле
 ```
 
-## 🛠️ Systemd
-
-```ini
-[Unit]
-Description=GFS Profile Telegram Bot
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/gfs_profile
-EnvironmentFile=/opt/gfs_profile/.env
-ExecStart=/opt/gfs_profile/.venv/bin/python telegram_bot.py
-Restart=always
-RestartSec=5
-User=gfsbot
-Group=gfsbot
-
-[Install]
-WantedBy=multi-user.target
-```
-
 ## 🔎 Типовые ошибки
 
 ```text
@@ -139,9 +129,9 @@ WantedBy=multi-user.target
 Токен не загружен из `.env`.
 
 ```text
-Для указанной даты/цикла данные GFS недоступны
+Файл GFS для YYYYMMDD HHZ +N ч ещё не опубликован
 ```
-Цикл ещё не опубликован или указан неверно.
+Нужный forecast lead ещё не опубликован. Без фиксированного `run=...` бот сам откатывается на предыдущий опубликованный цикл.
 
 ```text
 NOMADS вернул HTML вместо GRIB2
