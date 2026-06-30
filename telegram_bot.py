@@ -12,6 +12,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 from formatters import format_profile_summary, write_profile_csv
 from geocode import GeoPoint, GeocodeError, resolve_location
 from gfs_core import GfsProfileError, GfsRun, build_profile, latest_available_run, validate_lead
+from profile_plot import write_profile_png
 
 DEFAULT_LEAD = int(os.getenv("DEFAULT_LEAD", "24"))
 MAX_CONCURRENT_GFS = int(os.getenv("MAX_CONCURRENT_GFS", "2"))
@@ -95,12 +96,15 @@ async def cycle_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def run_profile(message, point: GeoPoint, lead_hour: int, run: GfsRun | None = None) -> None:
     status = await message.reply_text("Запрос принят. Ищу доступный цикл GFS и загружаю профиль…")
+    csv_path: Path | None = None
+    png_path: Path | None = None
     try:
         selected_run = run or await asyncio.to_thread(latest_available_run)
         async with GFS_SEMAPHORE:
             result = await asyncio.to_thread(build_profile, selected_run, lead_hour, point.lat, point.lon)
         summary = format_profile_summary(result)
         csv_path = write_profile_csv(result)
+        png_path = write_profile_png(result)
     except (GfsProfileError, GeocodeError, ValueError) as exc:
         await status.edit_text(f"Ошибка: {exc}")
         return
@@ -110,10 +114,17 @@ async def run_profile(message, point: GeoPoint, lead_hour: int, run: GfsRun | No
 
     await status.edit_text(summary)
     try:
-        with csv_path.open("rb") as file_obj:
-            await message.reply_document(document=InputFile(file_obj, filename=Path(csv_path).name))
+        if png_path:
+            with png_path.open("rb") as file_obj:
+                await message.reply_photo(photo=InputFile(file_obj, filename=png_path.name), caption="График профиля GFS")
+        if csv_path:
+            with csv_path.open("rb") as file_obj:
+                await message.reply_document(document=InputFile(file_obj, filename=csv_path.name))
     finally:
-        csv_path.unlink(missing_ok=True)
+        if png_path:
+            png_path.unlink(missing_ok=True)
+        if csv_path:
+            csv_path.unlink(missing_ok=True)
 
 
 async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
