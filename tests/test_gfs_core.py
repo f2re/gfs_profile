@@ -9,6 +9,8 @@ from gfs_core import (
     canonical_leads,
     freezing_level_m,
     grib_filter_url,
+    level_query_params,
+    levels_cache_suffix,
     run_file_name,
     snap_to_gfs_grid,
     validate_lead,
@@ -42,6 +44,15 @@ class GfsCoreTests(unittest.TestCase):
         self.assertIn("var_VGRD=on", url)
         self.assertIn("var_HGT=on", url)
         self.assertIn("all_lev=on", url)
+
+    def test_grib_filter_url_can_limit_pressure_levels(self) -> None:
+        url = grib_filter_url("20260630", "06", 24, 55.75, 37.5, (1000, 850, 500))
+        self.assertNotIn("all_lev=on", url)
+        self.assertIn("lev_1000_mb=on", url)
+        self.assertIn("lev_850_mb=on", url)
+        self.assertIn("lev_500_mb=on", url)
+        self.assertEqual(level_query_params(None), {"all_lev": "on"})
+        self.assertEqual(levels_cache_suffix((1000, 850, 500)), "lev1000-850-500")
 
     def test_add_derived_parameters(self) -> None:
         df = pd.DataFrame(
