@@ -7,6 +7,7 @@ import pandas as pd
 
 from formatters import format_profile_summary, write_profile_csv
 from gfs_core import GfsRun, ProfileResult, add_derived_parameters
+from profile_plot import write_profile_png
 
 
 class FormatterTests(unittest.TestCase):
@@ -32,17 +33,28 @@ class FormatterTests(unittest.TestCase):
             dataframe=add_derived_parameters(df),
         )
 
-    def test_summary_contains_operational_fields(self) -> None:
+    def test_summary_contains_russian_operational_fields(self) -> None:
         summary = format_profile_summary(self._result())
         self.assertIn("GFS 0.25", summary)
         self.assertIn("Узел GFS", summary)
-        self.assertIn("Max wind", summary)
+        self.assertIn("Макс. ветер", summary)
+        self.assertIn("Действительно на", summary)
+        self.assertNotIn("Max wind", summary)
+        self.assertNotIn("Valid:", summary)
 
     def test_csv_is_written(self) -> None:
         path = write_profile_csv(self._result())
         try:
             self.assertTrue(path.exists())
             self.assertIn("pressure_hpa", path.read_text(encoding="utf-8"))
+        finally:
+            path.unlink(missing_ok=True)
+
+    def test_png_is_written(self) -> None:
+        path = write_profile_png(self._result())
+        try:
+            self.assertTrue(path.exists())
+            self.assertGreater(path.stat().st_size, 1024)
         finally:
             path.unlink(missing_ok=True)
 
