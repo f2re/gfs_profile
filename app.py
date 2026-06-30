@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
-from gfs_core import CACHE_DIR, GfsProfileError, GfsRun, build_profile, canonical_leads, cycle_exists
+from gfs_core import CACHE_DIR, GfsProfileError, GfsRun, build_profile, canonical_leads, cycle_exists, forecast_file_exists
 
 app = FastAPI(title="Профиль атмосферы GFS")
 app.mount("/static", StaticFiles(directory="static"), name="static")
@@ -34,7 +34,7 @@ def _set_job(job_id: str, **kwargs: Any) -> None:
 
 def _http_error(exc: GfsProfileError) -> HTTPException:
     message = str(exc)
-    if "недоступ" in message or "Не найден" in message:
+    if "недоступ" in message or "Не найден" in message or "не опубликован" in message:
         return HTTPException(status_code=404, detail=message)
     if "lead_hour" in message or "диапазон" in message:
         return HTTPException(status_code=400, detail=message)
@@ -91,6 +91,8 @@ def available_leads(date: str = Query(..., pattern=r"^\d{8}$"), cycle: str = Que
     run_dt = datetime.strptime(f"{date}{cycle}", "%Y%m%d%H")
     leads = []
     for fh in canonical_leads():
+        if not forecast_file_exists(date, cycle, fh):
+            continue
         valid_time = run_dt + timedelta(hours=fh)
         leads.append({"index": fh, "lead_hours": fh, "valid_time_utc": valid_time.strftime("%Y-%m-%d %H:%M")})
     return {"date": date, "cycle": cycle, "leads": leads}
@@ -133,11 +135,18 @@ def profile_status(job_id: str = Query(...)) -> dict[str, Any]:
 
 @app.get("/api/cache-info")
 def cache_info() -> dict[str, Any]:
+    forecast_cache = forecast_file_exists.cache_info()
     cycle_cache = cycle_exists.cache_info()
     cached_files = list(CACHE_DIR.glob("*.grib2"))
     return {
         "grib_cache": {"hits": 0, "misses": 0, "maxsize": 0, "currsize": len(cached_files)},
-        "lead_cache": {
+        "forecast_file_cache": {
+            "hits": forecast_cache.hits,
+            "misses": forecast_cache.misses,
+            "maxsize": forecast_cache.maxsize,
+            "currsize": forecast_cache.currsize,
+        },
+        "cycle_cache": {
             "hits": cycle_cache.hits,
             "misses": cycle_cache.misses,
             "maxsize": cycle_cache.maxsize,
