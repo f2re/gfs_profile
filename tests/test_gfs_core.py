@@ -1,0 +1,52 @@
+from __future__ import annotations
+
+import unittest
+
+import pandas as pd
+
+from gfs_core import add_derived_parameters, canonical_leads, freezing_level_m, snap_to_gfs_grid, validate_lead
+
+
+class GfsCoreTests(unittest.TestCase):
+    def test_snap_to_gfs_grid(self) -> None:
+        self.assertEqual(snap_to_gfs_grid(59.93, 30.31), (60.0, 30.25))
+        self.assertEqual(snap_to_gfs_grid(-12.12, -45.38), (-12.0, -45.5))
+
+    def test_canonical_leads(self) -> None:
+        leads = canonical_leads()
+        self.assertIn(0, leads)
+        self.assertIn(120, leads)
+        self.assertIn(123, leads)
+        self.assertIn(384, leads)
+        self.assertNotIn(122, leads)
+        self.assertEqual(validate_lead(24), 24)
+
+    def test_add_derived_parameters(self) -> None:
+        df = pd.DataFrame(
+            {
+                "pressure_hpa": [1000.0, 850.0],
+                "temperature_k": [273.15, 263.15],
+                "relative_humidity_pct": [80.0, 60.0],
+                "u_wind_ms": [3.0, 0.0],
+                "v_wind_ms": [4.0, -5.0],
+                "geopotential_height_m": [100.0, 1500.0],
+            }
+        )
+        out = add_derived_parameters(df)
+        self.assertIn("temperature_c", out.columns)
+        self.assertIn("dewpoint_c", out.columns)
+        self.assertIn("theta_k", out.columns)
+        self.assertAlmostEqual(float(out.loc[0, "wind_speed_ms"]), 5.0, places=3)
+
+    def test_freezing_level_interpolation(self) -> None:
+        df = pd.DataFrame(
+            {
+                "temperature_c": [5.0, -5.0],
+                "geopotential_height_m": [1000.0, 2000.0],
+            }
+        )
+        self.assertAlmostEqual(freezing_level_m(df), 1500.0, places=1)
+
+
+if __name__ == "__main__":
+    unittest.main()
