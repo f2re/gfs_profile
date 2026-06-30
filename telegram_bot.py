@@ -281,6 +281,12 @@ async def lead_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.edit_message_text(f"Точка:\n{_point_brief(point)}\n\n{lead_page_text(page)}", reply_markup=lead_keyboard(page))
 
 
+async def noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if query:
+        await query.answer("Текущая страница")
+
+
 async def place_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     if not query:
@@ -331,6 +337,7 @@ def build_application() -> Application:
     application.add_handler(MessageHandler(filters.LOCATION, location_message))
     application.add_handler(CallbackQueryHandler(lead_callback, pattern=r"^lead:\d+$"))
     application.add_handler(CallbackQueryHandler(lead_page_callback, pattern=r"^leadpage:\d+$"))
+    application.add_handler(CallbackQueryHandler(noop_callback, pattern=r"^noop$"))
     application.add_handler(CallbackQueryHandler(place_callback, pattern=r"^(place:\d+|cancel)$"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
     return application
