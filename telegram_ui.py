@@ -57,7 +57,7 @@ def lead_keyboard(page: int = 0) -> InlineKeyboardMarkup:
     nav = []
     if page > 1:
         nav.append(InlineKeyboardButton("←", callback_data=f"leadpage:{page - 1}"))
-    nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data=f"leadpage:{page}"))
+    nav.append(InlineKeyboardButton(f"{page}/{total_pages}", callback_data="noop"))
     if page < total_pages:
         nav.append(InlineKeyboardButton("→", callback_data=f"leadpage:{page + 1}"))
     rows.append(nav)
