@@ -12,9 +12,10 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 from formatters import format_profile_summary, write_profile_csv
 from geocode import GeoPoint, GeocodeError
 from geocode_choices import search_location_candidates
-from gfs_core import CACHE_DIR, GfsProfileError, GfsRun, build_profile, latest_available_run, latest_available_run_for_lead, validate_lead
+from gfs_core import CACHE_DIR, GfsProfileError, GfsRun, latest_available_run, latest_available_run_for_lead, validate_lead
 from profile_plot import write_profile_png
-from telegram_ui import LEAD_BUTTONS, lead_keyboard, location_keyboard, place_keyboard
+from telegram_progress import build_profile_with_progress
+from telegram_ui import lead_keyboard, lead_page_text, location_keyboard, place_keyboard
 
 DEFAULT_LEAD = int(os.getenv("DEFAULT_LEAD", "24"))
 MAX_CONCURRENT_GFS = int(os.getenv("MAX_CONCURRENT_GFS", "2"))
@@ -91,8 +92,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Минимальный путь:\n"
         "1) отправьте геолокацию;\n"
         "2) выберите срок кнопкой;\n"
-        "3) получите сводку, PNG и CSV.\n\n"
-        "Можно просто написать: Москва, 55.75 37.62 или /profile Москва +24.",
+        "3) видите ход проверки, загрузки GRIB2 и построения;\n"
+        "4) получите сводку, PNG и CSV.\n\n"
+        "Можно просто написать: Москва, 55.75 37.62 или /profile Москва +24. Полный диапазон сроков GFS — до +384 ч.",
         reply_markup=location_keyboard(),
     )
 
@@ -107,7 +109,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• или напишите город: Москва;\n"
         "• или координаты: 55.75 37.62;\n"
         "• экспертно: /profile Москва run=20260630/06 +24.\n\n"
-        "Сроки: +0, +3, +6, +12, +24, +48 ч.\n"
+        "Кнопки показывают частые сроки, через пагинацию доступны все сроки GFS до +384 ч.\n"
+        "Во время расчёта бот показывает этапы: проверка fXXX.idx, загрузка GRIB2, cfgrib/eccodes, построение PNG/CSV.\n"
         "Это модель GFS, не радиозонд.",
         reply_markup=location_keyboard(),
     )
@@ -136,7 +139,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not message:
         return
     lines = ["Состояние бота:"]
-    for lead in dict.fromkeys((0, DEFAULT_LEAD, 24, 48)):
+    for lead in dict.fromkeys((0, DEFAULT_LEAD, 24, 48, 120, 240, 384)):
         try:
             run = await asyncio.to_thread(latest_available_run_for_lead, lead)
             lines.append(f"• +{lead} ч: GFS {run.date} {run.cycle}Z опубликован")
@@ -148,18 +151,14 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def run_profile(message, point: GeoPoint, lead_hour: int, run: GfsRun | None = None) -> None:
-    status = await message.reply_text("Ищу опубликованный цикл GFS для выбранного срока…")
+    status = await message.reply_text("0/5 Ищу опубликованный цикл GFS для выбранного срока…")
     csv_path: Path | None = None
     png_path: Path | None = None
     try:
         selected_run = run or await asyncio.to_thread(latest_available_run_for_lead, lead_hour)
-        await status.edit_text(
-            f"GFS {selected_run.date} {selected_run.cycle}Z, срок +{lead_hour} ч опубликован.\n"
-            f"Точка: {_point_brief(point)}\n"
-            "Скачиваю GRIB2 и строю профиль…"
-        )
         async with GFS_SEMAPHORE:
-            result = await asyncio.to_thread(build_profile, selected_run, lead_hour, point.lat, point.lon)
+            result = await build_profile_with_progress(status, selected_run, lead_hour, point)
+        await status.edit_text("5/5 Профиль рассчитан. Формирую русскую сводку, PNG и CSV…")
         summary = format_profile_summary(result)
         csv_path = write_profile_csv(result)
         png_path = write_profile_png(result)
@@ -213,7 +212,7 @@ async def resolve_profile_request(message, context: ContextTypes.DEFAULT_TYPE, r
         return
 
     _set_pending_point(context, point, parsed.run)
-    await message.reply_text(f"Точка выбрана:\n{_point_brief(point)}\n\nВыберите срок прогноза:", reply_markup=lead_keyboard())
+    await message.reply_text(f"Точка выбрана:\n{_point_brief(point)}\n\n{lead_page_text(0)}", reply_markup=lead_keyboard(0))
 
 
 async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -244,7 +243,7 @@ async def location_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     point = GeoPoint(message.location.latitude, message.location.longitude, "геолокация Telegram", "telegram")
     _set_pending_point(context, point)
-    await message.reply_text(f"Геолокация получена:\n{_point_brief(point)}\n\nВыберите срок прогноза:", reply_markup=lead_keyboard())
+    await message.reply_text(f"Геолокация получена:\n{_point_brief(point)}\n\n{lead_page_text(0)}", reply_markup=lead_keyboard(0))
 
 
 async def lead_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -266,6 +265,20 @@ async def lead_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if query.message:
         await query.edit_message_text(f"Срок +{lead_hour} ч выбран. Строю профиль…")
         await run_profile(query.message, point, lead_hour, run)
+
+
+async def lead_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    pending = context.user_data.get("pending_profile")
+    if not pending:
+        await query.edit_message_text("Сначала выберите точку: отправьте город, координаты или геолокацию.")
+        return
+    page = int((query.data or "leadpage:0").split(":", 1)[1])
+    point = _unpack_point(pending["point"])
+    await query.edit_message_text(f"Точка:\n{_point_brief(point)}\n\n{lead_page_text(page)}", reply_markup=lead_keyboard(page))
 
 
 async def place_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -301,7 +314,7 @@ async def place_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await run_profile(query.message, point, lead_hour, run)
         return
     _set_pending_point(context, point, run)
-    await query.edit_message_text(f"Выбрано:\n{_point_brief(point)}\n\nВыберите срок прогноза:", reply_markup=lead_keyboard())
+    await query.edit_message_text(f"Выбрано:\n{_point_brief(point)}\n\n{lead_page_text(0)}", reply_markup=lead_keyboard(0))
 
 
 def build_application() -> Application:
@@ -317,6 +330,7 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("profile", profile_command))
     application.add_handler(MessageHandler(filters.LOCATION, location_message))
     application.add_handler(CallbackQueryHandler(lead_callback, pattern=r"^lead:\d+$"))
+    application.add_handler(CallbackQueryHandler(lead_page_callback, pattern=r"^leadpage:\d+$"))
     application.add_handler(CallbackQueryHandler(place_callback, pattern=r"^(place:\d+|cancel)$"))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_message))
     return application
