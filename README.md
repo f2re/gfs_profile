@@ -1,107 +1,167 @@
-# Профиль атмосферы GFS (веб-приложение)
+# 🌦️ Профиль атмосферы GFS 0.25
 
-Интерактивный сервис для построения вертикального профиля атмосферы по модели **GFS 0.25°** с визуальным UX-интерфейсом на русском языке.
+Инструмент для получения вертикального модельного профиля атмосферы по точке: веб-интерфейс + Telegram-бот.
 
-## Что изменено в источнике данных
+Важно: это **модельная точка GFS**, а не радиозонд, не метеостанция и не локальный фактический прогноз.
 
-С 2026 года OpenDAP на NOMADS прекращён, поэтому проект **переведён на GRIB Filter** (`filter_gfs_0p25_1hr.pl`) и парсинг GRIB2 через `cfgrib/eccodes`.
+## ✅ Что умеет
 
-## Возможности
+- 📍 Профиль по координатам, городу или Telegram-геолокации.
+- 🛰️ Источник: NOMADS GRIB Filter, GFS 0.25°.
+- 🧭 Привязка точки к ближайшему узлу сетки GFS.
+- 🌡️ Температура, точка росы, влажность, геопотенциальная высота.
+- 🌬️ Ветер: направление, скорость, U/V-компоненты.
+- ❄️ Диагностика уровня 0 °C.
+- 📈 PNG-график профиля: T/Td, влажность, скорость ветра, ветровые перья.
+- 📄 CSV-профиль для дальнейшей обработки.
+- 🧪 Unit-тесты и GitHub Actions.
 
-- выбор даты запуска модели (UTC);
-- выбор доступного срока (`00/06/12/18z`) и заблаговременности;
-- выбор точки расчёта на карте;
-- отображение городов и административных границ на подложке карты;
-- извлечение профиля по ближайшей точке сетки для параметров:
-  - температура;
-  - относительная влажность;
-  - компоненты ветра U/V;
-  - геопотенциальная высота;
-  - давление по уровням;
-- построение графиков профиля;
-- отдельная панель с отображением ветра **метеорологическим пером**;
-- экспорт таблицы в CSV и копирование в буфер обмена;
-- уведомления/тосты, индикатор загрузки и отображение статистики кэша сервера.
+## 🧱 Архитектура
 
-## Telegram-бот
-
-В ветке добавлен минимальный long-polling бот без отдельного API, БД, Redis и очередей. Он использует тот же источник данных GFS через NOMADS GRIB Filter, привязывает точку к ближайшему узлу GFS 0.25° и возвращает краткую сводку плюс CSV.
-
-Поддержанные запросы:
+Минимальная схема без лишней инфраструктуры:
 
 ```text
-/profile Москва +24
-/profile 55.75 37.62 +12
-/profile Санкт-Петербург run=20260630/06 +48
-/cycle
+Telegram / Web UI
+        ↓
+gfs_core.py
+        ↓
+NOMADS GRIB Filter → GRIB2 → cfgrib/eccodes → pandas
+        ↓
+текстовая сводка / PNG / CSV
 ```
 
-Запуск:
+Нет Redis, Celery, БД, webhook-сервера и отдельного API для Telegram-бота. Бот работает одним Python-процессом через long polling.
 
-```bash
-cp .env.telegram.example .env
-# заполнить TELEGRAM_BOT_TOKEN
-set -a && source .env && set +a
-python telegram_bot.py
-```
-
-Подробности: `TELEGRAM_BOT.md`.
-
-## Локальный запуск
+## 📦 Установка: базовая
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+```
+
+Проверка тестов:
+
+```bash
+python -m unittest discover -s tests
+```
+
+## 🧪 Проверка ядра без Telegram
+
+```bash
+python -m gfs_core --lat 55.75 --lon 37.62 --lead 24
+python -m gfs_core --lat 55.75 --lon 37.62 --lead 24 --csv /tmp/profile.csv
+```
+
+Если `--date` и `--cycle` не заданы, используется последний доступный запуск GFS.
+
+## 🤖 Установка Telegram-бота
+
+### 1. Создать `.env`
+
+```bash
+cp .env.telegram.example .env
+```
+
+### 2. Заполнить токен
+
+```bash
+TELEGRAM_BOT_TOKEN=123456:AA...
+```
+
+### 3. Запустить
+
+```bash
+set -a && source .env && set +a
+python telegram_bot.py
+```
+
+### 4. Проверить в Telegram
+
+```text
+/start
+/cycle
+/profile Москва +24
+/profile 55.75 37.62 +12
+/profile Санкт-Петербург run=20260630/06 +48
+```
+
+## 🌐 Запуск веб-интерфейса
+
+```bash
 uvicorn main:app --reload
 ```
 
-Открыть: http://127.0.0.1:8000
+Открыть:
 
-## Бесшовный деплой на Railway
+```text
+http://127.0.0.1:8000
+```
 
-Проект уже подготовлен для Railway:
+## ⚙️ Переменные окружения
 
-- `main.py` добавлен как ASGI-входная точка совместимости (`main:app`);
-- `railway.json` содержит build/deploy-конфигурацию и healthcheck `/healthz`;
-- `Procfile` задаёт старт web-процесса через `uvicorn`;
-- endpoint `GET /healthz` возвращает `{ "status": "ok" }`.
+```text
+TELEGRAM_BOT_TOKEN     токен Telegram-бота
+DEFAULT_LEAD           срок прогноза по умолчанию, часы; обычно 24
+MAX_CONCURRENT_GFS     максимум одновременных GFS-запросов; обычно 2
+GFS_CACHE_DIR          каталог файлового кэша GRIB2
+GFS_CACHE_TTL_SECONDS  срок хранения GRIB2; обычно 86400
+GFS_REQUEST_TIMEOUT    timeout загрузки NOMADS, секунды
+GEOCODER_USER_AGENT    User-Agent для Nominatim fallback
+GEOCODE_CACHE_DIR      каталог кэша геокодирования
+GEOCODE_TIMEOUT        timeout геокодера, секунды
+```
 
-### Шаги деплоя
+## 🧭 API веб-приложения
 
-1. Запушить репозиторий в GitHub.
-2. В Railway выбрать **New Project → Deploy from GitHub Repo**.
-3. Выбрать этот репозиторий (Railway автоматически подхватит `railway.json`).
-4. Дождаться билда и деплоя.
-5. Открыть вкладку **Settings → Networking** и сгенерировать публичный домен.
+```text
+GET  /healthz
+GET  /api/available-cycles?date=YYYYMMDD
+GET  /api/available-leads?date=YYYYMMDD&cycle=00|06|12|18
+GET  /api/profile?date=YYYYMMDD&cycle=00&lead_index=24&lat=55.75&lon=37.62
+POST /api/profile/start?...       фоновый расчёт
+GET  /api/profile/status?job_id=...
+GET  /api/cache-info
+```
 
-После этого приложение будет доступно по выданному URL.
+## 📊 Что приходит в Telegram
 
-## API
+1. Краткая метеосводка по ключевым уровням: 1000, 925, 850, 700, 500, 300 гПа.
+2. PNG-график с логарифмической шкалой давления и ветровыми перьями.
+3. CSV со всеми уровнями профиля.
 
-- `GET /api/available-cycles?date=YYYYMMDD`
-- `GET /api/available-leads?date=YYYYMMDD&cycle=00|06|12|18`
-- `GET /api/profile?date=YYYYMMDD&cycle=..&lead_index=..&lat=..&lon=..` (синхронный режим)
-- `POST /api/profile/start?...` — запуск фоновой задачи построения профиля
-- `GET /api/profile/status?job_id=...` — статус/прогресс задачи, включая процент загрузки
-- `GET /api/cache-info` — статистика LRU-кэша данных профиля и найденных lead-часов.
-- `GET /healthz` — healthcheck для платформы деплоя.
+## ⚠️ Ограничения
 
-## Источник данных
+- GFS 0.25° сглаживает рельеф и локальные эффекты.
+- В горах нижние изобарические уровни могут быть ниже поверхности модели.
+- Уровень 0 °C считается по доступным изобарическим уровням, а не по фактическому радиозонду.
+- Геокодинг неоднозначных городов может вернуть несколько вариантов; в этом случае используйте координаты.
+- NOMADS может быть временно недоступен или ещё не опубликовать последний цикл.
 
-- GRIB Filter: `https://nomads.ncep.noaa.gov/cgi-bin/filter_gfs_0p25_1hr.pl`
-- Файлы GFS: `https://nomads.ncep.noaa.gov/pub/data/nccf/com/gfs/prod/`
+## 🛠️ Systemd для Telegram-бота
 
+```ini
+[Unit]
+Description=GFS Profile Telegram Bot
+After=network-online.target
+Wants=network-online.target
 
-## Стабильность профиля
+[Service]
+Type=simple
+WorkingDirectory=/opt/gfs_profile
+EnvironmentFile=/opt/gfs_profile/.env
+ExecStart=/opt/gfs_profile/.venv/bin/python telegram_bot.py
+Restart=always
+RestartSec=5
+User=gfsbot
+Group=gfsbot
 
-- Парсинг GRIB2 выполняется только для `typeOfLevel=isobaricInhPa`, чтобы не читать лишние поля и не перегружать память инстанса.
-- Загрузка ответа фильтра ограничена по размеру (`MAX_GRIB_BYTES`), чтобы избежать рестартов процесса на маленьких тарифах Railway.
+[Install]
+WantedBy=multi-user.target
+```
 
+## 🧹 Кэш
 
-## Кэширование файлов GFS на диске
-
-- Профильные GRIB2-файлы сохраняются на диск в `.cache_gfs/`, а не в RAM.
-- При повторном запросе той же точки/lead используется кэшированный файл.
-- Срок хранения кэша: 24 часа (`CACHE_TTL_SECONDS`).
-- Старые файлы автоматически очищаются перед новыми загрузками.
+- GRIB2-файлы сохраняются в `.cache_gfs/`.
+- Повторный запрос той же точки и срока использует файл из кэша.
+- Старые файлы удаляются по `GFS_CACHE_TTL_SECONDS`.
