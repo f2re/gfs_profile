@@ -7,6 +7,7 @@ import os
 import sys
 import tempfile
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
@@ -25,6 +26,7 @@ CACHE_TTL_SECONDS = int(os.getenv("GFS_CACHE_TTL_SECONDS", str(24 * 3600)))
 CACHE_DIR = Path(os.getenv("GFS_CACHE_DIR", os.getenv("CACHE_DIR", ".cache_gfs")))
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 GRID_STEP_DEG = 0.25
+ProgressCallback = Callable[[dict[str, Any]], None]
 
 
 class GfsProfileError(RuntimeError):
@@ -76,6 +78,11 @@ class ProfileResult:
             "columns": list(df.columns),
             "rows": df.round(3).to_dict(orient="records"),
         }
+
+
+def _emit(progress_callback: ProgressCallback | None, **payload: Any) -> None:
+    if progress_callback:
+        progress_callback(payload)
 
 
 def now_utc() -> datetime:
@@ -197,12 +204,20 @@ def clean_old_cache() -> None:
             continue
 
 
-def download_profile_grib_to_disk(date: str, cycle: str, lead_hour: int, lat: float, lon: float) -> Path:
+def download_profile_grib_to_disk(
+    date: str,
+    cycle: str,
+    lead_hour: int,
+    lat: float,
+    lon: float,
+    progress_callback: ProgressCallback | None = None,
+) -> Path:
     validate_lead(lead_hour)
     clean_old_cache()
     key = cache_key(date, cycle, lead_hour, lat, lon)
     out_path = CACHE_DIR / f"{key}.grib2"
     if out_path.exists():
+        _emit(progress_callback, stage="cache", message="GRIB2 найден в файловом кэше", file=str(out_path), bytes=out_path.stat().st_size)
         return out_path
 
     if not forecast_file_exists(date, cycle, lead_hour):
@@ -210,6 +225,7 @@ def download_profile_grib_to_disk(date: str, cycle: str, lead_hour: int, lat: fl
 
     url = grib_filter_url(date, cycle, lead_hour, lat, lon)
     part_path = CACHE_DIR / f"{key}.part"
+    _emit(progress_callback, stage="download_start", message="Начинаю загрузку GRIB2", url=url, downloaded=0, total=None)
     try:
         with requests.get(url, timeout=REQUEST_TIMEOUT, stream=True) as response:
             if response.status_code != 200:
@@ -218,10 +234,25 @@ def download_profile_grib_to_disk(date: str, cycle: str, lead_hour: int, lat: fl
             if "text/html" in content_type:
                 raise GfsProfileError("NOMADS вернул HTML вместо GRIB2")
 
+            total = int(response.headers.get("content-length") or 0) or None
+            downloaded = 0
+            last_emit = 0.0
             with part_path.open("wb") as file_obj:
                 for chunk in response.iter_content(chunk_size=65536):
                     if chunk:
                         file_obj.write(chunk)
+                        downloaded += len(chunk)
+                        now = time.monotonic()
+                        if now - last_emit >= 1.0:
+                            last_emit = now
+                            _emit(
+                                progress_callback,
+                                stage="download",
+                                message="Загружаю GRIB2",
+                                downloaded=downloaded,
+                                total=total,
+                            )
+            _emit(progress_callback, stage="download_done", message="GRIB2 загружен", downloaded=downloaded, total=total)
     except RequestException as exc:
         part_path.unlink(missing_ok=True)
         raise GfsProfileError(f"Ошибка подключения к NOMADS: {exc}") from exc
@@ -237,7 +268,8 @@ def download_profile_grib_to_disk(date: str, cycle: str, lead_hour: int, lat: fl
     return out_path
 
 
-def extract_profile_from_grib_file(grib_path: Path) -> pd.DataFrame:
+def extract_profile_from_grib_file(grib_path: Path, progress_callback: ProgressCallback | None = None) -> pd.DataFrame:
+    _emit(progress_callback, stage="parse_start", message="Читаю GRIB2 через cfgrib/eccodes", file=str(grib_path))
     with tempfile.TemporaryDirectory() as tmp_dir:
         idx_path = os.path.join(tmp_dir, "profile.idx")
         try:
@@ -284,7 +316,9 @@ def extract_profile_from_grib_file(grib_path: Path) -> pd.DataFrame:
             }
         )
         df = df.dropna(subset=["pressure_hpa", "geopotential_height_m"]).copy()
-        return add_derived_parameters(df)
+        out = add_derived_parameters(df)
+        _emit(progress_callback, stage="parse_done", message="Изобарический профиль разобран", rows=len(out))
+        return out
 
 
 def add_derived_parameters(df: pd.DataFrame) -> pd.DataFrame:
@@ -337,14 +371,23 @@ def freezing_level_m(df: pd.DataFrame) -> float | None:
     return float(diagnostic["height_m"]) if diagnostic["status"] == "found" and diagnostic["height_m"] is not None else None
 
 
-def build_profile(run: GfsRun, lead_hour: int, lat: float, lon: float) -> ProfileResult:
+def build_profile(
+    run: GfsRun,
+    lead_hour: int,
+    lat: float,
+    lon: float,
+    progress_callback: ProgressCallback | None = None,
+) -> ProfileResult:
     validate_lead(lead_hour)
+    _emit(progress_callback, stage="check", message="Проверяю публикацию forecast-файла", run=f"{run.date} {run.cycle}Z", lead_hour=lead_hour)
     if not forecast_file_exists(run.date, run.cycle, lead_hour):
         raise GfsProfileError(f"Для указанной даты/цикла/срока данные GFS недоступны: {run.date} {run.cycle}Z +{lead_hour} ч")
 
     grid_lat, grid_lon = snap_to_gfs_grid(lat, lon)
-    grib_path = download_profile_grib_to_disk(run.date, run.cycle, lead_hour, grid_lat, grid_lon)
-    df = extract_profile_from_grib_file(grib_path)
+    _emit(progress_callback, stage="grid", message="Точка привязана к узлу GFS", grid_lat=grid_lat, grid_lon=grid_lon)
+    grib_path = download_profile_grib_to_disk(run.date, run.cycle, lead_hour, grid_lat, grid_lon, progress_callback=progress_callback)
+    df = extract_profile_from_grib_file(grib_path, progress_callback=progress_callback)
+    _emit(progress_callback, stage="done", message="Профиль готов", rows=len(df))
     return ProfileResult(
         run=run,
         lead_hour=lead_hour,
