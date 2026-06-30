@@ -71,6 +71,7 @@ class ProfileResult:
                 "source": "NOMADS GRIB Filter + disk cache",
                 "rows": int(len(df)),
                 "cache_file": self.grib_path.name,
+                "freezing_level": freezing_level_diagnostic(df),
             },
             "columns": list(df.columns),
             "rows": df.round(3).to_dict(orient="records"),
@@ -283,25 +284,39 @@ def add_derived_parameters(df: pd.DataFrame) -> pd.DataFrame:
     return out.sort_values("geopotential_height_m").reset_index(drop=True)
 
 
-def freezing_level_m(df: pd.DataFrame) -> float | None:
+def freezing_level_diagnostic(df: pd.DataFrame) -> dict[str, float | str | None]:
     if df.empty or "temperature_c" not in df or "geopotential_height_m" not in df:
-        return None
+        return {"status": "not_available", "height_m": None}
+
     prof = df.sort_values("geopotential_height_m")[["temperature_c", "geopotential_height_m"]].dropna()
     if prof.empty:
-        return None
+        return {"status": "not_available", "height_m": None}
 
     temps = prof["temperature_c"].to_numpy(dtype=float)
     heights = prof["geopotential_height_m"].to_numpy(dtype=float)
+
+    if np.all(temps < 0):
+        return {"status": "below_lowest_level", "height_m": None}
+    if np.all(temps > 0):
+        return {"status": "above_highest_level", "height_m": None}
+
     for i in range(len(temps) - 1):
         t0, t1 = temps[i], temps[i + 1]
         if math.isclose(t0, 0.0, abs_tol=0.05):
-            return float(heights[i])
+            return {"status": "found", "height_m": float(heights[i])}
         if (t0 >= 0 >= t1) or (t0 <= 0 <= t1):
             if math.isclose(t0, t1, abs_tol=1e-9):
-                return float(heights[i])
+                return {"status": "found", "height_m": float(heights[i])}
             ratio = (0 - t0) / (t1 - t0)
-            return float(heights[i] + ratio * (heights[i + 1] - heights[i]))
-    return None
+            height = heights[i] + ratio * (heights[i + 1] - heights[i])
+            return {"status": "found", "height_m": float(height)}
+
+    return {"status": "not_available", "height_m": None}
+
+
+def freezing_level_m(df: pd.DataFrame) -> float | None:
+    diagnostic = freezing_level_diagnostic(df)
+    return float(diagnostic["height_m"]) if diagnostic["status"] == "found" and diagnostic["height_m"] is not None else None
 
 
 def build_profile(run: GfsRun, lead_hour: int, lat: float, lon: float) -> ProfileResult:
@@ -326,9 +341,9 @@ def build_profile(run: GfsRun, lead_hour: int, lat: float, lon: float) -> Profil
 
 def format_cli_summary(result: ProfileResult) -> str:
     lines = [
-        "GFS 0.25 profile",
-        f"run={result.run.date}/{result.run.cycle} lead=+{result.lead_hour}h valid={result.valid_time_utc:%Y-%m-%d %H:%M UTC}",
-        f"requested={result.requested_lat:.4f},{result.requested_lon:.4f} grid={result.grid_lat:.3f},{result.grid_lon:.3f}",
+        "GFS 0.25: модельный профиль атмосферы",
+        f"Запуск: {result.run.date}/{result.run.cycle} | срок: +{result.lead_hour} ч | действительно на: {result.valid_time_utc:%Y-%m-%d %H:%M UTC}",
+        f"Запрошено: {result.requested_lat:.4f},{result.requested_lon:.4f} | узел GFS: {result.grid_lat:.3f},{result.grid_lon:.3f}",
     ]
     df = result.dataframe
     for level in (1000, 925, 850, 700, 500, 300):
@@ -339,26 +354,26 @@ def format_cli_summary(result: ProfileResult) -> str:
         if abs(float(row["pressure_hpa"]) - level) > 35:
             continue
         lines.append(
-            f"{int(round(row['pressure_hpa'])):4d} hPa "
-            f"z={int(round(row['geopotential_height_m'])):5d}m "
-            f"T={row['temperature_c']:+5.1f}C RH={row['relative_humidity_pct']:5.1f}% "
-            f"wind={row['wind_dir_deg']:03.0f}/{row['wind_speed_ms']:.1f}m/s"
+            f"{int(round(row['pressure_hpa'])):4d} гПа "
+            f"z={int(round(row['geopotential_height_m'])):5d} м "
+            f"T={row['temperature_c']:+5.1f} C RH={row['relative_humidity_pct']:5.1f}% "
+            f"ветер={row['wind_dir_deg']:03.0f}/{row['wind_speed_ms']:.1f} м/с"
         )
-    zero = freezing_level_m(df)
-    if zero is not None:
-        lines.append(f"freezing_level={zero:.0f}m")
+    diagnostic = freezing_level_diagnostic(df)
+    if diagnostic["status"] == "found":
+        lines.append(f"0 C: {float(diagnostic['height_m']):.0f} м")
     return "\n".join(lines)
 
 
 def cli(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Download and print a point GFS 0.25 vertical profile.")
-    parser.add_argument("--lat", type=float, required=True)
-    parser.add_argument("--lon", type=float, required=True)
-    parser.add_argument("--lead", type=int, default=24)
-    parser.add_argument("--date", help="GFS run date YYYYMMDD. If omitted, latest available run is used.")
-    parser.add_argument("--cycle", choices=("00", "06", "12", "18"), help="GFS cycle. Required when --date is set.")
-    parser.add_argument("--json", action="store_true", help="Print full JSON payload instead of compact text.")
-    parser.add_argument("--csv", type=Path, help="Optional path to write the full profile CSV.")
+    parser = argparse.ArgumentParser(description="Загрузить и напечатать точечный вертикальный профиль GFS 0.25.")
+    parser.add_argument("--lat", type=float, required=True, help="Широта")
+    parser.add_argument("--lon", type=float, required=True, help="Долгота")
+    parser.add_argument("--lead", type=int, default=24, help="Срок прогноза, часы")
+    parser.add_argument("--date", help="Дата запуска GFS YYYYMMDD. Если не задано, берётся последний доступный запуск.")
+    parser.add_argument("--cycle", choices=("00", "06", "12", "18"), help="Цикл GFS. Обязателен вместе с --date.")
+    parser.add_argument("--json", action="store_true", help="Напечатать полный JSON вместо компактной сводки.")
+    parser.add_argument("--csv", type=Path, help="Путь для записи полного CSV-профиля.")
     args = parser.parse_args(argv)
 
     try:
@@ -373,10 +388,10 @@ def cli(argv: Sequence[str] | None = None) -> int:
         else:
             print(format_cli_summary(result))
             if args.csv:
-                print(f"csv={args.csv}")
+                print(f"CSV: {args.csv}")
         return 0
     except GfsProfileError as exc:
-        print(f"error: {exc}", file=sys.stderr)
+        print(f"Ошибка: {exc}", file=sys.stderr)
         return 2
 
 
