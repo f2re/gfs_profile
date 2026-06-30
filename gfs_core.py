@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import argparse
+import json
 import math
 import os
+import sys
 import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from functools import lru_cache
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 from urllib.parse import urlencode
 
 import numpy as np
@@ -319,3 +322,63 @@ def build_profile(run: GfsRun, lead_hour: int, lat: float, lon: float) -> Profil
         grib_path=grib_path,
         dataframe=df,
     )
+
+
+def format_cli_summary(result: ProfileResult) -> str:
+    lines = [
+        "GFS 0.25 profile",
+        f"run={result.run.date}/{result.run.cycle} lead=+{result.lead_hour}h valid={result.valid_time_utc:%Y-%m-%d %H:%M UTC}",
+        f"requested={result.requested_lat:.4f},{result.requested_lon:.4f} grid={result.grid_lat:.3f},{result.grid_lon:.3f}",
+    ]
+    df = result.dataframe
+    for level in (1000, 925, 850, 700, 500, 300):
+        if df.empty:
+            continue
+        idx = (df["pressure_hpa"] - level).abs().idxmin()
+        row = df.loc[idx]
+        if abs(float(row["pressure_hpa"]) - level) > 35:
+            continue
+        lines.append(
+            f"{int(round(row['pressure_hpa'])):4d} hPa "
+            f"z={int(round(row['geopotential_height_m'])):5d}m "
+            f"T={row['temperature_c']:+5.1f}C RH={row['relative_humidity_pct']:5.1f}% "
+            f"wind={row['wind_dir_deg']:03.0f}/{row['wind_speed_ms']:.1f}m/s"
+        )
+    zero = freezing_level_m(df)
+    if zero is not None:
+        lines.append(f"freezing_level={zero:.0f}m")
+    return "\n".join(lines)
+
+
+def cli(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Download and print a point GFS 0.25 vertical profile.")
+    parser.add_argument("--lat", type=float, required=True)
+    parser.add_argument("--lon", type=float, required=True)
+    parser.add_argument("--lead", type=int, default=24)
+    parser.add_argument("--date", help="GFS run date YYYYMMDD. If omitted, latest available run is used.")
+    parser.add_argument("--cycle", choices=("00", "06", "12", "18"), help="GFS cycle. Required when --date is set.")
+    parser.add_argument("--json", action="store_true", help="Print full JSON payload instead of compact text.")
+    parser.add_argument("--csv", type=Path, help="Optional path to write the full profile CSV.")
+    args = parser.parse_args(argv)
+
+    try:
+        if args.date and not args.cycle:
+            raise GfsProfileError("Если задан --date, нужно задать --cycle")
+        run = GfsRun(args.date, args.cycle) if args.date else latest_available_run()
+        result = build_profile(run, args.lead, args.lat, args.lon)
+        if args.csv:
+            result.dataframe.round(3).to_csv(args.csv, index=False)
+        if args.json:
+            print(json.dumps(result.to_payload(), ensure_ascii=False, indent=2))
+        else:
+            print(format_cli_summary(result))
+            if args.csv:
+                print(f"csv={args.csv}")
+        return 0
+    except GfsProfileError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(cli())
