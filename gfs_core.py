@@ -146,30 +146,45 @@ def grib_filter_url(date: str, cycle: str, lead_hour: int, lat: float, lon: floa
     return f"{NOMADS_BASE}/cgi-bin/filter_gfs_0p25_1hr.pl?{urlencode(query)}"
 
 
-@lru_cache(maxsize=256)
-def cycle_exists(date: str, cycle: str) -> bool:
+@lru_cache(maxsize=4096)
+def forecast_file_exists(date: str, cycle: str, lead_hour: int) -> bool:
+    """Check that the exact GFS forecast file for this cycle and lead is published."""
+
+    validate_lead(lead_hour)
     try:
-        response = requests.head(source_idx_url(date, cycle, 0), timeout=12)
+        response = requests.head(source_idx_url(date, cycle, lead_hour), timeout=12)
         return response.status_code == 200
     except RequestException:
         return False
 
 
-def latest_available_run(reference_time: datetime | None = None) -> GfsRun:
+@lru_cache(maxsize=256)
+def cycle_exists(date: str, cycle: str) -> bool:
+    return forecast_file_exists(date, cycle, 0)
+
+
+def latest_available_run_for_lead(lead_hour: int, reference_time: datetime | None = None) -> GfsRun:
+    """Return the newest GFS run where the requested forecast lead is already available."""
+
+    validate_lead(lead_hour)
     ref = reference_time or now_utc()
     if ref.tzinfo is None:
         ref = ref.replace(tzinfo=timezone.utc)
     ref = ref.astimezone(timezone.utc)
 
-    for day_offset in (0, 1):
+    for day_offset in (0, 1, 2):
         day = ref.date() - timedelta(days=day_offset)
         date = day.strftime("%Y%m%d")
         for cycle in ("18", "12", "06", "00"):
             run_time = datetime.strptime(f"{date}{cycle}", "%Y%m%d%H").replace(tzinfo=timezone.utc)
-            if run_time <= ref and cycle_exists(date, cycle):
+            if run_time <= ref and forecast_file_exists(date, cycle, lead_hour):
                 return GfsRun(date=date, cycle=cycle)
 
-    raise GfsProfileError("Не найден доступный цикл GFS за сегодня или вчера")
+    raise GfsProfileError(f"Не найден доступный цикл GFS со сроком +{lead_hour} ч за последние 3 дня")
+
+
+def latest_available_run(reference_time: datetime | None = None) -> GfsRun:
+    return latest_available_run_for_lead(0, reference_time=reference_time)
 
 
 def clean_old_cache() -> None:
@@ -189,6 +204,9 @@ def download_profile_grib_to_disk(date: str, cycle: str, lead_hour: int, lat: fl
     out_path = CACHE_DIR / f"{key}.grib2"
     if out_path.exists():
         return out_path
+
+    if not forecast_file_exists(date, cycle, lead_hour):
+        raise GfsProfileError(f"Файл GFS для {date} {cycle}Z +{lead_hour} ч ещё не опубликован")
 
     url = grib_filter_url(date, cycle, lead_hour, lat, lon)
     part_path = CACHE_DIR / f"{key}.part"
@@ -321,8 +339,8 @@ def freezing_level_m(df: pd.DataFrame) -> float | None:
 
 def build_profile(run: GfsRun, lead_hour: int, lat: float, lon: float) -> ProfileResult:
     validate_lead(lead_hour)
-    if not cycle_exists(run.date, run.cycle):
-        raise GfsProfileError("Для указанной даты/цикла данные GFS недоступны")
+    if not forecast_file_exists(run.date, run.cycle, lead_hour):
+        raise GfsProfileError(f"Для указанной даты/цикла/срока данные GFS недоступны: {run.date} {run.cycle}Z +{lead_hour} ч")
 
     grid_lat, grid_lon = snap_to_gfs_grid(lat, lon)
     grib_path = download_profile_grib_to_disk(run.date, run.cycle, lead_hour, grid_lat, grid_lon)
@@ -356,12 +374,12 @@ def format_cli_summary(result: ProfileResult) -> str:
         lines.append(
             f"{int(round(row['pressure_hpa'])):4d} гПа "
             f"z={int(round(row['geopotential_height_m'])):5d} м "
-            f"T={row['temperature_c']:+5.1f} C RH={row['relative_humidity_pct']:5.1f}% "
-            f"ветер={row['wind_dir_deg']:03.0f}/{row['wind_speed_ms']:.1f} м/с"
+            f"T={row['temperature_c']:+5.1f} °C RH={row['relative_humidity_pct']:5.1f}% "
+            f"ветер={row['wind_dir_deg']:03.0f}°/{row['wind_speed_ms']:.1f} м/с"
         )
     diagnostic = freezing_level_diagnostic(df)
     if diagnostic["status"] == "found":
-        lines.append(f"0 C: {float(diagnostic['height_m']):.0f} м")
+        lines.append(f"0 °C: {float(diagnostic['height_m']):.0f} м")
     return "\n".join(lines)
 
 
@@ -370,7 +388,7 @@ def cli(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--lat", type=float, required=True, help="Широта")
     parser.add_argument("--lon", type=float, required=True, help="Долгота")
     parser.add_argument("--lead", type=int, default=24, help="Срок прогноза, часы")
-    parser.add_argument("--date", help="Дата запуска GFS YYYYMMDD. Если не задано, берётся последний доступный запуск.")
+    parser.add_argument("--date", help="Дата запуска GFS YYYYMMDD. Если не задано, берётся последний доступный запуск для указанного срока.")
     parser.add_argument("--cycle", choices=("00", "06", "12", "18"), help="Цикл GFS. Обязателен вместе с --date.")
     parser.add_argument("--json", action="store_true", help="Напечатать полный JSON вместо компактной сводки.")
     parser.add_argument("--csv", type=Path, help="Путь для записи полного CSV-профиля.")
@@ -379,7 +397,7 @@ def cli(argv: Sequence[str] | None = None) -> int:
     try:
         if args.date and not args.cycle:
             raise GfsProfileError("Если задан --date, нужно задать --cycle")
-        run = GfsRun(args.date, args.cycle) if args.date else latest_available_run()
+        run = GfsRun(args.date, args.cycle) if args.date else latest_available_run_for_lead(args.lead)
         result = build_profile(run, args.lead, args.lat, args.lon)
         if args.csv:
             result.dataframe.round(3).to_csv(args.csv, index=False)
