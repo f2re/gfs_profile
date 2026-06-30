@@ -18,8 +18,6 @@
 
 ## 🧱 Архитектура
 
-Минимальная схема без лишней инфраструктуры:
-
 ```text
 Telegram / Web UI
         ↓
@@ -32,18 +30,53 @@ NOMADS GRIB Filter → GRIB2 → cfgrib/eccodes → pandas
 
 Нет Redis, Celery, БД, webhook-сервера и отдельного API для Telegram-бота. Бот работает одним Python-процессом через long polling.
 
-## 📦 Установка: базовая
+## 🚀 Быстрая установка Telegram-бота
+
+Запустите установщик из корня репозитория:
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+bash install_telegram_bot.sh
 ```
 
-Проверка тестов:
+Скрипт сам:
+
+- 🔎 покажет текущее состояние установки;
+- 📦 поставит системные пакеты Python, если разрешить;
+- 👤 создаст системного пользователя `gfsbot`;
+- 📁 скопирует проект в `/opt/gfs_profile`;
+- 🐍 создаст `.venv` и установит зависимости;
+- 🔐 спросит `TELEGRAM_BOT_TOKEN`, если он не задан ранее;
+- ⚙️ создаст `.env` и systemd-сервис;
+- ▶️ включит автозапуск и запустит бота.
+
+Проверка после установки:
 
 ```bash
-python -m unittest discover -s tests
+sudo systemctl status gfs-profile-bot.service
+sudo journalctl -u gfs-profile-bot.service -f
+```
+
+Проверка состояния без переустановки:
+
+```bash
+bash install_telegram_bot.sh --status
+```
+
+Неразговорный режим для автоматизации:
+
+```bash
+TELEGRAM_BOT_TOKEN='123456:AA...' bash install_telegram_bot.sh --yes
+```
+
+Полезные опции:
+
+```text
+--install-dir DIR       каталог установки, по умолчанию /opt/gfs_profile
+--service-name NAME     имя systemd-сервиса, по умолчанию gfs-profile-bot
+--service-user USER     системный пользователь, по умолчанию gfsbot
+--skip-apt              не ставить системные пакеты через apt
+--no-start              создать сервис, но не запускать
+--status                только показать состояние
 ```
 
 ## 🧪 Проверка ядра без Telegram
@@ -55,28 +88,13 @@ python -m gfs_core --lat 55.75 --lon 37.62 --lead 24 --csv /tmp/profile.csv
 
 Если `--date` и `--cycle` не заданы, используется последний доступный запуск GFS.
 
-## 🤖 Установка Telegram-бота
-
-### 1. Создать `.env`
+## 🧪 Тесты
 
 ```bash
-cp .env.telegram.example .env
+python -m unittest discover -s tests
 ```
 
-### 2. Заполнить токен
-
-```bash
-TELEGRAM_BOT_TOKEN=123456:AA...
-```
-
-### 3. Запустить
-
-```bash
-set -a && source .env && set +a
-python telegram_bot.py
-```
-
-### 4. Проверить в Telegram
+## 🤖 Команды Telegram
 
 ```text
 /start
@@ -86,9 +104,18 @@ python telegram_bot.py
 /profile Санкт-Петербург run=20260630/06 +48
 ```
 
-## 🌐 Запуск веб-интерфейса
+Что приходит в ответ:
+
+1. Краткая метеосводка по ключевым уровням: 1000, 925, 850, 700, 500, 300 гПа.
+2. PNG-график с логарифмической шкалой давления и ветровыми перьями.
+3. CSV со всеми уровнями профиля.
+
+## 🌐 Запуск веб-интерфейса вручную
 
 ```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 uvicorn main:app --reload
 ```
 
@@ -124,12 +151,6 @@ GET  /api/profile/status?job_id=...
 GET  /api/cache-info
 ```
 
-## 📊 Что приходит в Telegram
-
-1. Краткая метеосводка по ключевым уровням: 1000, 925, 850, 700, 500, 300 гПа.
-2. PNG-график с логарифмической шкалой давления и ветровыми перьями.
-3. CSV со всеми уровнями профиля.
-
 ## ⚠️ Ограничения
 
 - GFS 0.25° сглаживает рельеф и локальные эффекты.
@@ -137,28 +158,6 @@ GET  /api/cache-info
 - Уровень 0 °C считается по доступным изобарическим уровням, а не по фактическому радиозонду.
 - Геокодинг неоднозначных городов может вернуть несколько вариантов; в этом случае используйте координаты.
 - NOMADS может быть временно недоступен или ещё не опубликовать последний цикл.
-
-## 🛠️ Systemd для Telegram-бота
-
-```ini
-[Unit]
-Description=GFS Profile Telegram Bot
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-WorkingDirectory=/opt/gfs_profile
-EnvironmentFile=/opt/gfs_profile/.env
-ExecStart=/opt/gfs_profile/.venv/bin/python telegram_bot.py
-Restart=always
-RestartSec=5
-User=gfsbot
-Group=gfsbot
-
-[Install]
-WantedBy=multi-user.target
-```
 
 ## 🧹 Кэш
 
