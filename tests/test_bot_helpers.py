@@ -24,12 +24,19 @@ class BotHelperTests(unittest.TestCase):
         parsed = parse_request("Москва +24")
         self.assertEqual(parsed.location_query, "Москва")
         self.assertEqual(parsed.lead_hour, 24)
+        self.assertTrue(parsed.lead_from_user)
         self.assertIsNone(parsed.run)
+
+    def test_parse_profile_request_without_lead_uses_default_but_marks_implicit(self) -> None:
+        parsed = parse_request("Москва")
+        self.assertEqual(parsed.location_query, "Москва")
+        self.assertFalse(parsed.lead_from_user)
 
     def test_parse_profile_request_expert_run(self) -> None:
         parsed = parse_request("Санкт-Петербург run=20260630/06 +48")
         self.assertEqual(parsed.location_query, "Санкт-Петербург")
         self.assertEqual(parsed.lead_hour, 48)
+        self.assertTrue(parsed.lead_from_user)
         self.assertIsNotNone(parsed.run)
         assert parsed.run is not None
         self.assertEqual(parsed.run.date, "20260630")
