@@ -22,6 +22,8 @@ ASSUME_YES=0
 SKIP_APT=0
 NO_START=0
 STATUS_ONLY=0
+TELEGRAM_BOT_TOKEN_FINAL=""
+EXTRA_READ_WRITE_PATHS=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$SCRIPT_DIR"
@@ -144,6 +146,12 @@ get_env_value() {
   grep -E "^${key}=" "$file" | tail -n 1 | cut -d= -f2- || true
 }
 
+append_rw_path() {
+  local path="$1"
+  [[ -n "$path" && "$path" = /* ]] || return 0
+  EXTRA_READ_WRITE_PATHS+=" $path"
+}
+
 print_status() {
   section "Состояние"
   if [[ -d "$INSTALL_DIR" ]]; then success "Каталог установки: $INSTALL_DIR"; else warn "Каталог установки отсутствует: $INSTALL_DIR"; fi
@@ -203,6 +211,8 @@ copy_project() {
       --exclude '.git/' \
       --exclude '.venv/' \
       --exclude '.cache_gfs/' \
+      --exclude '.env' \
+      --exclude '.install-state' \
       --exclude '__pycache__/' \
       --exclude '*.pyc' \
       "$REPO_ROOT/" "$INSTALL_DIR/"
@@ -212,6 +222,8 @@ copy_project() {
       --exclude='./.git' \
       --exclude='./.venv' \
       --exclude='./.cache_gfs' \
+      --exclude='./.env' \
+      --exclude='./.install-state' \
       --exclude='*/__pycache__' \
       --exclude='*.pyc' \
       -cf - .) | run_root tar -xf - -C "$INSTALL_DIR"
@@ -262,7 +274,7 @@ ask_token() {
 
 write_env() {
   local token default_lead max_concurrent cache_dir ttl timeout ua geocode_dir geocode_timeout
-  token="$(ask_token)"
+  token="${TELEGRAM_BOT_TOKEN_FINAL:-$(ask_token)}"
   default_lead="$(ask_default "Срок прогноза по умолчанию, часы" "${DEFAULT_LEAD:-$DEFAULT_DEFAULT_LEAD}")"
   max_concurrent="$(ask_default "Максимум одновременных GFS-запросов" "${MAX_CONCURRENT_GFS:-$DEFAULT_MAX_CONCURRENT_GFS}")"
   cache_dir="$(ask_default "Каталог кэша GRIB2" "${GFS_CACHE_DIR:-.cache_gfs}")"
@@ -291,9 +303,16 @@ EOF
   if [[ "$cache_dir" = /* ]]; then
     run_root mkdir -p "$cache_dir"
     run_root chown -R "$SERVICE_USER:$SERVICE_USER" "$cache_dir"
+    append_rw_path "$cache_dir"
   else
     run_root mkdir -p "$INSTALL_DIR/$cache_dir"
     run_root chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/$cache_dir"
+  fi
+
+  if [[ "$geocode_dir" = /* ]]; then
+    run_root mkdir -p "$geocode_dir"
+    run_root chown -R "$SERVICE_USER:$SERVICE_USER" "$geocode_dir"
+    append_rw_path "$geocode_dir"
   fi
 }
 
@@ -317,7 +336,7 @@ Group=$SERVICE_USER
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=full
-ReadWritePaths=$INSTALL_DIR
+ReadWritePaths=$INSTALL_DIR$EXTRA_READ_WRITE_PATHS
 
 [Install]
 WantedBy=multi-user.target
@@ -335,6 +354,7 @@ service_user=$SERVICE_USER
 python=$PYTHON_BIN
 venv=$VENV_DIR
 unit=$UNIT_PATH
+read_write_paths=$INSTALL_DIR$EXTRA_READ_WRITE_PATHS
 EOF
   run_root chown "$SERVICE_USER:$SERVICE_USER" "$STATE_FILE"
 }
@@ -379,6 +399,7 @@ main() {
   echo "Файл .env:     $ENV_FILE" >&2
   confirm "Продолжить установку?" || fail "Отменено пользователем"
 
+  TELEGRAM_BOT_TOKEN_FINAL="$(ask_token)"
   install_system_packages
   ensure_service_user
   copy_project
