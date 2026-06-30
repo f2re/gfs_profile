@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
 
-import cfgrib
 import numpy as np
 import pandas as pd
 import requests
@@ -220,6 +219,8 @@ def extract_profile_from_grib_file(grib_path: Path) -> pd.DataFrame:
     with tempfile.TemporaryDirectory() as tmp_dir:
         idx_path = os.path.join(tmp_dir, "profile.idx")
         try:
+            import cfgrib
+
             ds = cfgrib.open_dataset(
                 str(grib_path),
                 backend_kwargs={
