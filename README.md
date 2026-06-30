@@ -23,6 +23,30 @@
 - экспорт таблицы в CSV и копирование в буфер обмена;
 - уведомления/тосты, индикатор загрузки и отображение статистики кэша сервера.
 
+## Telegram-бот
+
+В ветке добавлен минимальный long-polling бот без отдельного API, БД, Redis и очередей. Он использует тот же источник данных GFS через NOMADS GRIB Filter, привязывает точку к ближайшему узлу GFS 0.25° и возвращает краткую сводку плюс CSV.
+
+Поддержанные запросы:
+
+```text
+/profile Москва +24
+/profile 55.75 37.62 +12
+/profile Санкт-Петербург run=20260630/06 +48
+/cycle
+```
+
+Запуск:
+
+```bash
+cp .env.telegram.example .env
+# заполнить TELEGRAM_BOT_TOKEN
+set -a && source .env && set +a
+python telegram_bot.py
+```
+
+Подробности: `TELEGRAM_BOT.md`.
+
 ## Локальный запуск
 
 ```bash
@@ -41,7 +65,7 @@ uvicorn main:app --reload
 - `main.py` добавлен как ASGI-входная точка совместимости (`main:app`);
 - `railway.json` содержит build/deploy-конфигурацию и healthcheck `/healthz`;
 - `Procfile` задаёт старт web-процесса через `uvicorn`;
-- endpoint `GET /healthz` возвращает `{"status":"ok"}`.
+- endpoint `GET /healthz` возвращает `{ "status": "ok" }`.
 
 ### Шаги деплоя
 
