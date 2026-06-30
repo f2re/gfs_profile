@@ -8,3 +8,4 @@ cfgrib==0.9.15.1
 eccodes==1.7.1
 eccodeslib==2.46.2.19
 python-telegram-bot>=22,<23
+matplotlib
