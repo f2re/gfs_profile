@@ -12,37 +12,19 @@ WINDGRAM_STEPS = (3, 6, 12)
 WINDGRAM_TOPS = (500,)
 CLOUDGRAM_TO_HOURS = (24, 48, 72, 120)
 CLOUDGRAM_STEPS = (3, 6)
+CLOUDGRAM_MODES = (("pro", "👨‍🔬 Профи"), ("simple", "🙂 Упрощённо"))
 
 
 def start_aero_wizard_state(default_lead: int, diagram_type: str = "stuve") -> dict[str, object]:
-    return {
-        "product": "aero",
-        "step": "await_point",
-        "lead": int(default_lead),
-        "diagram_type": diagram_type,
-    }
+    return {"product": "aero", "step": "await_point", "lead": int(default_lead), "diagram_type": diagram_type}
 
 
 def start_windgram_wizard_state() -> dict[str, object]:
-    return {
-        "product": "windgram",
-        "step": "await_point",
-        "from": 0,
-        "to": 120,
-        "time_step": 6,
-        "top": 500,
-        "param": "wind",
-    }
+    return {"product": "windgram", "step": "await_point", "from": 0, "to": 120, "time_step": 6, "top": 500, "param": "wind"}
 
 
 def start_cloudgram_wizard_state() -> dict[str, object]:
-    return {
-        "product": "cloudgram",
-        "step": "await_point",
-        "from": 0,
-        "to": 72,
-        "time_step": 3,
-    }
+    return {"product": "cloudgram", "step": "await_point", "from": 0, "to": 72, "time_step": 3, "mode": "pro"}
 
 
 def product_title(product: str) -> str:
@@ -51,19 +33,14 @@ def product_title(product: str) -> str:
     if product == "windgram":
         return "🟦 Windgram: срок × уровень"
     if product == "cloudgram":
-        return "☁️ Cloudgram: облачность и осадки"
+        return "☁️ Cloudgram: облачность и погода"
     return "Продукт GFS"
 
 
 def point_prompt_text(state: dict[str, object]) -> str:
     product = str(state.get("product", ""))
     examples = "Москва\n55.75 37.62\nКраснодар"
-    return (
-        f"{product_title(product)}\n\n"
-        "Шаг 1/3 — выберите точку.\n"
-        "Отправьте геолокацию Telegram, город или координаты.\n\n"
-        f"Примеры:\n{examples}"
-    )
+    return f"{product_title(product)}\n\nШаг 1/3 — выберите точку.\nОтправьте геолокацию Telegram, город или координаты.\n\nПримеры:\n{examples}"
 
 
 def place_keyboard(labels: list[str]) -> InlineKeyboardMarkup:
@@ -86,6 +63,10 @@ def _param_label(param: str) -> str:
     return {"wind": "ветер V", "temp": "температура T", "rh": "влажность RH"}.get(param, param)
 
 
+def _cloud_mode_label(mode: str) -> str:
+    return "упрощённо" if mode == "simple" else "профи"
+
+
 def copy_command(state: dict[str, object]) -> str | None:
     point = state.get("point")
     if not isinstance(point, dict):
@@ -99,61 +80,47 @@ def copy_command(state: dict[str, object]) -> str | None:
         return (
             f"/windgram {lat:.4f} {lon:.4f} "
             f"from={int(state.get('from', 0))} to={int(state.get('to', 120))} "
-            f"step={int(state.get('time_step', 6))} top={int(state.get('top', 500))} "
-            f"param={str(state.get('param', 'wind'))}"
+            f"step={int(state.get('time_step', 6))} top={int(state.get('top', 500))} param={str(state.get('param', 'wind'))}"
         )
     if product == "cloudgram":
         return (
             f"/cloudgram {lat:.4f} {lon:.4f} "
             f"from={int(state.get('from', 0))} to={int(state.get('to', 72))} "
-            f"step={int(state.get('time_step', 3))}"
+            f"step={int(state.get('time_step', 3))} mode={str(state.get('mode', 'pro'))}"
         )
     return None
 
 
 def _command_block(state: dict[str, object]) -> str:
     command = copy_command(state)
-    if not command:
-        return ""
-    return f"\n\nКоманда для копирования:\n{command}"
+    return f"\n\nКоманда для копирования:\n{command}" if command else ""
 
 
 def params_text(state: dict[str, object]) -> str:
     product = str(state.get("product", ""))
     if product == "aero":
         return (
-            f"{product_title(product)}\n\n"
-            f"{_point_line(state)}\n\n"
-            "Шаг 2/3 — параметры.\n"
-            f"Тип: {str(state.get('diagram_type', 'stuve')).upper()}\n"
-            f"Срок: +{int(state.get('lead', 24))} ч"
-            f"{_command_block(state)}\n\n"
-            "Нажмите параметр для изменения или «Построить»."
+            f"{product_title(product)}\n\n{_point_line(state)}\n\nШаг 2/3 — параметры.\n"
+            f"Тип: {str(state.get('diagram_type', 'stuve')).upper()}\nСрок: +{int(state.get('lead', 24))} ч"
+            f"{_command_block(state)}\n\nНажмите параметр для изменения или «Построить»."
         )
     if product == "windgram":
         param = str(state.get("param", "wind"))
         return (
-            f"{product_title(product)}\n\n"
-            f"{_point_line(state)}\n\n"
-            "Шаг 2/3 — параметры.\n"
-            f"Подсветка: {_param_label(param)}\n"
-            f"Диапазон: +{int(state.get('from', 0))}…+{int(state.get('to', 120))} ч\n"
-            f"Шаг: {int(state.get('time_step', 6))} ч\n"
-            f"Верхняя граница: {int(state.get('top', 500))} гПа\n"
-            "Стрелки ветра будут внутри каждой ячейки."
-            f"{_command_block(state)}\n\n"
-            "Нажмите параметр для изменения или «Построить»."
+            f"{product_title(product)}\n\n{_point_line(state)}\n\nШаг 2/3 — параметры.\n"
+            f"Подсветка: {_param_label(param)}\nДиапазон: +{int(state.get('from', 0))}…+{int(state.get('to', 120))} ч\n"
+            f"Шаг: {int(state.get('time_step', 6))} ч\nВерхняя граница: {int(state.get('top', 500))} гПа\n"
+            f"Стрелки ветра будут внутри каждой ячейки.{_command_block(state)}\n\nНажмите параметр для изменения или «Построить»."
         )
     if product == "cloudgram":
+        mode = str(state.get("mode", "pro"))
+        mode_hint = "профессиональная таблица параметров" if mode == "pro" else "простая схема с эмодзи и общей опасностью"
         return (
-            f"{product_title(product)}\n\n"
-            f"{_point_line(state)}\n\n"
-            "Шаг 2/3 — параметры.\n"
-            "График один: высокая/средняя/низкая/общая облачность, зелёные осадки, тип осадков, грозовой риск и ВНГО.\n"
+            f"{product_title(product)}\n\n{_point_line(state)}\n\nШаг 2/3 — параметры.\n"
+            f"Режим: {_cloud_mode_label(mode)} — {mode_hint}\n"
             f"Диапазон: +{int(state.get('from', 0))}…+{int(state.get('to', 72))} ч\n"
             f"Шаг: {int(state.get('time_step', 3))} ч"
-            f"{_command_block(state)}\n\n"
-            "Нажмите параметр для изменения или «Построить»."
+            f"{_command_block(state)}\n\nНажмите параметр для изменения или «Построить»."
         )
     return "Параметры продукта"
 
@@ -163,55 +130,28 @@ def params_keyboard(state: dict[str, object]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     if product == "aero":
         current_type = str(state.get("diagram_type", "stuve"))
-        rows.append([
-            InlineKeyboardButton(("✓ " if current_type == item else "") + item.upper(), callback_data=f"wiz:aero:type:{item}")
-            for item in AERO_TYPES
-        ])
+        rows.append([InlineKeyboardButton(("✓ " if current_type == item else "") + item.upper(), callback_data=f"wiz:aero:type:{item}") for item in AERO_TYPES])
         current_lead = int(state.get("lead", 24))
-        rows.append([
-            InlineKeyboardButton(("✓ " if current_lead == lead else "") + f"+{lead}ч", callback_data=f"wiz:aero:lead:{lead}")
-            for lead in AERO_LEADS[:3]
-        ])
-        rows.append([
-            InlineKeyboardButton(("✓ " if current_lead == lead else "") + f"+{lead}ч", callback_data=f"wiz:aero:lead:{lead}")
-            for lead in AERO_LEADS[3:]
-        ])
+        rows.append([InlineKeyboardButton(("✓ " if current_lead == lead else "") + f"+{lead}ч", callback_data=f"wiz:aero:lead:{lead}") for lead in AERO_LEADS[:3]])
+        rows.append([InlineKeyboardButton(("✓ " if current_lead == lead else "") + f"+{lead}ч", callback_data=f"wiz:aero:lead:{lead}") for lead in AERO_LEADS[3:]])
     elif product == "windgram":
         current_param = str(state.get("param", "wind"))
-        rows.append([
-            InlineKeyboardButton(("✓ " if current_param == key else "") + label, callback_data=f"wiz:wind:param:{key}")
-            for key, label in WINDGRAM_PARAMS
-        ])
+        rows.append([InlineKeyboardButton(("✓ " if current_param == key else "") + label, callback_data=f"wiz:wind:param:{key}") for key, label in WINDGRAM_PARAMS])
         current_to = int(state.get("to", 120))
-        rows.append([
-            InlineKeyboardButton(("✓ " if current_to == value else "") + f"до +{value}", callback_data=f"wiz:wind:to:{value}")
-            for value in WINDGRAM_TO_HOURS
-        ])
+        rows.append([InlineKeyboardButton(("✓ " if current_to == value else "") + f"до +{value}", callback_data=f"wiz:wind:to:{value}") for value in WINDGRAM_TO_HOURS])
         current_step = int(state.get("time_step", 6))
-        rows.append([
-            InlineKeyboardButton(("✓ " if current_step == value else "") + f"шаг {value}ч", callback_data=f"wiz:wind:step:{value}")
-            for value in WINDGRAM_STEPS
-        ])
-        rows.append([
-            InlineKeyboardButton("✓ top 500 гПа", callback_data="wiz:wind:top:500")
-        ])
+        rows.append([InlineKeyboardButton(("✓ " if current_step == value else "") + f"шаг {value}ч", callback_data=f"wiz:wind:step:{value}") for value in WINDGRAM_STEPS])
+        rows.append([InlineKeyboardButton("✓ top 500 гПа", callback_data="wiz:wind:top:500")])
     elif product == "cloudgram":
+        current_mode = str(state.get("mode", "pro"))
+        rows.append([InlineKeyboardButton(("✓ " if current_mode == key else "") + label, callback_data=f"wiz:cloud:mode:{key}") for key, label in CLOUDGRAM_MODES])
         current_to = int(state.get("to", 72))
-        rows.append([
-            InlineKeyboardButton(("✓ " if current_to == value else "") + f"до +{value}", callback_data=f"wiz:cloud:to:{value}")
-            for value in CLOUDGRAM_TO_HOURS
-        ])
+        rows.append([InlineKeyboardButton(("✓ " if current_to == value else "") + f"до +{value}", callback_data=f"wiz:cloud:to:{value}") for value in CLOUDGRAM_TO_HOURS])
         current_step = int(state.get("time_step", 3))
-        rows.append([
-            InlineKeyboardButton(("✓ " if current_step == value else "") + f"шаг {value}ч", callback_data=f"wiz:cloud:step:{value}")
-            for value in CLOUDGRAM_STEPS
-        ])
+        rows.append([InlineKeyboardButton(("✓ " if current_step == value else "") + f"шаг {value}ч", callback_data=f"wiz:cloud:step:{value}") for value in CLOUDGRAM_STEPS])
 
     rows.append([InlineKeyboardButton("▶ Построить", callback_data="wiz:run")])
-    rows.append([
-        InlineKeyboardButton("↩ Выбрать другую точку", callback_data="wiz:point"),
-        InlineKeyboardButton("✖ Отмена", callback_data="wiz:cancel"),
-    ])
+    rows.append([InlineKeyboardButton("↩ Выбрать другую точку", callback_data="wiz:point"), InlineKeyboardButton("✖ Отмена", callback_data="wiz:cancel")])
     return InlineKeyboardMarkup(rows)
 
 
