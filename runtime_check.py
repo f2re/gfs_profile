@@ -24,6 +24,7 @@ OPTIONAL_RUNTIME_MODULES = (
     "aero_product",
     "windgram_product",
     "windgram_plot",
+    "telegram_commands",
     "telegram_product_wizard",
     "telegram_aero",
     "telegram_windgram",
@@ -52,7 +53,7 @@ def main() -> int:
     import matplotlib
 
     matplotlib.use("Agg", force=True)
-    print("Runtime check OK: dependencies, style module, wizard and bot modules import successfully")
+    print("Runtime check OK: dependencies, command definitions, wizard and bot modules import successfully")
     return 0
 
 
