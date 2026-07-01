@@ -111,6 +111,14 @@ def _mmh_from_prate(value: float | None) -> float | None:
     return max(0.0, float(value) * 3600.0)
 
 
+def _precip_from_total_or_rate(total_mm: float | None, rate_mmh: float | None, duration_hours: int) -> float | None:
+    if total_mm is not None:
+        return total_mm
+    if rate_mmh is None:
+        return None
+    return max(0.0, float(rate_mmh) * max(1, int(duration_hours)))
+
+
 def _visibility_km(value: float | None) -> float | None:
     if value is None:
         return None
@@ -200,7 +208,7 @@ def _hazard_score(cb_score: int, precip_mm: float | None, ceiling_m: float | Non
     return score, ", ".join(dict.fromkeys(reasons)) if reasons else "спокойно"
 
 
-def _read_cloudgram_cell(run: GfsRun, lead_hour: int, lat: float, lon: float, progress_callback: ProgressCallback | None = None) -> tuple[CloudgramCell, float, float, set[str]]:
+def _read_cloudgram_cell(run: GfsRun, lead_hour: int, lat: float, lon: float, progress_callback: ProgressCallback | None = None, duration_hours: int = CLOUDGRAM_DEFAULT_STEP) -> tuple[CloudgramCell, float, float, set[str]]:
     path, grid_lat, grid_lon = download_gfs_subset_to_disk(
         run.date,
         run.cycle,
@@ -220,8 +228,9 @@ def _read_cloudgram_cell(run: GfsRun, lead_hour: int, lat: float, lon: float, pr
         high = _clip_pct(scalar_from_datasets(datasets, ("hcc", "hcdc")))
         total = _clip_pct(scalar_from_datasets(datasets, ("tcc", "tcdc")))
         ceiling = scalar_from_datasets(datasets, ("gh", "h", "hgt"))
-        apcp = _mm_from_kgm2(scalar_from_datasets(datasets, ("tp", "apcp")))
+        apcp_total = _mm_from_kgm2(scalar_from_datasets(datasets, ("tp", "apcp")))
         prate = _mmh_from_prate(scalar_from_datasets(datasets, ("prate",)))
+        apcp = _precip_from_total_or_rate(apcp_total, prate, duration_hours)
         acpcp = _mm_from_kgm2(scalar_from_datasets(datasets, ("acpcp",)))
         cprat = _mmh_from_prate(scalar_from_datasets(datasets, ("cprat",)))
         cape = scalar_from_datasets(datasets, ("cape",))
@@ -296,7 +305,7 @@ def build_cloudgram_data(
     for index, lead in enumerate(leads, start=1):
         if progress_callback:
             progress_callback({"stage": "cloudgram_step", "message": "готовлю cloudgram", "index": index, "total": total, "lead_hour": lead})
-        cell, grid_lat, grid_lon, cell_missing = _read_cloudgram_cell(run, lead, lat, lon, progress_callback=progress_callback)
+        cell, grid_lat, grid_lon, cell_missing = _read_cloudgram_cell(run, lead, lat, lon, progress_callback=progress_callback, duration_hours=step)
         cells.append(cell)
         missing.update(cell_missing)
     return CloudgramData(run, lat, lon, grid_lat, grid_lon, leads, cells, tuple(sorted(missing)))
