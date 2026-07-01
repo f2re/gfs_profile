@@ -37,6 +37,9 @@ class FormatterTests(unittest.TestCase):
         summary = format_profile_summary(self._result())
         self.assertIn("GFS 0.25", summary)
         self.assertIn("Узел GFS", summary)
+        self.assertIn("Профиль по уровням", summary)
+        self.assertIn("1.5 км", summary)
+        self.assertIn("Особые точки", summary)
         self.assertIn("Макс. ветер", summary)
         self.assertIn("Действительно на", summary)
         self.assertNotIn("Max wind", summary)
@@ -46,7 +49,9 @@ class FormatterTests(unittest.TestCase):
         path = write_profile_csv(self._result())
         try:
             self.assertTrue(path.exists())
-            self.assertIn("pressure_hpa", path.read_text(encoding="utf-8"))
+            content = path.read_text(encoding="utf-8")
+            self.assertIn("pressure_hpa", content)
+            self.assertIn("geopotential_height_km", content)
         finally:
             path.unlink(missing_ok=True)
 

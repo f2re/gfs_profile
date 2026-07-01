@@ -68,9 +68,11 @@ class GfsCoreTests(unittest.TestCase):
         )
         out = add_derived_parameters(df)
         self.assertIn("temperature_c", out.columns)
+        self.assertIn("geopotential_height_km", out.columns)
         self.assertIn("dewpoint_c", out.columns)
         self.assertIn("theta_k", out.columns)
         self.assertAlmostEqual(float(out.loc[0, "wind_speed_ms"]), 5.0, places=3)
+        self.assertAlmostEqual(float(out.loc[0, "geopotential_height_km"]), 0.1, places=3)
 
     def test_wind_direction_is_meteorological_from_direction(self) -> None:
         df = pd.DataFrame(

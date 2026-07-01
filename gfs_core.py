@@ -539,6 +539,7 @@ def extract_profile_from_grib_file(grib_path: Path, progress_callback: ProgressC
 def add_derived_parameters(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["temperature_c"] = out["temperature_k"] - 273.15
+    out["geopotential_height_km"] = out["geopotential_height_m"] / 1000.0
     out["wind_speed_ms"] = np.sqrt(out["u_wind_ms"] ** 2 + out["v_wind_ms"] ** 2)
     out["wind_dir_deg"] = (270 - np.degrees(np.arctan2(out["v_wind_ms"], out["u_wind_ms"]))) % 360
 

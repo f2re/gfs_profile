@@ -14,11 +14,23 @@ def _safe_suffix(result: ProfileResult) -> str:
     return suffix.replace("-", "m").replace(" ", "_")
 
 
-def _setup_pressure_axis(axis) -> None:
+def _height_km(row) -> float:
+    return float(row.get("geopotential_height_km", float(row["geopotential_height_m"]) / 1000.0))
+
+
+def _setup_pressure_axis(axis, df) -> None:
     axis.set_yscale("log")
     axis.set_ylim(1050, 100)
     axis.set_yticks(PRESSURE_TICKS)
-    axis.set_yticklabels([str(level) for level in PRESSURE_TICKS])
+    labels = []
+    for level in PRESSURE_TICKS:
+        idx = (df["pressure_hpa"] - level).abs().idxmin()
+        row = df.loc[idx]
+        if abs(float(row["pressure_hpa"]) - level) <= 35.0:
+            labels.append(f"{level}\n{_height_km(row):.1f} км")
+        else:
+            labels.append(str(level))
+    axis.set_yticklabels(labels)
     axis.grid(True, linewidth=0.4, which="both")
 
 
@@ -82,17 +94,17 @@ def write_profile_png(result: ProfileResult) -> Path:
                 axes[3].text(
                     0.72,
                     float(row["pressure_hpa"]),
-                    f"{int(round(float(row['wind_dir_deg']))) % 360:03d}° / {float(row['wind_speed_ms']):.1f}",
+                    f"{_height_km(row):.1f} км  {int(round(float(row['wind_dir_deg']))) % 360:03d}° / {float(row['wind_speed_ms']):.1f}",
                     va="center",
                     fontsize=8,
                 )
         axes[3].set_xlim(0, 1.35)
         axes[3].set_xticks([])
-        axes[3].set_xlabel("Направление / м/с")
+        axes[3].set_xlabel("Высота, направление / м/с")
         axes[3].set_title("Ветер")
 
         for axis in axes:
-            _setup_pressure_axis(axis)
+            _setup_pressure_axis(axis, df)
 
         fig.text(
             0.5,
