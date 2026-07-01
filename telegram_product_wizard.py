@@ -6,6 +6,7 @@ PRODUCT_WIZARD_KEY = "product_wizard"
 
 AERO_LEADS = (12, 24, 48, 72, 120)
 AERO_TYPES = ("stuve", "emagram", "skewt")
+WINDGRAM_PARAMS = (("wind", "Ветер"), ("temp", "Температура"), ("rh", "Влажность"))
 WINDGRAM_TO_HOURS = (120, 240, 384)
 WINDGRAM_STEPS = (3, 6, 12)
 WINDGRAM_TOPS = (500,)
@@ -28,6 +29,7 @@ def start_windgram_wizard_state() -> dict[str, object]:
         "to": 120,
         "time_step": 6,
         "top": 500,
+        "param": "wind",
     }
 
 
@@ -35,7 +37,7 @@ def product_title(product: str) -> str:
     if product == "aero":
         return "🧾 Аэрологическая диаграмма"
     if product == "windgram":
-        return "🟦 Windgram: ветер × время"
+        return "🟦 Windgram: срок × уровень"
     return "Продукт GFS"
 
 
@@ -66,6 +68,10 @@ def _point_line(state: dict[str, object]) -> str:
     return f"Точка: {label}\n{lat:.4f}, {lon:.4f}"
 
 
+def _param_label(param: str) -> str:
+    return {"wind": "ветер V", "temp": "температура T", "rh": "влажность RH"}.get(param, param)
+
+
 def copy_command(state: dict[str, object]) -> str | None:
     point = state.get("point")
     if not isinstance(point, dict):
@@ -79,7 +85,8 @@ def copy_command(state: dict[str, object]) -> str | None:
         return (
             f"/windgram {lat:.4f} {lon:.4f} "
             f"from={int(state.get('from', 0))} to={int(state.get('to', 120))} "
-            f"step={int(state.get('time_step', 6))} top={int(state.get('top', 500))}"
+            f"step={int(state.get('time_step', 6))} top={int(state.get('top', 500))} "
+            f"param={str(state.get('param', 'wind'))}"
         )
     return None
 
@@ -104,13 +111,16 @@ def params_text(state: dict[str, object]) -> str:
             "Нажмите параметр для изменения или «Построить»."
         )
     if product == "windgram":
+        param = str(state.get("param", "wind"))
         return (
             f"{product_title(product)}\n\n"
             f"{_point_line(state)}\n\n"
             "Шаг 2/3 — параметры.\n"
+            f"Подсветка: {_param_label(param)}\n"
             f"Диапазон: +{int(state.get('from', 0))}…+{int(state.get('to', 120))} ч\n"
             f"Шаг: {int(state.get('time_step', 6))} ч\n"
-            f"Верхняя граница: {int(state.get('top', 500))} гПа"
+            f"Верхняя граница: {int(state.get('top', 500))} гПа\n"
+            "Стрелки ветра будут внутри каждой ячейки."
             f"{_command_block(state)}\n\n"
             "Нажмите параметр для изменения или «Построить»."
         )
@@ -136,6 +146,11 @@ def params_keyboard(state: dict[str, object]) -> InlineKeyboardMarkup:
             for lead in AERO_LEADS[3:]
         ])
     elif product == "windgram":
+        current_param = str(state.get("param", "wind"))
+        rows.append([
+            InlineKeyboardButton(("✓ " if current_param == key else "") + label, callback_data=f"wiz:wind:param:{key}")
+            for key, label in WINDGRAM_PARAMS
+        ])
         current_to = int(state.get("to", 120))
         rows.append([
             InlineKeyboardButton(("✓ " if current_to == value else "") + f"до +{value}", callback_data=f"wiz:wind:to:{value}")
