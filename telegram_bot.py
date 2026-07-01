@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 from telegram import InputFile, Update
+from telegram.constants import ParseMode
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 from formatters import format_profile_summary, write_profile_csv
@@ -161,11 +162,11 @@ async def run_profile(message, point: GeoPoint, lead_hour: int, run: GfsRun | No
         async with GFS_SEMAPHORE:
             selected_run = run or await asyncio.to_thread(latest_available_run_for_lead, lead_hour)
             result = await build_profile_with_progress(status, selected_run, lead_hour, point)
-            await status.edit_text("5/5 Профиль рассчитан. Формирую русскую сводку, PNG и CSV…")
+            await status.edit_text("5/5 Профиль рассчитан. Формирую компактную сводку, PNG и CSV…")
             summary = format_profile_summary(result)
             csv_path = write_profile_csv(result)
             png_path = write_profile_png(result)
-        await status.edit_text(summary)
+        await status.edit_text(summary, parse_mode=ParseMode.HTML)
         if png_path:
             with png_path.open("rb") as file_obj:
                 await message.reply_photo(photo=InputFile(file_obj, filename=png_path.name), caption="График профиля GFS")
