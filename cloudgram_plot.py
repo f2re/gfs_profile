@@ -27,12 +27,8 @@ class CloudgramRow:
 
 
 PRO_ROWS = (
-    CloudgramRow("high", "Высокая", "%"),
-    CloudgramRow("mid", "Средняя", "%"),
-    CloudgramRow("low", "Низкая", "%"),
-    CloudgramRow("total", "Общая", "%"),
+    CloudgramRow("cloud_layers", "Облачность", "H/M/L + общ.%"),
     CloudgramRow("precip", "Осадки", "мм"),
-    CloudgramRow("ptype", "Тип", "код"),
     CloudgramRow("phen", "Явления", ""),
     CloudgramRow("vis", "Видимость", "км"),
     CloudgramRow("ceiling", "ВНГО", "м"),
@@ -59,15 +55,6 @@ def _binned_color(value: float, bounds: tuple[float, ...], colors: tuple[str, ..
         if value < bound:
             return colors[idx]
     return colors[-1]
-
-
-def _cloud_value(cell: CloudgramCell, key: str) -> float | None:
-    return {
-        "high": cell.high_cloud_pct,
-        "mid": cell.mid_cloud_pct,
-        "low": cell.low_cloud_pct,
-        "total": cell.total_cloud_pct,
-    }.get(key)
 
 
 def _cloud_text(value: float | None) -> str:
@@ -106,24 +93,57 @@ def _vis_text(value: float | None) -> str:
     return f"{value:.1f}"
 
 
-def _pro_cell(row: CloudgramRow, cell: CloudgramCell):
-    if row.key in {"high", "mid", "low", "total"}:
-        value = _cloud_value(cell, row.key)
-        cmap, norm = cloud_cover_cmap_and_norm()
-        if value is None:
-            return "#E6EBF1", "—", METEO.axis_text
-        return cmap(norm(value)), _cloud_text(value), value_text_color(value, param="cloud")
+def _cloud_band_color(value: float | None):
+    if value is None:
+        return "#E6EBF1"
+    if value < 5:
+        return "#FFFFFF"
+    cmap, norm = cloud_cover_cmap_and_norm()
+    return cmap(norm(value))
 
+
+def _draw_cloud_layers_cell(ax, x: int, y: int, cell: CloudgramCell, rectangle_cls) -> None:
+    layers = (
+        ("H", cell.high_cloud_pct),
+        ("M", cell.mid_cloud_pct),
+        ("L", cell.low_cloud_pct),
+    )
+    band_h = 1.0 / 3.0
+    for idx, (_, value) in enumerate(layers):
+        y0 = y - 0.5 + idx * band_h
+        ax.add_patch(
+            rectangle_cls(
+                (x - 0.5, y0),
+                1.0,
+                band_h,
+                facecolor=_cloud_band_color(value),
+                edgecolor="#FFFFFF",
+                linewidth=0.45,
+            )
+        )
+    ax.add_patch(rectangle_cls((x - 0.5, y - 0.5), 1.0, 1.0, facecolor="none", edgecolor="#B7C6D8", linewidth=0.75))
+    text = _cloud_text(cell.total_cloud_pct)
+    if text:
+        ax.text(
+            x,
+            y,
+            text,
+            ha="center",
+            va="center",
+            fontsize=7.0,
+            color=value_text_color(float(cell.total_cloud_pct or 0.0), param="cloud"),
+            fontweight="bold",
+            bbox={"boxstyle": "round,pad=0.10", "facecolor": "#FFFFFF", "alpha": 0.78, "edgecolor": "none"},
+        )
+
+
+def _pro_cell(row: CloudgramRow, cell: CloudgramCell):
     if row.key == "precip":
         value = cell.precip_mm
         cmap, norm = precip_cmap_and_norm()
         if value is None:
             return "#E6EBF1", "—", METEO.axis_text
         return cmap(norm(value)), _precip_text(value), value_text_color(value, param="precip")
-
-    if row.key == "ptype":
-        text = cell.precip_type or "—"
-        return PRECIP_TYPE_COLORS.get(text.split("/", 1)[0], "#F3F4F6"), text, METEO.axis_text
 
     if row.key == "phen":
         text = cell.phenomena or "—"
@@ -207,8 +227,7 @@ def _simple_visibility(cell: CloudgramCell) -> tuple[str, str, str]:
     value = cell.visibility_km
     if value is None:
         return "#E6EBF1", "—", METEO.axis_text
-    text = _vis_text(value)
-    return _binned_color(value, VIS_BOUNDS, VIS_COLORS), text, "#FFFFFF" if value < 3 else METEO.axis_text
+    return _binned_color(value, VIS_BOUNDS, VIS_COLORS), _vis_text(value), "#FFFFFF" if value < 3 else METEO.axis_text
 
 
 def _simple_hazard(cell: CloudgramCell) -> tuple[str, str, str]:
@@ -233,29 +252,38 @@ def _simple_cell(row: CloudgramRow, cell: CloudgramCell):
     return "#FFFFFF", "", METEO.axis_text
 
 
-def _xlabels(data: CloudgramData, *, sparse: bool = False) -> list[str]:
+def _hour_lead_labels(data: CloudgramData, *, sparse: bool = False) -> list[str]:
     labels: list[str] = []
     for idx, cell in enumerate(data.cells):
         if sparse and idx % 2 == 1:
             labels.append(f"\n+{cell.lead_hour}")
         else:
-            labels.append(f"{cell.valid_time_utc:%d.%m %HZ}\n+{cell.lead_hour}")
+            labels.append(f"{cell.valid_time_utc:%HZ}\n+{cell.lead_hour}")
     return labels
 
 
-def _draw_day_separators(ax, data: CloudgramData) -> None:
-    previous_day = None
-    for index, cell in enumerate(data.cells):
+def _draw_day_separators_and_labels(ax, data: CloudgramData, y_date: float) -> None:
+    if not data.cells:
+        return
+    start = 0
+    current_day = data.cells[0].valid_time_utc.date()
+    for idx, cell in enumerate(data.cells[1:], start=1):
         day = cell.valid_time_utc.date()
-        if previous_day is not None and day != previous_day:
-            ax.axvline(index - 0.5, color="#53687D", linewidth=1.35, alpha=0.85)
-        previous_day = day
+        if day != current_day:
+            ax.axvline(idx - 0.5, color="#53687D", linewidth=1.35, alpha=0.85)
+            center = (start + idx - 1) / 2.0
+            ax.text(center, y_date, data.cells[start].valid_time_utc.strftime("%d.%m"), ha="center", va="center", fontsize=8, color=METEO.axis_text, fontweight="bold")
+            start = idx
+            current_day = day
+    center = (start + len(data.cells) - 1) / 2.0
+    ax.text(center, y_date, data.cells[start].valid_time_utc.strftime("%d.%m"), ha="center", va="center", fontsize=8, color=METEO.axis_text, fontweight="bold")
 
 
 def _pro_footer(data: CloudgramData) -> str:
     max_hazard = max((cell.hazard_score for cell in data.cells), default=0)
     missing = f" Нет полей: {', '.join(data.missing_fields)}." if data.missing_fields else ""
     return (
+        "Облачность: одна ячейка = H/M/L сверху вниз, число = общая облачность %. "
         "Гроза 0–3: 0 нет, 1 слабая, 2 развитая, 3 выраженная. "
         "Опасность 0–4: 0 спокойно, 4 максимум риска. "
         "RA дождь, SN снег, FZRA переохл. дождь, FG туман, TSRA гроза с дождём. "
@@ -283,8 +311,8 @@ def _write_grid(data: CloudgramData, rows: tuple[CloudgramRow, ...], cell_func, 
     apply_meteo_rcparams(plt)
     n_cols = len(data.cells)
     n_rows = len(rows)
-    fig_width = max(12.0, n_cols * (0.72 if simple else 0.68))
-    fig_height = 5.8 if simple else 8.6
+    fig_width = max(12.0, n_cols * (0.54 if not simple else 0.72))
+    fig_height = 5.9 if simple else 6.7
 
     tmp = tempfile.NamedTemporaryFile(prefix="gfs_cloudgram", suffix=".png", delete=False)
     out_path = Path(tmp.name)
@@ -295,28 +323,33 @@ def _write_grid(data: CloudgramData, rows: tuple[CloudgramRow, ...], cell_func, 
         ax.set_facecolor(METEO.axes_bg)
         for y, row in enumerate(rows):
             for x, cell in enumerate(data.cells):
+                if row.key == "cloud_layers":
+                    _draw_cloud_layers_cell(ax, x, y, cell, Rectangle)
+                    continue
                 facecolor, text, text_color = cell_func(row, cell)
-                ax.add_patch(Rectangle((x - 0.5, y - 0.5), 1, 1, facecolor=facecolor, edgecolor="#FFFFFF", linewidth=0.9))
+                line_width = 1.05 if row.key in {"hazard", "hazard_simple"} else 0.75
+                ax.add_patch(Rectangle((x - 0.5, y - 0.5), 1, 1, facecolor=facecolor, edgecolor="#FFFFFF", linewidth=line_width))
                 if text:
-                    ax.text(x, y, text, ha="center", va="center", fontsize=10 if simple else 7.1, color=text_color, fontweight="bold")
+                    ax.text(x, y, text, ha="center", va="center", fontsize=10 if simple else 7.2, color=text_color, fontweight="bold")
 
-        _draw_day_separators(ax, data)
+        y_date = n_rows + 0.22
+        _draw_day_separators_and_labels(ax, data, y_date)
         if not simple:
-            for y in (3.5, 6.5, 8.5):
+            for y in (0.5, 2.5, 4.5):
                 ax.axhline(y, color="#53687D", linewidth=1.05, alpha=0.72)
         ax.set_xlim(-0.5, n_cols - 0.5)
-        ax.set_ylim(n_rows - 0.5, -0.5)
+        ax.set_ylim(n_rows + 0.58, -0.5)
         ax.set_xticks(range(n_cols))
-        ax.set_xticklabels(_xlabels(data, sparse=simple and n_cols > 30), rotation=0, fontsize=7)
+        ax.set_xticklabels(_hour_lead_labels(data, sparse=n_cols > 60), rotation=0, fontsize=7)
         ax.set_yticks(range(n_rows))
         ax.set_yticklabels([f"{row.label}\n{row.unit}" if row.unit else row.label for row in rows], fontsize=8)
-        ax.set_xlabel("Дата и время UTC; ниже — заблаговременность прогноза")
+        ax.set_xlabel("UTC-время; ниже в подписи ячеек — заблаговременность прогноза +ч")
         ax.set_ylabel("Параметр")
         ax.set_title(title, fontsize=10.5, fontweight="bold", color=METEO.axis_text, pad=12)
         style_axis(ax, grid=False)
         ax.tick_params(which="both", length=0)
         add_footer(fig, footer, y=0.012)
-        fig.tight_layout(rect=(0, 0.10 if simple else 0.08, 1, 1))
+        fig.tight_layout(rect=(0, 0.12 if simple else 0.10, 1, 1))
         fig.savefig(out_path, dpi=180, bbox_inches="tight")
     except Exception:
         out_path.unlink(missing_ok=True)
@@ -329,7 +362,7 @@ def _write_grid(data: CloudgramData, rows: tuple[CloudgramRow, ...], cell_func, 
 
 def _write_cloudgram_pro_png(data: CloudgramData) -> Path:
     title = (
-        f"GFS 0.25 · cloudgram PRO: облачность, осадки, явления, ВНГО и опасность · {data.run.date} {data.run.cycle}Z · "
+        f"GFS 0.25 · cloudgram PRO: облачность H/M/L, осадки, явления, ВНГО и опасность · {data.run.date} {data.run.cycle}Z · "
         f"+{data.leads[0]}…+{data.leads[-1]} ч · узел {data.grid_lat:.2f}, {data.grid_lon:.2f}"
     )
     return _write_grid(data, PRO_ROWS, _pro_cell, title=title, footer=_pro_footer(data), simple=False)
