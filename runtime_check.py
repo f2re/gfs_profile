@@ -18,6 +18,8 @@ REQUIRED_MODULES = (
 )
 
 OPTIONAL_RUNTIME_MODULES = (
+    "plot_style",
+    "profile_plot_ru",
     "aero_plot",
     "aero_product",
     "windgram_product",
@@ -48,7 +50,7 @@ def main() -> int:
     import matplotlib
 
     matplotlib.use("Agg", force=True)
-    print("Runtime check OK: dependencies and product modules import successfully")
+    print("Runtime check OK: dependencies, style module and product modules import successfully")
     return 0
 
 
