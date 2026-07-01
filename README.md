@@ -1,14 +1,14 @@
 # 🌦️ Профиль атмосферы GFS 0.25
 
-Инструмент для получения вертикального модельного профиля атмосферы по точке: Telegram-бот + веб-интерфейс.
+Инструмент для получения модельного вертикального профиля атмосферы по точке: Telegram-бот + веб-интерфейс.
 
 Важно: это **модельная точка GFS**, а не радиозонд, не метеостанция и не локальный фактический прогноз. Все продукты строятся по ближайшему узлу сетки GFS 0.25°.
 
 ## ✅ Что умеет
 
 - 📍 Строит профиль по координатам, городу или Telegram-геолокации.
-- ⏱️ Поддерживает весь диапазон заблаговременности GFS до `+384 ч` с пагинацией.
-- 🔄 Показывает процесс: проверка публикации, загрузка GRIB2, чтение xarray/cfgrib/eccodes, построение PNG/CSV.
+- ⏱️ Поддерживает диапазон GFS до `+384 ч` с пагинацией.
+- 🔄 Показывает процесс: проверка публикации, загрузка GRIB2, чтение `xarray/cfgrib/eccodes`, построение PNG/CSV.
 - 🛰️ Берёт данные из NOMADS GRIB Filter, GFS 0.25°.
 - ⚡ Скачивает не глобальный GRIB, а server-side subset по точке, переменным и уровням давления.
 - 💾 Кэширует GRIB2 по дате, циклу, сроку, узлу сетки и набору уровней.
@@ -16,8 +16,10 @@
 - ❄️ Диагностирует высоты изотерм `0/-10/-20 °C`.
 - 📈 Строит профильный PNG: `T/Td`, влажность, скорость ветра, ветровые барбы.
 - 🧾 Строит аэрологические диаграммы `Stüve`, `Эмаграмма`, `Skew-T log-P` через MetPy.
-- 🟦 Строит windgram: срок прогноза × изобарический уровень до 500 гПа; в каждой ячейке цвет скорости, стрелка направления переноса и число скорости.
-- 📄 Возвращает CSV со всеми доступными изобарическими уровнями.
+- 🟦 Строит time-height windgram: срок прогноза × изобарический уровень до 500 гПа. Заливка может быть по `wind`, `temp` или `rh`; стрелки ветра остаются внутри каждой ячейки.
+- 🧭 Даёт wizard-flow для `/aero`, `/skewt`, `/windgram` без параметров: выбор точки, параметров, запуск.
+- 📋 Показывает команду для копирования и повторного запуска без ручной настройки.
+- 📄 Возвращает CSV со всеми доступными изобарическими уровнями для базового профиля.
 - 🧪 Имеет unit-тесты, runtime smoke-check и GitHub Actions workflow.
 
 ## 🧱 Архитектура
@@ -27,7 +29,7 @@ Telegram / Web UI
         ↓
 геокодинг / координаты / Telegram location
         ↓
-progress reporter
+progress reporter / wizard state
         ↓
 gfs_core.py / gfs_product_core.py
         ↓
@@ -39,23 +41,25 @@ profile PNG/CSV · MetPy aero PNG · windgram PNG
 Ключевые модули:
 
 ```text
-gfs_core.py           базовая загрузка и разбор профиля
-gfs_product_core.py   level-aware слой для продуктовых режимов
-aero_plot.py          MetPy renderer: Stüve / Emagram / Skew-T
-aero_product.py       сборка аэрологического продукта
-windgram_product.py   сборка матрицы ветер × время × уровень
-windgram_plot.py      renderer windgram: цвет + стрелка + скорость
-telegram_aero.py      команды /aero и /skewt
-telegram_windgram.py  команда /windgram
-product_progress.py   общий progress runner продуктовых задач
-runtime_check.py      smoke-check импортов и зависимостей
+gfs_core.py              базовая загрузка и разбор профиля
+gfs_product_core.py      level-aware слой для продуктовых режимов
+plot_style.py            общая метеорологическая цветовая система
+aero_plot.py             MetPy renderer: Stüve / Emagram / Skew-T
+aero_product.py          сборка аэрологического продукта
+windgram_product.py      сборка матрицы срок × уровень: V/T/RH + направление ветра
+windgram_plot.py         renderer windgram: заливка параметра + стрелка + число
+telegram_product_wizard.py  пошаговый выбор точки и параметров в Telegram
+telegram_aero.py         команды /aero и /skewt
+telegram_windgram.py     команда /windgram
+telegram_commands.py     список BotCommand для регистрации меню Telegram
+register_telegram_commands.py  ручная регистрация slash-команд
+product_progress.py      общий progress runner продуктовых задач
+runtime_check.py         smoke-check импортов и зависимостей
 ```
 
 Telegram-бот работает одним Python-процессом через long polling. Нет Redis, Celery, БД, webhook-сервера и отдельного API для Telegram.
 
 ## 🚀 Быстрая установка Telegram-бота
-
-Запустите установщик из корня репозитория:
 
 ```bash
 bash install_telegram_bot.sh
@@ -67,19 +71,7 @@ bash install_telegram_bot.sh
 TELEGRAM_BOT_TOKEN='123456:AA...' bash install_telegram_bot.sh --yes
 ```
 
-Скрипт:
-
-- показывает текущее состояние установки;
-- ставит системные пакеты: Python, venv/pip, `rsync`, шрифты DejaVu для русских подписей Matplotlib;
-- пробует поставить дополнительные пакеты сборки и `libeccodes0`;
-- создаёт системного пользователя `gfsbot`;
-- копирует проект в `/opt/gfs_profile`;
-- создаёт `.venv`;
-- ставит зависимости через `pip install --prefer-binary -r requirements.txt`;
-- запускает `runtime_check.py` до старта сервиса;
-- записывает `.env` с `MPLBACKEND=Agg` и `PYTHONUNBUFFERED=1`;
-- создаёт systemd unit;
-- включает автозапуск и запускает бота.
+Скрипт создаёт пользователя `gfsbot`, копирует проект в `/opt/gfs_profile`, создаёт `.venv`, ставит зависимости через `pip install --prefer-binary -r requirements.txt`, запускает `runtime_check.py`, создаёт systemd unit и стартует сервис.
 
 Проверка после установки:
 
@@ -88,37 +80,16 @@ sudo systemctl status gfs-profile-bot.service
 sudo journalctl -u gfs-profile-bot.service -f
 ```
 
-Проверка состояния без переустановки:
-
-```bash
-bash install_telegram_bot.sh --status
-```
-
 ## 🔄 Обновление после `git pull`
 
-`git pull` обновляет только текущий git checkout. Рабочий бот запускается из `/opt/gfs_profile`, поэтому после pull нужен deploy: синхронизация кода в `/opt`, обновление зависимостей, runtime-check и перезапуск сервиса.
-
-Ручной deploy:
+`git pull` обновляет только текущий git checkout. Рабочий бот запускается из `/opt/gfs_profile`, поэтому после pull нужен deploy:
 
 ```bash
 git pull
-bash deploy_telegram_bot.sh
-```
-
-Неразговорный режим:
-
-```bash
 bash deploy_telegram_bot.sh --yes
 ```
 
-Deploy-скрипт:
-
-- берёт lock `/tmp/gfs-profile-bot.deploy.lock`, чтобы не было двух параллельных deploy;
-- синхронизирует checkout → `/opt/gfs_profile`;
-- обновляет `pip`, `setuptools`, `wheel`;
-- ставит зависимости с `--prefer-binary`;
-- запускает `runtime_check.py` до restart;
-- только после успешной проверки перезапускает systemd-сервис.
+Deploy-скрипт синхронизирует checkout → `/opt/gfs_profile`, обновляет зависимости, запускает `runtime_check.py` и только после успешной проверки перезапускает systemd-сервис.
 
 Автообновление после `git pull` через локальные git hooks:
 
@@ -126,27 +97,21 @@ Deploy-скрипт:
 bash install_git_hooks.sh
 ```
 
-После этого `post-merge`, `post-rewrite` и `post-checkout` будут вызывать `deploy_telegram_bot.sh --yes`. Лог hooks пишется в:
-
-```text
-.git/gfs-profile-deploy.log
-```
-
 Подробности: [DEPLOY.md](DEPLOY.md).
 
 ## 🤖 Telegram UX
 
-Лучший базовый сценарий:
+Базовый профиль:
 
 ```text
 /start
 📍 Отправить геолокацию
-выбрать срок кнопкой: частые сроки или полный список до +384 ч
+выбрать срок кнопкой
 видеть этапы проверки, загрузки и построения
 получить сводку, PNG и CSV
 ```
 
-Без команды `/profile` тоже работает:
+Текстом без `/profile` тоже работает:
 
 ```text
 Москва
@@ -156,21 +121,54 @@ bash install_git_hooks.sh
 
 Если город неоднозначный, бот показывает варианты inline-кнопками. После выбора точки бот предлагает сроки прогноза. Если срок указан сразу, например `Москва +24`, профиль строится без дополнительного выбора.
 
-## Команды Telegram
+Для продуктов `/aero`, `/skewt`, `/windgram` команда без параметров запускает wizard:
 
 ```text
-/start       старт и кнопка геолокации
-/help        короткая инструкция
-/cancel      сброс текущего выбора
-/cycle       последний опубликованный анализ GFS f000
-/status      доступность GFS для +0, +24, +48, +120, +240, +384 и состояние кэша
-/profile     профиль атмосферы по точке, сроку и run
-/aero        аэрологическая диаграмма Stüve / Emagram / Skew-T
-/skewt       алиас для /aero type=skewt
-/windgram    ветер по срокам и изобарическим уровням
+/aero
+/skewt
+/windgram
 ```
 
-Экспертные примеры:
+Wizard-flow:
+
+1. Бот просит точку: город, координаты или Telegram-геолокация.
+2. Если геокодер нашёл несколько вариантов, бот показывает inline-выбор точки.
+3. После выбора точки бот показывает параметры кнопками.
+4. На этом же экране бот показывает команду для копирования.
+5. Кнопка `▶ Построить` запускает расчёт.
+
+Команда для копирования строится по координатам, поэтому повторный запуск не зависит от неоднозначного геокодинга города:
+
+```text
+/aero 45.0000 39.0000 +24 type=skewt
+/windgram 45.0000 39.0000 from=0 to=240 step=6 top=500 param=temp
+```
+
+После построения `/windgram` бот дополнительно отправляет команду для точного повторения с зафиксированным `run=YYYYMMDD/HH`.
+
+## Команды Telegram
+
+Эти команды нужно зарегистрировать в Telegram BotFather / Bot API menu:
+
+```text
+start - старт, геолокация и краткая инструкция
+help - помощь по командам и форматам запросов
+profile - вертикальный профиль GFS по точке и сроку
+aero - аэрологическая диаграмма Stüve/Emagram/Skew-T
+skewt - быстрая Skew-T диаграмма
+windgram - срок×уровень: ветер, температура или влажность
+cycle - последний опубликованный цикл GFS
+status - доступность GFS, лимиты и состояние кэша
+cancel - сброс текущего выбора или wizard-сценария
+```
+
+В репозитории есть централизованный список в `telegram_commands.py` и helper для регистрации через Bot API:
+
+```bash
+TELEGRAM_BOT_TOKEN='123456:AA...' python register_telegram_commands.py
+```
+
+## Экспертные примеры команд
 
 ```text
 /profile Москва +24
@@ -184,10 +182,11 @@ bash install_git_hooks.sh
 /skewt Москва +24
 
 /windgram Москва
-/windgram Москва to=120
-/windgram Москва to=240
-/windgram Москва to=384
-/windgram 55.75 37.62 run=20260701/00 from=0 to=120 step=6 top=500
+/windgram Москва to=120 param=wind
+/windgram Москва to=120 param=temp
+/windgram Москва to=120 param=rh
+/windgram Москва to=384 step=6 top=500 param=wind
+/windgram 55.75 37.62 run=20260701/00 from=0 to=120 step=6 top=500 param=temp
 ```
 
 ## Сроки прогноза
@@ -216,8 +215,6 @@ bash install_git_hooks.sh
 
 Для `/aero` и `/windgram` используется общий product progress runner: проверка публикации, узел GFS, cache/download, cfgrib/eccodes, построение графического продукта, отправка результата.
 
-Если GRIB2 уже есть в кэше, бот пишет, что файл взят из кэша.
-
 ## 🧾 Аэрологические диаграммы
 
 Команда `/aero` строит профессиональную модельную аэрологическую диаграмму через `MetPy + Matplotlib`.
@@ -242,32 +239,37 @@ skewt     Skew-T log-P
 
 Подписи и пояснения на русском, но метеорологические обозначения сохранены: `T`, `Td`, `p`, `Z`, `V`, `UTC`, `гПа`, `м/с`, `км`.
 
-Не делается в первой версии:
+Не делается в первой версии: CAPE/CIN, hodograph, parcel/path от поверхности. Причина: профиль строится по изобарическим уровням GFS, без гарантированно корректного surface parcel как у радиозонда.
 
-- CAPE/CIN;
-- hodograph;
-- parcel/path от поверхности.
-
-Причина: профиль строится по изобарическим уровням GFS, без гарантированно корректного surface parcel как у радиозонда.
-
-## 🟦 Windgram: ветер × время × уровень
+## 🟦 Windgram: срок × уровень
 
 Команда `/windgram` строит матрицу по одной точке:
 
 - по X — сроки прогноза;
 - по Y — изобарические уровни от 1000 до 500 гПа;
-- цвет ячейки — скорость ветра `V`, м/с;
-- стрелка в ячейке — направление переноса воздуха;
-- число в ячейке — скорость ветра, м/с.
+- в каждой ячейке остаётся стрелка направления переноса воздуха;
+- число в ячейке соответствует выбранному параметру заливки;
+- заливка выбирается параметром `param=wind|temp|rh`.
 
 Параметры:
 
 ```text
-from=0      начальный срок, часы
-to=120      конечный срок, часы; максимум 384
-step=6      шаг по срокам
-top=500     верхняя граница профиля, гПа
+from=0       начальный срок, часы
+to=120       конечный срок, часы; максимум 384
+step=6       шаг по срокам
+top=500      верхняя граница профиля, гПа
+param=wind   заливка и число по скорости ветра V, м/с
+param=temp   заливка и число по температуре T, °C
+param=rh     заливка и число по относительной влажности RH, %
 run=YYYYMMDD/HH  фиксированный цикл GFS
+```
+
+Палитры:
+
+```text
+wind  слабый ветер голубой → умеренный зелёно-жёлтый → сильный оранжево-красно-пурпурный
+temp  холодный фиолетово-синий → около 0°C светлый → тёплый жёлто-красный
+rh    сухо бежевое/светло-зелёное → влажно синее
 ```
 
 Критичное правило: весь windgram строится из **одного запуска GFS**. Если `run=` не указан, бот выбирает самый свежий запуск, где опубликован максимальный срок `to`. Это исключает смешивание разных циклов модели в одной диаграмме.
@@ -305,12 +307,13 @@ profile / default       скачать рабочий набор уровней 
 
 Ключ кэша учитывает набор уровней, поэтому `all` и `profile` не конфликтуют. Продуктовый слой для `/aero` и `/windgram` также передаёт собственный набор уровней и использует отдельные cache keys.
 
-## 🧪 Проверка ядра без Telegram
+## 🧪 Проверка ядра и Telegram-части
 
 ```bash
 python -m gfs_core --lat 55.75 --lon 37.62 --lead 24
 python -m gfs_core --lat 55.75 --lon 37.62 --lead 384
-python -m gfs_core --lat 55.75 --lon 37.62 --lead 24 --csv /tmp/profile.csv
+python runtime_check.py
+python -m unittest discover -s tests
 ```
 
 Фиксированный цикл:
@@ -318,33 +321,6 @@ python -m gfs_core --lat 55.75 --lon 37.62 --lead 24 --csv /tmp/profile.csv
 ```bash
 python -m gfs_core --lat 55.75 --lon 37.62 --lead 24 --date 20260701 --cycle 00
 ```
-
-Runtime smoke-check:
-
-```bash
-python runtime_check.py
-```
-
-## 🧪 Тесты
-
-```bash
-python -m unittest discover -s tests
-```
-
-Тесты покрывают:
-
-- привязку координат к сетке GFS;
-- допустимые сроки прогноза;
-- сборку имени файла `gfs.tHHz.pgrb2.0p25.fXXX`;
-- параметры NOMADS GRIB Filter URL;
-- server-side ограничение уровней NOMADS;
-- расчёт температуры, точки росы, потенциальной температуры;
-- метеорологическое направление ветра по U/V-компонентам;
-- интерполяцию уровня 0/-10/-20 °C;
-- парсинг пользовательского Telegram-запроса;
-- пагинацию сроков Telegram UI;
-- форматирование сводки, CSV и PNG;
-- генерацию сроков windgram.
 
 GitHub Actions устанавливает зависимости, запускает `runtime_check.py`, затем unit tests.
 
@@ -358,6 +334,7 @@ GitHub Actions устанавливает зависимости, запуска
 p, гПа         изобарический уровень
 Z, км          геопотенциальная высота
 T/Td, °C       температура / точка росы
+RH, %          относительная влажность
 V, м/с         скорость ветра
 dd, °          метеорологическое направление ветра, откуда дует ветер
 Изотермы       интерполированные высоты 0/-10/-20 °C по изобарическим уровням
@@ -398,8 +375,6 @@ MPLBACKEND               backend Matplotlib; для сервиса Agg
 PYTHONUNBUFFERED         не буферизовать stdout/stderr сервиса
 ```
 
-Если `GFS_CACHE_DIR` или `GEOCODE_CACHE_DIR` заданы абсолютным путём, установщик создаёт каталог, выставляет права для пользователя сервиса и добавляет путь в `ReadWritePaths` systemd unit.
-
 ## 🧭 API веб-приложения
 
 ```text
@@ -411,8 +386,6 @@ POST /api/profile/start?...       фоновый расчёт
 GET  /api/profile/status?job_id=...
 GET  /api/cache-info
 ```
-
-`/api/available-leads` возвращает только те сроки, для которых уже опубликован соответствующий `fXXX.idx`.
 
 ## 🔎 Типовые ошибки
 
@@ -438,7 +411,7 @@ Runtime check failed: metpy / scipy / pint / matplotlib
 bash deploy_telegram_bot.sh --yes
 ```
 
-Если ошибка связана со сборкой wheel на старой системе, установите системные пакеты:
+Если ошибка связана со сборкой wheel на старой системе:
 
 ```bash
 sudo apt-get install -y python3-dev build-essential pkg-config fonts-dejavu-core libeccodes0
