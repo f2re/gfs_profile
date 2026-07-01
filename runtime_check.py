@@ -24,6 +24,7 @@ OPTIONAL_RUNTIME_MODULES = (
     "aero_product",
     "windgram_product",
     "windgram_plot",
+    "telegram_product_wizard",
     "telegram_aero",
     "telegram_windgram",
 )
@@ -50,7 +51,7 @@ def main() -> int:
     import matplotlib
 
     matplotlib.use("Agg", force=True)
-    print("Runtime check OK: dependencies, style module and product modules import successfully")
+    print("Runtime check OK: dependencies, style module, wizard and product modules import successfully")
     return 0
 
 
