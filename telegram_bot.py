@@ -15,6 +15,7 @@ from geocode import GeoPoint, GeocodeError
 from geocode_choices import search_location_candidates
 from gfs_core import CACHE_DIR, GfsProfileError, GfsRun, latest_available_run, latest_available_run_for_lead, validate_lead
 from profile_plot import write_profile_png
+from telegram_aero import resolve_aero_request
 from telegram_progress import build_profile_with_progress
 from telegram_ui import lead_keyboard, lead_page_text, location_keyboard, place_keyboard
 
@@ -97,7 +98,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "2) выберите срок кнопкой;\n"
         "3) видите ход проверки, загрузки GRIB2 и построения;\n"
         "4) получите сводку, PNG и CSV.\n\n"
-        "Можно просто написать: Москва, 55.75 37.62 или /profile Москва +24. Полный диапазон сроков GFS — до +384 ч.",
+        "Можно просто написать: Москва, 55.75 37.62, /profile Москва +24, /aero Москва +24 или /skewt Москва +24. Полный диапазон GFS — до +384 ч.",
         reply_markup=location_keyboard(),
     )
 
@@ -111,7 +112,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• 📍 отправьте геолокацию и выберите срок;\n"
         "• или напишите город: Москва;\n"
         "• или координаты: 55.75 37.62;\n"
-        "• экспертно: /profile Москва run=20260630/06 +24.\n\n"
+        "• экспертно: /profile Москва run=20260630/06 +24.\n"
+        "• аэродиаграмма: /aero Москва +24 type=stuve|emagram|skewt;\n"
+        "• Skew-T: /skewt Москва +24.\n\n"
         "Кнопки показывают частые сроки, через пагинацию доступны все сроки GFS до +384 ч.\n"
         "Во время расчёта бот показывает этапы: проверка fXXX.idx, загрузка GRIB2, cfgrib/eccodes, построение PNG/CSV.\n"
         "Это модель GFS, не радиозонд.",
@@ -227,6 +230,28 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await resolve_profile_request(message, context, raw)
 
 
+async def aero_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if not message:
+        return
+    raw = " ".join(context.args).strip()
+    if not raw:
+        await message.reply_text("Напишите точку: /aero Москва +24 type=stuve, /aero 55.75 37.62 +24 type=emagram")
+        return
+    await resolve_aero_request(message, raw, DEFAULT_LEAD, GFS_SEMAPHORE, GEOCODE_SEMAPHORE, default_diagram_type="stuve")
+
+
+async def skewt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if not message:
+        return
+    raw = " ".join(context.args).strip()
+    if not raw:
+        await message.reply_text("Напишите точку: /skewt Москва +24 или /skewt 55.75 37.62 +24")
+        return
+    await resolve_aero_request(message, raw, DEFAULT_LEAD, GFS_SEMAPHORE, GEOCODE_SEMAPHORE, default_diagram_type="skewt")
+
+
 async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if not message or not message.text:
@@ -335,6 +360,8 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("cycle", cycle_command))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("profile", profile_command))
+    application.add_handler(CommandHandler("aero", aero_command))
+    application.add_handler(CommandHandler("skewt", skewt_command))
     application.add_handler(MessageHandler(filters.LOCATION, location_message))
     application.add_handler(CallbackQueryHandler(lead_callback, pattern=r"^lead:\d+$"))
     application.add_handler(CallbackQueryHandler(lead_page_callback, pattern=r"^leadpage:\d+$"))
