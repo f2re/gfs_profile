@@ -24,6 +24,20 @@ WINDGRAM_LEVELS_HPA = (
     550,
     500,
 )
+WINDGRAM_PARAMS = ("wind", "temp", "rh")
+WINDGRAM_PARAM_ALIASES = {
+    "wind": "wind",
+    "ветер": "wind",
+    "v": "wind",
+    "speed": "wind",
+    "temp": "temp",
+    "t": "temp",
+    "temperature": "temp",
+    "температура": "temp",
+    "rh": "rh",
+    "humidity": "rh",
+    "влажность": "rh",
+}
 
 
 @dataclass(frozen=True)
@@ -32,6 +46,8 @@ class WindgramCell:
     valid_time_utc: datetime
     pressure_hpa: int
     height_m: float | None
+    temperature_c: float | None
+    relative_humidity_pct: float | None
     u_wind_ms: float | None
     v_wind_ms: float | None
     wind_speed_ms: float | None
@@ -48,9 +64,18 @@ class WindgramData:
     leads: list[int]
     levels_hpa: list[int]
     cells: list[WindgramCell]
+    param: str = "wind"
 
     def to_frame(self) -> pd.DataFrame:
         return pd.DataFrame([cell.__dict__ for cell in self.cells])
+
+
+def normalize_windgram_param(param: str | None) -> str:
+    value = (param or "wind").strip().lower()
+    normalized = WINDGRAM_PARAM_ALIASES.get(value)
+    if not normalized:
+        raise GfsProfileError("param для windgram должен быть wind, temp или rh")
+    return normalized
 
 
 def windgram_leads(lead_from: int = 0, lead_to: int = 120, step: int = 6) -> list[int]:
@@ -75,6 +100,12 @@ def _nearest_level_row(df: pd.DataFrame, level_hpa: int, tolerance_hpa: float = 
     return row
 
 
+def _nullable_float(row: pd.Series, name: str) -> float | None:
+    if name not in row or pd.isna(row[name]):
+        return None
+    return float(row[name])
+
+
 def _cell_from_profile(result: ProfileResult, level_hpa: int) -> WindgramCell:
     row = _nearest_level_row(result.dataframe, level_hpa)
     if row is None:
@@ -83,6 +114,8 @@ def _cell_from_profile(result: ProfileResult, level_hpa: int) -> WindgramCell:
             valid_time_utc=result.valid_time_utc,
             pressure_hpa=level_hpa,
             height_m=None,
+            temperature_c=None,
+            relative_humidity_pct=None,
             u_wind_ms=None,
             v_wind_ms=None,
             wind_speed_ms=None,
@@ -92,11 +125,13 @@ def _cell_from_profile(result: ProfileResult, level_hpa: int) -> WindgramCell:
         lead_hour=result.lead_hour,
         valid_time_utc=result.valid_time_utc,
         pressure_hpa=level_hpa,
-        height_m=float(row["geopotential_height_m"]),
-        u_wind_ms=float(row["u_wind_ms"]),
-        v_wind_ms=float(row["v_wind_ms"]),
-        wind_speed_ms=float(row["wind_speed_ms"]),
-        wind_dir_deg=float(row["wind_dir_deg"]),
+        height_m=_nullable_float(row, "geopotential_height_m"),
+        temperature_c=_nullable_float(row, "temperature_c"),
+        relative_humidity_pct=_nullable_float(row, "relative_humidity_pct"),
+        u_wind_ms=_nullable_float(row, "u_wind_ms"),
+        v_wind_ms=_nullable_float(row, "v_wind_ms"),
+        wind_speed_ms=_nullable_float(row, "wind_speed_ms"),
+        wind_dir_deg=_nullable_float(row, "wind_dir_deg"),
     )
 
 
@@ -108,8 +143,10 @@ def build_windgram_data(
     lead_to: int = 120,
     step: int = 6,
     top_hpa: int = 500,
+    param: str = "wind",
     progress_callback: ProgressCallback | None = None,
 ) -> WindgramData:
+    selected_param = normalize_windgram_param(param)
     leads = windgram_leads(lead_from=lead_from, lead_to=lead_to, step=step)
     levels = [level for level in WINDGRAM_LEVELS_HPA if level >= top_hpa]
     if not levels:
@@ -148,11 +185,12 @@ def build_windgram_data(
         leads=leads,
         levels_hpa=levels,
         cells=cells,
+        param=selected_param,
     )
 
 
-def windgram_matrices(data: WindgramData) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Return speed, direction, u, v matrices with shape levels x leads.
+def windgram_matrices(data: WindgramData) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Return speed, direction, u, v, temperature and RH matrices with shape levels x leads.
 
     Rows follow data.levels_hpa order: 1000 ... 500 hPa.
     """
@@ -164,6 +202,8 @@ def windgram_matrices(data: WindgramData) -> tuple[np.ndarray, np.ndarray, np.nd
     direction = np.full((n_levels, n_leads), np.nan, dtype=float)
     u = np.full((n_levels, n_leads), np.nan, dtype=float)
     v = np.full((n_levels, n_leads), np.nan, dtype=float)
+    temperature = np.full((n_levels, n_leads), np.nan, dtype=float)
+    humidity = np.full((n_levels, n_leads), np.nan, dtype=float)
 
     level_index = {level: idx for idx, level in enumerate(data.levels_hpa)}
     lead_index = {lead: idx for idx, lead in enumerate(data.leads)}
@@ -178,4 +218,8 @@ def windgram_matrices(data: WindgramData) -> tuple[np.ndarray, np.ndarray, np.nd
             u[i, j] = float(row["u_wind_ms"])
         if pd.notna(row["v_wind_ms"]):
             v[i, j] = float(row["v_wind_ms"])
-    return speed, direction, u, v
+        if pd.notna(row["temperature_c"]):
+            temperature[i, j] = float(row["temperature_c"])
+        if pd.notna(row["relative_humidity_pct"]):
+            humidity[i, j] = float(row["relative_humidity_pct"])
+    return speed, direction, u, v, temperature, humidity
