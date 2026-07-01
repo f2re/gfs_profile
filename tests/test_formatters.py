@@ -40,6 +40,7 @@ class FormatterTests(unittest.TestCase):
         self.assertIn("<pre>", summary)
         self.assertIn("pгПа zкм", summary)
         self.assertIn("T/Td°C", summary)
+        self.assertIn("❄ 0/-10/-20°C", summary)
         self.assertIn("🌬 max", summary)
         self.assertIn("NOMADS subset", summary)
         self.assertNotIn("температура", summary)
@@ -48,6 +49,10 @@ class FormatterTests(unittest.TestCase):
         self.assertNotIn("Действительно на", summary)
         self.assertNotIn("Max wind", summary)
         self.assertNotIn("Valid:", summary)
+
+    def test_isotherm_heights_are_interpolated(self) -> None:
+        summary = format_profile_summary(self._result())
+        self.assertIn("❄ 0/-10/-20°C: 1.5/3.0/5.6 км", summary)
 
     def test_compact_level_lines_are_short(self) -> None:
         summary = format_profile_summary(self._result())
