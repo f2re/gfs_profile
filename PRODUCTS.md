@@ -17,6 +17,33 @@
 
 Цель стиля — читаемый метеорологический продукт для оперативного анализа, а не технический график Matplotlib.
 
+## Пошаговый Telegram-flow
+
+Команды `/aero`, `/skewt` и `/windgram` без параметров запускают wizard:
+
+```text
+/aero
+/skewt
+/windgram
+```
+
+Сценарий:
+
+1. Бот просит точку: город, координаты или Telegram-геолокация.
+2. Если геокодер нашёл несколько вариантов, бот показывает inline-выбор точки.
+3. После выбора точки бот показывает параметры продукта кнопками.
+4. На этом же экране бот показывает готовую команду для копирования.
+5. Кнопка `▶ Построить` запускает расчёт.
+
+Пример команды, которую wizard показывает после настройки:
+
+```text
+/aero 45.0000 39.0000 +24 type=skewt
+/windgram 45.0000 39.0000 from=0 to=240 step=6 top=500
+```
+
+Команды используют координаты, поэтому повторный запуск не зависит от неоднозначного геокодинга города.
+
 ## Аэрологическая диаграмма
 
 Команды:
@@ -69,15 +96,16 @@
 Новые модули:
 
 ```text
-gfs_product_core.py   # level-aware загрузка профилей для продуктовых режимов
-plot_style.py         # общая метеорологическая цветовая система и стиль Matplotlib
-aero_plot.py          # MetPy renderer: Stuve/Emagram/SkewT
-aero_product.py       # сборка aero product
-windgram_product.py   # сборка time-height матрицы ветра
-windgram_plot.py      # renderer ячеек: цвет + стрелка + скорость
-telegram_aero.py      # Telegram command layer для /aero и /skewt
-telegram_windgram.py  # Telegram command layer для /windgram
-product_progress.py   # общий progress runner для продуктовых задач
+gfs_product_core.py       # level-aware загрузка профилей для продуктовых режимов
+plot_style.py             # общая метеорологическая цветовая система и стиль Matplotlib
+aero_plot.py              # MetPy renderer: Stuve/Emagram/SkewT
+aero_product.py           # сборка aero product
+windgram_product.py       # сборка time-height матрицы ветра
+windgram_plot.py          # renderer ячеек: цвет + стрелка + скорость
+telegram_product_wizard.py # пошаговый Telegram UI для выбора точки и параметров
+telegram_aero.py          # Telegram command layer для /aero и /skewt
+telegram_windgram.py      # Telegram command layer для /windgram
+product_progress.py       # общий progress runner для продуктовых задач
 ```
 
 Существующий `/profile` оставлен как базовый сценарий и не зависит от новых продуктовых команд, но использует тот же визуальный стиль.
