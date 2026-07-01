@@ -16,6 +16,7 @@ from geocode_choices import search_location_candidates
 from gfs_core import CACHE_DIR, GfsProfileError, GfsRun, latest_available_run, latest_available_run_for_lead, validate_lead
 from profile_plot import write_profile_png
 from telegram_aero import ParsedAeroRequest, resolve_aero_request, run_aero_product
+from telegram_cloudgram import ParsedCloudgramRequest, resolve_cloudgram_request, run_cloudgram_product
 from telegram_product_wizard import (
     PRODUCT_WIZARD_KEY,
     params_keyboard,
@@ -24,6 +25,7 @@ from telegram_product_wizard import (
     point_prompt_text,
     set_point as wizard_set_point,
     start_aero_wizard_state,
+    start_cloudgram_wizard_state,
     start_windgram_wizard_state,
 )
 from telegram_progress import build_profile_with_progress
@@ -173,6 +175,17 @@ async def _run_wizard_product(message, context: ContextTypes.DEFAULT_TYPE, state
         await run_windgram_product(message, point, parsed, GFS_SEMAPHORE)
         return
 
+    if product == "cloudgram":
+        parsed = ParsedCloudgramRequest(
+            location_query=f"{point.lat:.4f} {point.lon:.4f}",
+            run=None,
+            lead_from=int(state.get("from", 0)),
+            lead_to=int(state.get("to", 72)),
+            step=int(state.get("time_step", 3)),
+        )
+        await run_cloudgram_product(message, point, parsed, GFS_SEMAPHORE)
+        return
+
     await message.reply_text("Неизвестный продукт. Повторите команду.")
 
 
@@ -188,7 +201,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "2) выберите срок кнопкой;\n"
         "3) видите ход проверки, загрузки GRIB2 и построения;\n"
         "4) получите сводку, PNG и CSV.\n\n"
-        "Можно написать: Москва, /profile Москва +24, /aero, /skewt или /windgram. Команды без параметров запускают пошаговый выбор.",
+        "Команды без параметров запускают пошаговый выбор: /aero, /skewt, /windgram, /cloudgram.",
         reply_markup=location_keyboard(),
     )
 
@@ -204,9 +217,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• или координаты: 55.75 37.62;\n"
         "• профиль: /profile Москва run=20260630/06 +24;\n"
         "• аэродиаграмма: /aero Москва +24 type=stuve|emagram|skewt;\n"
-        "• пошаговая аэродиаграмма: /aero или /skewt;\n"
         "• windgram: /windgram Москва to=120 step=6 top=500 param=wind|temp|rh;\n"
-        "• пошаговый windgram: /windgram.\n\n"
+        "• cloudgram: /cloudgram Москва to=72 step=3;\n"
+        "• wizard: /aero, /skewt, /windgram, /cloudgram.\n\n"
         "После построения бот отдаёт команду для повтора без ручной настройки.",
         reply_markup=location_keyboard(),
     )
@@ -235,7 +248,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not message:
         return
     lines = ["Состояние бота:"]
-    for lead in dict.fromkeys((0, DEFAULT_LEAD, 24, 48, 120, 240, 384)):
+    for lead in dict.fromkeys((0, DEFAULT_LEAD, 24, 48, 72, 120, 240, 384)):
         try:
             run = await asyncio.to_thread(latest_available_run_for_lead, lead)
             lines.append(f"• +{lead} ч: GFS {run.date} {run.cycle}Z опубликован")
@@ -353,6 +366,17 @@ async def windgram_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await resolve_windgram_request(message, raw, GFS_SEMAPHORE, GEOCODE_SEMAPHORE)
 
 
+async def cloudgram_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if not message:
+        return
+    raw = " ".join(context.args).strip()
+    if not raw:
+        await _start_product_wizard(message, context, start_cloudgram_wizard_state())
+        return
+    await resolve_cloudgram_request(message, raw, GFS_SEMAPHORE, GEOCODE_SEMAPHORE)
+
+
 async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if not message or not message.text:
@@ -389,10 +413,10 @@ async def product_wizard_callback(update: Update, context: ContextTypes.DEFAULT_
     data = query.data or ""
     if data == "wiz:cancel":
         context.user_data.pop(PRODUCT_WIZARD_KEY, None)
-        await query.edit_message_text("Выбор продукта отменён. Можно начать заново: /aero, /skewt или /windgram.")
+        await query.edit_message_text("Выбор продукта отменён. Можно начать заново: /aero, /skewt, /windgram или /cloudgram.")
         return
     if not state:
-        await query.edit_message_text("Сценарий устарел. Начните заново: /aero, /skewt или /windgram.")
+        await query.edit_message_text("Сценарий устарел. Начните заново: /aero, /skewt, /windgram или /cloudgram.")
         return
 
     if data == "wiz:point":
@@ -432,6 +456,10 @@ async def product_wizard_callback(update: Update, context: ContextTypes.DEFAULT_
         state["time_step"] = int(data.rsplit(":", 1)[1])
     elif data.startswith("wiz:wind:top:"):
         state["top"] = int(data.rsplit(":", 1)[1])
+    elif data.startswith("wiz:cloud:to:"):
+        state["to"] = int(data.rsplit(":", 1)[1])
+    elif data.startswith("wiz:cloud:step:"):
+        state["time_step"] = int(data.rsplit(":", 1)[1])
     elif data == "wiz:run":
         if query.message:
             await query.edit_message_text("Параметры выбраны. Запускаю расчёт…")
@@ -535,6 +563,8 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("aero", aero_command))
     application.add_handler(CommandHandler("skewt", skewt_command))
     application.add_handler(CommandHandler("windgram", windgram_command))
+    application.add_handler(CommandHandler("cloudgram", cloudgram_command))
+    application.add_handler(CommandHandler("clouds", cloudgram_command))
     application.add_handler(MessageHandler(filters.LOCATION, location_message))
     application.add_handler(CallbackQueryHandler(product_wizard_callback, pattern=r"^wiz:"))
     application.add_handler(CallbackQueryHandler(lead_callback, pattern=r"^lead:\d+$"))
