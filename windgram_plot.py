@@ -10,15 +10,33 @@ from plot_style import (
     METEO,
     add_footer,
     apply_meteo_rcparams,
+    humidity_cmap_and_norm,
     style_axis,
+    temperature_cmap_and_norm,
+    value_text_color,
     wind_speed_cmap_and_norm,
-    wind_text_color,
 )
-from windgram_product import WindgramData, windgram_matrices
+from windgram_product import WindgramData, normalize_windgram_param, windgram_matrices
+
+PARAM_TITLES = {
+    "wind": "скорость ветра V",
+    "temp": "температура T",
+    "rh": "относительная влажность RH",
+}
+PARAM_COLORBAR_LABELS = {
+    "wind": "Скорость ветра V, м/с",
+    "temp": "Температура T, °C",
+    "rh": "Относительная влажность RH, %",
+}
+PARAM_FOOTERS = {
+    "wind": "Цвет и число — скорость ветра V, м/с; стрелка показывает направление переноса воздуха.",
+    "temp": "Цвет и число — температура T, °C; стрелка показывает направление переноса воздуха.",
+    "rh": "Цвет и число — относительная влажность RH, %; стрелка показывает направление переноса воздуха.",
+}
 
 
-def _safe_suffix(data: WindgramData) -> str:
-    suffix = f"_{data.run.date}_{data.run.cycle}_f{data.leads[0]:03d}_to_f{data.leads[-1]:03d}_{data.grid_lat:.3f}_{data.grid_lon:.3f}.png"
+def _safe_suffix(data: WindgramData, param: str) -> str:
+    suffix = f"_{param}_{data.run.date}_{data.run.cycle}_f{data.leads[0]:03d}_to_f{data.leads[-1]:03d}_{data.grid_lat:.3f}_{data.grid_lon:.3f}.png"
     return suffix.replace("-", "m").replace(" ", "_")
 
 
@@ -66,11 +84,20 @@ def _x_tick_labels(data: WindgramData) -> list[str]:
     return labels
 
 
-def _annotate_cell(ax, x: int, y: int, value: float, wind_dir: float, n_leads: int) -> None:
-    color = wind_text_color(value)
+def _format_cell_value(value: float, param: str) -> str:
+    if param == "temp":
+        return f"{value:.0f}"
+    if param == "rh":
+        return f"{value:.0f}"
+    return f"{value:.0f}"
+
+
+def _annotate_cell(ax, x: int, y: int, value: float, wind_dir: float, n_leads: int, param: str) -> None:
+    color = value_text_color(value, param=param)
     shadow_color = "#FFFFFF" if color != "#FFFFFF" else "#102033"
-    ax.text(x, y + 0.20, f"{value:.0f}", ha="center", va="center", fontsize=7, color=shadow_color, fontweight="bold", alpha=0.42)
-    ax.text(x, y + 0.18, f"{value:.0f}", ha="center", va="center", fontsize=7, color=color, fontweight="bold")
+    label = _format_cell_value(value, param)
+    ax.text(x, y + 0.20, label, ha="center", va="center", fontsize=7, color=shadow_color, fontweight="bold", alpha=0.42)
+    ax.text(x, y + 0.18, label, ha="center", va="center", fontsize=7, color=color, fontweight="bold")
     if not math.isnan(wind_dir):
         dx, dy = _flow_arrow_components(float(wind_dir))
         length = 0.32 if n_leads <= 25 else 0.25
@@ -84,35 +111,47 @@ def _annotate_cell(ax, x: int, y: int, value: float, wind_dir: float, n_leads: i
         )
 
 
-def write_windgram_png(data: WindgramData) -> Path:
+def _param_matrix_and_style(data: WindgramData, param: str):
+    speed, direction, _, _, temperature, humidity = windgram_matrices(data)
+    if param == "temp":
+        cmap, norm = temperature_cmap_and_norm()
+        return temperature, direction, cmap, norm
+    if param == "rh":
+        cmap, norm = humidity_cmap_and_norm()
+        return humidity, direction, cmap, norm
+    cmap, norm = wind_speed_cmap_and_norm()
+    return speed, direction, cmap, norm
+
+
+def write_windgram_png(data: WindgramData, param: str | None = None) -> Path:
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
+    selected_param = normalize_windgram_param(param or data.param)
     apply_meteo_rcparams(plt)
 
-    speed, direction, _, _ = windgram_matrices(data)
+    value_matrix, direction, cmap, norm = _param_matrix_and_style(data, selected_param)
 
     levels_top_down = list(reversed(data.levels_hpa))
     height_labels = _height_labels_by_level(data)
-    speed_plot = speed[::-1, :]
+    value_plot = value_matrix[::-1, :]
     direction_plot = direction[::-1, :]
-    n_levels, n_leads = speed_plot.shape
+    n_levels, n_leads = value_plot.shape
 
     cell_width = 0.64 if n_leads <= 25 else 0.43
     fig_width = max(12.0, n_leads * cell_width)
     fig_height = max(7.4, n_levels * 0.55)
 
-    tmp = tempfile.NamedTemporaryFile(prefix="gfs_windgram", suffix=_safe_suffix(data), delete=False)
+    tmp = tempfile.NamedTemporaryFile(prefix="gfs_windgram", suffix=_safe_suffix(data, selected_param), delete=False)
     out_path = Path(tmp.name)
     tmp.close()
 
     fig = None
     try:
         fig, ax = plt.subplots(figsize=(fig_width, fig_height), facecolor=METEO.figure_bg)
-        cmap, norm = wind_speed_cmap_and_norm()
-        image = ax.imshow(speed_plot, cmap=cmap, norm=norm, aspect="auto", origin="upper", interpolation="nearest")
+        image = ax.imshow(value_plot, cmap=cmap, norm=norm, aspect="auto", origin="upper", interpolation="nearest")
 
         ax.set_xticks(range(n_leads))
         ax.set_xticklabels(_x_tick_labels(data), rotation=90 if n_leads > 25 else 0, fontsize=7 if n_leads > 25 else 8)
@@ -121,7 +160,7 @@ def write_windgram_png(data: WindgramData) -> Path:
         ax.set_xlabel("Срок прогноза и UTC-время")
         ax.set_ylabel("Изобарический уровень p, гПа / геопотенциальная высота Z, км")
         ax.set_title(
-            f"GFS 0.25 · windgram: ветер по срокам и изобарическим уровням · {data.run.date} {data.run.cycle}Z · "
+            f"GFS 0.25 · windgram: {PARAM_TITLES[selected_param]} по срокам и уровням · {data.run.date} {data.run.cycle}Z · "
             f"+{data.leads[0]}…+{data.leads[-1]} ч · узел {data.grid_lat:.2f}, {data.grid_lon:.2f}",
             fontsize=10.5,
             fontweight="bold",
@@ -137,25 +176,21 @@ def write_windgram_png(data: WindgramData) -> Path:
 
         for y in range(n_levels):
             for x in range(n_leads):
-                value = speed_plot[y, x]
+                value = value_plot[y, x]
                 wind_dir = direction_plot[y, x]
                 if math.isnan(value):
                     continue
-                _annotate_cell(ax, x, y, float(value), float(wind_dir), n_leads)
+                _annotate_cell(ax, x, y, float(value), float(wind_dir), n_leads, selected_param)
 
         ax.set_xlim(-0.5, n_leads - 0.5)
         ax.set_ylim(n_levels - 0.5, -0.5)
         colorbar = fig.colorbar(image, ax=ax, pad=0.012, fraction=0.032)
-        colorbar.set_label("Скорость ветра V, м/с", color=METEO.axis_text)
+        colorbar.set_label(PARAM_COLORBAR_LABELS[selected_param], color=METEO.axis_text)
         colorbar.ax.tick_params(labelsize=8, colors=METEO.axis_text)
         colorbar.outline.set_edgecolor(METEO.spine)
         colorbar.outline.set_linewidth(0.8)
 
-        add_footer(
-            fig,
-            "Стрелка показывает направление переноса воздуха; число — скорость V, м/с. Палитра дискретная: слабый ветер — голубой, сильный — жёлто-красно-пурпурный.",
-            y=0.012,
-        )
+        add_footer(fig, PARAM_FOOTERS[selected_param] + " Данные: модельный профиль GFS.", y=0.012)
         fig.tight_layout(rect=(0, 0.052, 1, 1))
         fig.savefig(out_path, dpi=180, bbox_inches="tight")
     except Exception:
