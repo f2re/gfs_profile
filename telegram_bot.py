@@ -182,6 +182,7 @@ async def _run_wizard_product(message, context: ContextTypes.DEFAULT_TYPE, state
             lead_from=int(state.get("from", 0)),
             lead_to=int(state.get("to", 72)),
             step=int(state.get("time_step", 3)),
+            mode=str(state.get("mode", "pro")),
         )
         await run_cloudgram_product(message, point, parsed, GFS_SEMAPHORE)
         return
@@ -218,7 +219,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• профиль: /profile Москва run=20260630/06 +24;\n"
         "• аэродиаграмма: /aero Москва +24 type=stuve|emagram|skewt;\n"
         "• windgram: /windgram Москва to=120 step=6 top=500 param=wind|temp|rh;\n"
-        "• cloudgram: /cloudgram Москва to=72 step=3;\n"
+        "• cloudgram: /cloudgram Москва to=72 step=3 mode=pro|simple;\n"
         "• wizard: /aero, /skewt, /windgram, /cloudgram.\n\n"
         "После построения бот отдаёт команду для повтора без ручной настройки.",
         reply_markup=location_keyboard(),
@@ -456,6 +457,8 @@ async def product_wizard_callback(update: Update, context: ContextTypes.DEFAULT_
         state["time_step"] = int(data.rsplit(":", 1)[1])
     elif data.startswith("wiz:wind:top:"):
         state["top"] = int(data.rsplit(":", 1)[1])
+    elif data.startswith("wiz:cloud:mode:"):
+        state["mode"] = data.rsplit(":", 1)[1]
     elif data.startswith("wiz:cloud:to:"):
         state["to"] = int(data.rsplit(":", 1)[1])
     elif data.startswith("wiz:cloud:step:"):
