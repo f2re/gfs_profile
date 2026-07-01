@@ -16,7 +16,8 @@ class ProductWizardTests(unittest.TestCase):
         state = set_point(state, {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
         state["to"] = 240
         state["time_step"] = 6
-        self.assertEqual(copy_command(state), "/windgram 45.0000 39.0000 from=0 to=240 step=6 top=500")
+        state["param"] = "temp"
+        self.assertEqual(copy_command(state), "/windgram 45.0000 39.0000 from=0 to=240 step=6 top=500 param=temp")
 
 
 if __name__ == "__main__":
