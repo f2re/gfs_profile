@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import re
 from pathlib import Path
 from typing import NamedTuple
 
 from telegram import InputFile
+from telegram.constants import ParseMode
 
 from aero_product import build_aero_product, format_aero_caption
 from geocode import GeoPoint, GeocodeError
@@ -16,6 +18,8 @@ from product_progress import run_product_with_progress
 AERO_TYPE_RE = re.compile(r"\btype=(?P<type>stuve|emagram|skewt)\b", re.IGNORECASE)
 RUN_RE = re.compile(r"\brun=(?P<date>\d{8})[/-]?(?P<cycle>00|06|12|18)\b", re.IGNORECASE)
 LEAD_RE = re.compile(r"(?:^|\s)(?:lead=|\+|f)?(?P<lead>\d{1,3})(?:\s*(?:h|ч|час|часа|часов))?\s*$", re.IGNORECASE)
+
+AERO_NAMES = {"stuve": "Stüve", "emagram": "Emagram", "skewt": "Skew-T"}
 
 
 class ParsedAeroRequest(NamedTuple):
@@ -48,18 +52,41 @@ def parse_aero_request(raw_text: str, default_lead: int, default_diagram_type: s
 
     validate_lead(lead_hour)
     if not text:
-        raise ValueError("Не указана точка. Напишите город, координаты или отправьте геолокацию.")
+        raise ValueError("Не указана точка. Пример: /aero Москва +24 type=skewt")
     return ParsedAeroRequest(text, lead_hour, run, diagram_type)
 
 
+def _diagram_name(diagram_type: str) -> str:
+    return AERO_NAMES.get(diagram_type, diagram_type.upper())
+
+
+def format_aero_file_caption(run: GfsRun, lead_hour: int, diagram_type: str) -> str:
+    return f"PNG · {_diagram_name(diagram_type)} · GFS {run.date} {run.cycle}Z · +{lead_hour} ч · UTC"
+
+
+def repeat_aero_command(point: GeoPoint, parsed: ParsedAeroRequest, run: GfsRun) -> str:
+    return f"/aero {point.lat:.4f} {point.lon:.4f} run={run.date}/{run.cycle} +{parsed.lead_hour} type={parsed.diagram_type}"
+
+
+def format_repeat_aero_message(point: GeoPoint, parsed: ParsedAeroRequest, run: GfsRun) -> str:
+    command = html.escape(repeat_aero_command(point, parsed, run))
+    return "📋 Повторить этот расчёт:\n" f"<code>{command}</code>\n\n" "Нажмите на строку команды и скопируйте её целиком."
+
+
 async def run_aero_product(message, point: GeoPoint, parsed: ParsedAeroRequest, gfs_semaphore) -> None:
-    status = await message.reply_text(f"0/6 Ищу опубликованный цикл GFS для {parsed.diagram_type.upper()}…")
+    status = await message.reply_text(
+        f"⏳ {_diagram_name(parsed.diagram_type)} GFS\n"
+        f"📍 {point.label}\n"
+        f"🕒 срок +{parsed.lead_hour} ч\n"
+        "1/6 выбираю опубликованный цикл GFS…"
+    )
     png_path: Path | None = None
     try:
         async with gfs_semaphore:
             selected_run = parsed.run or await asyncio.to_thread(latest_available_run_for_lead, parsed.lead_hour)
             header = (
-                f"AERO {parsed.diagram_type.upper()} | GFS {selected_run.date} {selected_run.cycle}Z +{parsed.lead_hour}ч\n"
+                f"🧾 {_diagram_name(parsed.diagram_type)}\n"
+                f"GFS {selected_run.date} {selected_run.cycle}Z · UTC · +{parsed.lead_hour} ч\n"
                 f"{point.label}\n{point.lat:.4f}, {point.lon:.4f}"
             )
 
@@ -77,7 +104,8 @@ async def run_aero_product(message, point: GeoPoint, parsed: ParsedAeroRequest, 
         await status.edit_text(format_aero_caption(result, parsed.diagram_type))
         if png_path:
             with png_path.open("rb") as file_obj:
-                await message.reply_photo(photo=InputFile(file_obj, filename=png_path.name), caption=f"Аэрологическая диаграмма GFS: {parsed.diagram_type.upper()}")
+                await message.reply_photo(photo=InputFile(file_obj, filename=png_path.name), caption=format_aero_file_caption(selected_run, parsed.lead_hour, parsed.diagram_type))
+        await message.reply_text(format_repeat_aero_message(point, parsed, selected_run), parse_mode=ParseMode.HTML)
     except (GfsProfileError, GeocodeError, ValueError) as exc:
         await status.edit_text(f"Ошибка: {exc}")
     except Exception as exc:
@@ -97,14 +125,14 @@ async def resolve_aero_request(message, raw: str, default_lead: int, gfs_semapho
         return
 
     if not candidates:
-        await message.reply_text("Точка не найдена. Пришлите координаты или геолокацию Telegram.")
+        await message.reply_text("Точка не найдена. Пришлите координаты, город или геолокацию Telegram.")
         return
 
     if len(candidates) > 1:
         labels = "\n".join(f"{i + 1}. {point.label}" for i, point in enumerate(candidates[:3]))
         await message.reply_text(
-            "Найдено несколько точек. Для аэродиаграммы уточните запрос текстом, например:\n"
-            f"/aero {candidates[0].label} +{parsed.lead_hour} type={parsed.diagram_type}\n\n"
+            "Найдено несколько точек. Уточните запрос или используйте координаты.\n\n"
+            f"Пример:\n/aero {candidates[0].label} +{parsed.lead_hour} type={parsed.diagram_type}\n\n"
             f"Варианты:\n{labels}"
         )
         return
