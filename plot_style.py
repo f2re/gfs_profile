@@ -64,6 +64,53 @@ HUMIDITY_COLORS = (
     "#2364AA",
 )
 
+CLOUD_COVER_BOUNDS_PCT = (0, 10, 25, 50, 75, 90, 100)
+CLOUD_COVER_COLORS = (
+    "#FFFFFF",
+    "#EEF3F7",
+    "#D8E2EC",
+    "#B7C7D7",
+    "#879CAF",
+    "#5D7388",
+)
+
+PRECIP_BOUNDS_MM = (0, 0.1, 0.5, 1, 3, 7, 15, 30)
+PRECIP_COLORS = (
+    "#FFFFFF",
+    "#EAF8E8",
+    "#C8EFC2",
+    "#90D884",
+    "#4FB564",
+    "#238B45",
+    "#075A2A",
+)
+
+CEILING_BOUNDS_M = (0, 200, 500, 1000, 2000, 5000, 12000)
+CEILING_COLORS = (
+    "#B91C1C",
+    "#EA580C",
+    "#D6A800",
+    "#7CB342",
+    "#2E7D32",
+    "#1B5E20",
+)
+
+CB_BOUNDS = (0, 1, 2, 3, 4)
+CB_COLORS = (
+    "#EEF2F5",
+    "#F6D65B",
+    "#F59E0B",
+    "#DC2626",
+)
+
+PRECIP_TYPE_COLORS = {
+    "—": "#F8FAFC",
+    "R": "#EAF8E8",
+    "S": "#E6F4FF",
+    "FZ": "#FDE2E2",
+    "IP": "#F3E8FF",
+}
+
 
 def apply_meteo_rcparams(plt) -> None:
     plt.rcParams.update(
@@ -117,7 +164,7 @@ def annotation_box_kwargs() -> dict[str, object]:
     }
 
 
-def _listed_cmap_and_norm(name: str, colors: tuple[str, ...], bounds: tuple[int, ...]):
+def _listed_cmap_and_norm(name: str, colors: tuple[str, ...], bounds: tuple[int | float, ...]):
     from matplotlib.colors import BoundaryNorm, ListedColormap
 
     cmap = ListedColormap(colors, name=name)
@@ -138,6 +185,22 @@ def humidity_cmap_and_norm():
     return _listed_cmap_and_norm("gfs_humidity_meteo", HUMIDITY_COLORS, HUMIDITY_BOUNDS_PCT)
 
 
+def cloud_cover_cmap_and_norm():
+    return _listed_cmap_and_norm("gfs_cloud_cover_meteo", CLOUD_COVER_COLORS, CLOUD_COVER_BOUNDS_PCT)
+
+
+def precip_cmap_and_norm():
+    return _listed_cmap_and_norm("gfs_precip_green_meteo", PRECIP_COLORS, PRECIP_BOUNDS_MM)
+
+
+def ceiling_cmap_and_norm():
+    return _listed_cmap_and_norm("gfs_ceiling_meteo", CEILING_COLORS, CEILING_BOUNDS_M)
+
+
+def cb_cmap_and_norm():
+    return _listed_cmap_and_norm("gfs_cb_risk_meteo", CB_COLORS, CB_BOUNDS)
+
+
 def value_text_color(value: float, *, param: str) -> str:
     if param == "wind":
         if value < 10:
@@ -153,6 +216,14 @@ def value_text_color(value: float, *, param: str) -> str:
         if value >= 80:
             return "#FFFFFF"
         return "#102033"
+    if param == "cloud":
+        return "#FFFFFF" if value >= 75 else "#102033"
+    if param == "precip":
+        return "#FFFFFF" if value >= 7 else "#102033"
+    if param == "ceiling":
+        return "#FFFFFF" if value < 200 or value >= 2000 else "#102033"
+    if param == "cb":
+        return "#FFFFFF" if value >= 3 else "#102033"
     return "#102033"
 
 
