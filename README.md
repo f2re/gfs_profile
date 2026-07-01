@@ -9,8 +9,10 @@
 - 📍 Строит профиль по координатам, городу или Telegram-геолокации.
 - 🧭 Даёт кнопочный выбор точки и срока прогноза, минимум ручного ввода.
 - ⏱️ Поддерживает весь диапазон заблаговременности GFS до `+384 ч` с пагинацией.
-- 🔄 Показывает процесс: проверка публикации, загрузка GRIB2, чтение cfgrib/eccodes, построение PNG/CSV.
+- 🔄 Показывает процесс: проверка публикации, загрузка GRIB2, чтение xarray/cfgrib/eccodes, построение PNG/CSV.
 - 🛰️ Берёт данные из NOMADS GRIB Filter, GFS 0.25°.
+- ⚡ Скачивает не весь глобальный GRIB, а server-side subset по точке, переменным и, при настройке, уровням давления.
+- 💾 Кэширует GRIB2 по дате, циклу, сроку, узлу сетки и набору уровней.
 - ⏱️ Выбирает самый свежий цикл GFS, где уже опубликован нужный срок прогноза `+lead`.
 - 🌡️ Показывает температуру, точку росы, влажность и геопотенциальную высоту.
 - 🌬️ Показывает ветер: направление, скорость, U/V-компоненты.
@@ -32,7 +34,7 @@ gfs_core.py
         ↓
 проверка опубликованного fXXX.idx
         ↓
-NOMADS GRIB Filter → GRIB2 → cfgrib/eccodes → pandas
+NOMADS GRIB Filter → малый GRIB2 subset → xarray/cfgrib/eccodes → pandas
         ↓
 текстовая сводка / PNG / CSV
 ```
@@ -79,17 +81,36 @@ bash install_telegram_bot.sh --status
 TELEGRAM_BOT_TOKEN='123456:AA...' bash install_telegram_bot.sh --yes
 ```
 
-Полезные опции:
+## 🔄 Обновление после `git pull`
+
+`git pull` обновляет только текущий git checkout. Рабочий бот запускается из `/opt/gfs_profile`, поэтому после pull нужен deploy: синхронизация кода в `/opt`, обновление зависимостей и перезапуск сервиса.
+
+Ручной deploy:
+
+```bash
+git pull
+bash deploy_telegram_bot.sh
+```
+
+Неразговорный режим:
+
+```bash
+bash deploy_telegram_bot.sh --yes
+```
+
+Автообновление после `git pull` через локальные git hooks:
+
+```bash
+bash install_git_hooks.sh
+```
+
+После этого `post-merge`, `post-rewrite` и `post-checkout` будут вызывать `deploy_telegram_bot.sh --yes`. Лог hooks пишется в:
 
 ```text
---install-dir DIR       каталог установки, по умолчанию /opt/gfs_profile
---service-name NAME     имя systemd-сервиса, по умолчанию gfs-profile-bot
---service-user USER     системный пользователь, по умолчанию gfsbot
---python PATH           Python-интерпретатор, по умолчанию python3
---skip-apt              не ставить системные пакеты через apt
---no-start              создать сервис, но не запускать
---status                только показать состояние
+.git/gfs-profile-deploy.log
 ```
+
+Подробности: [DEPLOY.md](DEPLOY.md).
 
 ## 🤖 Telegram UX
 
@@ -131,7 +152,7 @@ TELEGRAM_BOT_TOKEN='123456:AA...' bash install_telegram_bot.sh --yes
 1/5 Проверяю публикацию forecast-файла fXXX.idx
 2/5 Привязываю точку к узлу GFS
 3/5 Скачиваю GRIB2 из NOMADS, по возможности с процентом и размером
-4/5 Читаю GRIB2 через cfgrib/eccodes
+4/5 Читаю GRIB2 через xarray/cfgrib/eccodes
 5/5 Формирую сводку, PNG и CSV
 ```
 
@@ -162,8 +183,39 @@ TELEGRAM_BOT_TOKEN='123456:AA...' bash install_telegram_bot.sh --yes
 2. Привязывает точку к ближайшему узлу GFS 0.25°.
 3. Ищет самый свежий цикл, где опубликован `f024.idx`.
 4. Скачивает малый GRIB2-срез через NOMADS GRIB Filter.
-5. Читает GRIB2 через `cfgrib/eccodes`.
+5. Читает GRIB2 через `xarray/cfgrib/eccodes`.
 6. Возвращает сводку, PNG и CSV.
+
+## ⚡ Оптимизация скачивания GFS
+
+По умолчанию бот уже не скачивает глобальный GFS-файл. Он формирует NOMADS Filter URL с:
+
+```text
+file=gfs.tHHz.pgrb2.0p25.fXXX
+var_TMP=on
+var_RH=on
+var_UGRD=on
+var_VGRD=on
+var_HGT=on
+leftlon/rightlon/toplat/bottomlat около выбранного узла GFS
+```
+
+Уровни можно ограничить переменной:
+
+```text
+GFS_PRESSURE_LEVELS_HPA=profile
+GFS_PRESSURE_LEVELS_HPA=1000,925,850,700,500,300,200,100
+```
+
+Режимы:
+
+```text
+пусто / all / full      скачать все изобарические уровни
+profile / default       скачать рабочий набор уровней профиля
+список через запятую    скачать только указанные уровни давления
+```
+
+Ключ кэша учитывает набор уровней, поэтому `all` и `profile` не конфликтуют.
 
 ## 🧪 Проверка ядра без Telegram
 
@@ -195,6 +247,7 @@ python -m unittest discover -s tests
 - допустимые сроки прогноза;
 - сборку имени файла `gfs.tHHz.pgrb2.0p25.fXXX`;
 - параметры NOMADS GRIB Filter URL;
+- server-side ограничение уровней NOMADS;
 - расчёт температуры, точки росы, потенциальной температуры;
 - метеорологическое направление ветра по U/V-компонентам;
 - интерполяцию уровня 0 °C;
@@ -231,15 +284,16 @@ http://127.0.0.1:8000
 ## ⚙️ Переменные окружения
 
 ```text
-TELEGRAM_BOT_TOKEN     токен Telegram-бота
-DEFAULT_LEAD           срок прогноза по умолчанию, часы; обычно 24
-MAX_CONCURRENT_GFS     максимум одновременных GFS-запросов; обычно 2
-GFS_CACHE_DIR          каталог файлового кэша GRIB2
-GFS_CACHE_TTL_SECONDS  срок хранения GRIB2; обычно 86400
-GFS_REQUEST_TIMEOUT    timeout загрузки NOMADS, секунды
-GEOCODER_USER_AGENT    User-Agent для Nominatim fallback
-GEOCODE_CACHE_DIR      каталог кэша геокодирования
-GEOCODE_TIMEOUT        timeout геокодера, секунды
+TELEGRAM_BOT_TOKEN       токен Telegram-бота
+DEFAULT_LEAD             срок прогноза по умолчанию, часы; обычно 24
+MAX_CONCURRENT_GFS       максимум одновременных GFS-запросов; обычно 2
+GFS_CACHE_DIR            каталог файлового кэша GRIB2
+GFS_CACHE_TTL_SECONDS    срок хранения GRIB2; обычно 86400
+GFS_REQUEST_TIMEOUT      timeout загрузки NOMADS, секунды
+GFS_PRESSURE_LEVELS_HPA  ограничение уровней: all/profile/список уровней
+GEOCODER_USER_AGENT      User-Agent для Nominatim fallback
+GEOCODE_CACHE_DIR        каталог кэша геокодирования
+GEOCODE_TIMEOUT          timeout геокодера, секунды
 ```
 
 Если `GFS_CACHE_DIR` или `GEOCODE_CACHE_DIR` заданы абсолютным путём, установщик создаёт каталог, выставляет права для пользователя сервиса и добавляет путь в `ReadWritePaths` systemd unit.
@@ -273,6 +327,12 @@ GET  /api/cache-info
 Цикл уже появился, но нужный forecast lead ещё не опубликован. Для автоматического выбора цикла не задавайте `run=...` / `--date --cycle`: бот сам откатится на предыдущий опубликованный цикл.
 
 ```text
+Ошибка чтения GRIB2 через xarray/cfgrib
+```
+
+Проверьте, что установлены зависимости из `requirements.txt`, включая `xarray`, `cfgrib`, `eccodes`, `eccodeslib`.
+
+```text
 NOMADS вернул HTML вместо GRIB2
 ```
 
@@ -295,5 +355,5 @@ NOMADS не отдал GRIB2. Обычно причина — временная
 ## 🧹 Кэш
 
 - GRIB2-файлы сохраняются в `.cache_gfs/` или в `GFS_CACHE_DIR`.
-- Повторный запрос той же точки, цикла и срока использует файл из кэша.
+- Повторный запрос той же точки, цикла, срока и набора уровней использует файл из кэша.
 - Старые файлы удаляются по `GFS_CACHE_TTL_SECONDS`.
