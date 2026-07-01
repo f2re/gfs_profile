@@ -20,14 +20,18 @@ REQUIRED_MODULES = (
 OPTIONAL_RUNTIME_MODULES = (
     "plot_style",
     "profile_plot_ru",
+    "gfs_subset",
     "aero_plot",
     "aero_product",
     "windgram_product",
     "windgram_plot",
+    "cloudgram_product",
+    "cloudgram_plot",
     "telegram_commands",
     "telegram_product_wizard",
     "telegram_aero",
     "telegram_windgram",
+    "telegram_cloudgram",
     "telegram_bot",
 )
 
@@ -53,7 +57,7 @@ def main() -> int:
     import matplotlib
 
     matplotlib.use("Agg", force=True)
-    print("Runtime check OK: dependencies, command definitions, wizard and bot modules import successfully")
+    print("Runtime check OK: dependencies, command definitions, cloudgram, wizard and bot modules import successfully")
     return 0
 
 
