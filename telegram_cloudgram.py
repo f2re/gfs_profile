@@ -18,6 +18,7 @@ RUN_RE = re.compile(r"\brun=(?P<date>\d{8})[/-]?(?P<cycle>00|06|12|18)\b", re.IG
 FROM_RE = re.compile(r"\bfrom=(?P<value>\d{1,3})\b", re.IGNORECASE)
 TO_RE = re.compile(r"\bto=(?P<value>\d{1,3})\b", re.IGNORECASE)
 STEP_RE = re.compile(r"\bstep=(?P<value>\d{1,2})\b", re.IGNORECASE)
+MODE_RE = re.compile(r"\bmode=(?P<value>[\wа-яё-]+)\b", re.IGNORECASE)
 
 
 class ParsedCloudgramRequest(NamedTuple):
@@ -26,6 +27,16 @@ class ParsedCloudgramRequest(NamedTuple):
     lead_from: int
     lead_to: int
     step: int
+    mode: str
+
+
+def normalize_cloudgram_mode(value: str | None) -> str:
+    raw = (value or "pro").strip().lower().replace("ё", "е")
+    if raw in {"simple", "simp", "easy", "lite", "user", "простои", "простой", "упрощенно", "упрощенныи", "упрощенный"}:
+        return "simple"
+    if raw in {"pro", "prof", "professional", "meteo", "профи", "профессионально"}:
+        return "pro"
+    raise GfsProfileError("mode должен быть pro или simple")
 
 
 def _pop_int(pattern: re.Pattern[str], text: str, default: int) -> tuple[int, str]:
@@ -36,6 +47,14 @@ def _pop_int(pattern: re.Pattern[str], text: str, default: int) -> tuple[int, st
     return value, (text[: match.start()] + text[match.end() :]).strip()
 
 
+def _pop_mode(text: str) -> tuple[str, str]:
+    match = MODE_RE.search(text)
+    if not match:
+        return "pro", text
+    mode = normalize_cloudgram_mode(match.group("value"))
+    return mode, (text[: match.start()] + text[match.end() :]).strip()
+
+
 def parse_cloudgram_request(raw_text: str) -> ParsedCloudgramRequest:
     text = raw_text.strip()
     run: GfsRun | None = None
@@ -44,22 +63,30 @@ def parse_cloudgram_request(raw_text: str) -> ParsedCloudgramRequest:
         run = GfsRun(date=run_match.group("date"), cycle=run_match.group("cycle"))
         text = (text[: run_match.start()] + text[run_match.end() :]).strip()
 
+    mode, text = _pop_mode(text)
     lead_from, text = _pop_int(FROM_RE, text, 0)
     lead_to, text = _pop_int(TO_RE, text, CLOUDGRAM_DEFAULT_TO)
     step, text = _pop_int(STEP_RE, text, CLOUDGRAM_DEFAULT_STEP)
     cloudgram_leads(lead_from, lead_to, step)
     if not text:
-        raise ValueError("Не указана точка. Пример: /cloudgram Москва to=72 step=3")
-    return ParsedCloudgramRequest(text, run, lead_from, lead_to, step)
+        raise ValueError("Не указана точка. Пример: /cloudgram Москва to=72 step=3 mode=simple")
+    return ParsedCloudgramRequest(text, run, lead_from, lead_to, step, mode)
 
 
-def format_cloudgram_caption(data: CloudgramData) -> str:
+def format_cloudgram_caption(data: CloudgramData, mode: str = "pro") -> str:
     missing = f"\nНет части полей: {', '.join(data.missing_fields)}" if data.missing_fields else ""
+    max_hazard = max((cell.hazard_score for cell in data.cells), default=0)
+    label = "упрощённый" if mode == "simple" else "профессиональный"
+    details = (
+        "Облака, осадки, гроза, явления, видимость и общий уровень опасности."
+        if mode == "simple"
+        else "Облачность %, осадки мм/шаг, явления, видимость, ВНГО, грозовой риск 0–3 и опасность 0–4."
+    )
     return (
-        f"☁️ GFS 0.25 cloudgram\n"
+        f"☁️ GFS 0.25 cloudgram · {label}\n"
         f"{data.run.date} {data.run.cycle}Z | +{data.leads[0]}…+{data.leads[-1]} ч | шаг {data.leads[1] - data.leads[0] if len(data.leads) > 1 else 0} ч\n"
         f"⊞ {data.grid_lat:.3f},{data.grid_lon:.3f}\n"
-        "Облачность %, осадки мм/срок, гроза proxy 0–3, ВНГО м."
+        f"{details} Макс. опасность: {max_hazard}."
         f"{missing}"
     )
 
@@ -67,7 +94,7 @@ def format_cloudgram_caption(data: CloudgramData) -> str:
 def repeat_cloudgram_command(point: GeoPoint, parsed: ParsedCloudgramRequest, run: GfsRun) -> str:
     return (
         f"/cloudgram {point.lat:.4f} {point.lon:.4f} run={run.date}/{run.cycle} "
-        f"from={parsed.lead_from} to={parsed.lead_to} step={parsed.step}"
+        f"from={parsed.lead_from} to={parsed.lead_to} step={parsed.step} mode={parsed.mode}"
     )
 
 
@@ -79,7 +106,7 @@ async def run_cloudgram_product(message, point: GeoPoint, parsed: ParsedCloudgra
     try:
         async with gfs_semaphore:
             header = (
-                f"CLOUDGRAM | GFS {selected_run.date} {selected_run.cycle}Z | +{leads[0]}…+{leads[-1]} ч\n"
+                f"CLOUDGRAM {parsed.mode.upper()} | GFS {selected_run.date} {selected_run.cycle}Z | +{leads[0]}…+{leads[-1]} ч\n"
                 f"{point.label}\n{point.lat:.4f}, {point.lon:.4f}"
             )
 
@@ -94,18 +121,18 @@ async def run_cloudgram_product(message, point: GeoPoint, parsed: ParsedCloudgra
                     progress_callback=progress_callback,
                 )
                 progress_callback({"stage": "plot_start", "message": "Строю cloudgram"})
-                path = write_cloudgram_png(data)
+                path = write_cloudgram_png(data, mode=parsed.mode)
                 progress_callback({"stage": "plot_done", "message": "Cloudgram готов", "file": str(path)})
                 return data, path
 
             data, png_path = await run_product_with_progress(status, header, worker)
-        await status.edit_text(format_cloudgram_caption(data))
+        await status.edit_text(format_cloudgram_caption(data, parsed.mode))
         if png_path:
             with png_path.open("rb") as file_obj:
                 if len(leads) > 25:
-                    await message.reply_document(document=InputFile(file_obj, filename=png_path.name), caption="Cloudgram GFS")
+                    await message.reply_document(document=InputFile(file_obj, filename=png_path.name), caption=f"Cloudgram GFS · {parsed.mode}")
                 else:
-                    await message.reply_photo(photo=InputFile(file_obj, filename=png_path.name), caption="Cloudgram GFS")
+                    await message.reply_photo(photo=InputFile(file_obj, filename=png_path.name), caption=f"Cloudgram GFS · {parsed.mode}")
         await message.reply_text("Команда для повтора:\n" + repeat_cloudgram_command(point, parsed, selected_run))
     except (GfsProfileError, GeocodeError, ValueError) as exc:
         await status.edit_text(f"Ошибка: {exc}")
@@ -132,7 +159,7 @@ async def resolve_cloudgram_request(message, raw: str, gfs_semaphore, geocode_se
         labels = "\n".join(f"{i + 1}. {point.label}" for i, point in enumerate(candidates[:3]))
         await message.reply_text(
             "Найдено несколько точек. Для cloudgram уточните запрос текстом, например:\n"
-            f"/cloudgram {candidates[0].label} to={parsed.lead_to} step={parsed.step}\n\n"
+            f"/cloudgram {candidates[0].label} to={parsed.lead_to} step={parsed.step} mode={parsed.mode}\n\n"
             f"Варианты:\n{labels}"
         )
         return
