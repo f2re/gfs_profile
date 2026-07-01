@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 
 from gfs_core import ProfileResult
+from plot_style import METEO, add_footer, annotation_box_kwargs, apply_meteo_rcparams, style_axis
 
 SUPPORTED_AERO_DIAGRAMS = {"stuve", "emagram", "skewt"}
 AERO_LEVELS_HPA: tuple[int, ...] | None = None
@@ -13,6 +14,11 @@ DIAGRAM_RU_NAMES = {
     "stuve": "Stüve",
     "emagram": "Эмаграмма",
     "skewt": "Skew-T log-P",
+}
+ISOTHERM_LINE_COLORS = {
+    0.0: METEO.freezing,
+    -10.0: METEO.minus10,
+    -20.0: METEO.minus20,
 }
 
 
@@ -26,7 +32,7 @@ def _diagram_title(result: ProfileResult, diagram_type: str) -> str:
     return (
         f"GFS 0.25 · аэрологическая диаграмма {diagram_name} · запуск {result.run.date} {result.run.cycle}Z · "
         f"срок +{result.lead_hour} ч · действительно {result.valid_time_utc:%Y-%m-%d %H:%M UTC}\n"
-        f"узел GFS {result.grid_lat:.2f}, {result.grid_lon:.2f}; данные модельные, не радиозонд"
+        f"узел GFS {result.grid_lat:.2f}, {result.grid_lon:.2f}; модельный профиль, не радиозонд"
     )
 
 
@@ -74,7 +80,7 @@ def _diagnostic_box_text(result: ProfileResult, df) -> str:
     if "wind_speed_ms" in df:
         max_wind = float(df["wind_speed_ms"].max())
         lines.append(f"Vmax: {max_wind:.0f} м/с")
-    lines.append("Ветер справа: U/V GFS, м/с")
+    lines.append("Барбы справа: U/V GFS, м/с")
     return "\n".join(lines)
 
 
@@ -88,6 +94,29 @@ def _create_metpy_diagram(fig, diagram_type: str):
     return Stuve(fig)
 
 
+def _add_isotherm_guides(axis, temp_min: float, temp_max: float) -> None:
+    for target in ISOTHERM_TARGETS_C:
+        if temp_min <= target <= temp_max:
+            axis.axvline(
+                target,
+                color=ISOTHERM_LINE_COLORS[target],
+                linewidth=1.0 if target == 0 else 0.8,
+                linestyle="-" if target == 0 else "--",
+                alpha=0.82,
+                zorder=1,
+            )
+            axis.text(
+                target,
+                1035,
+                f"{int(target)}°C",
+                ha="center",
+                va="bottom",
+                fontsize=7,
+                color=ISOTHERM_LINE_COLORS[target],
+                bbox={"facecolor": METEO.axes_bg, "edgecolor": "none", "alpha": 0.75, "pad": 1.4},
+            )
+
+
 def _plot_metpy_diagram(result: ProfileResult, diagram_type: str, out_path: Path) -> None:
     import matplotlib
 
@@ -95,7 +124,7 @@ def _plot_metpy_diagram(result: ProfileResult, diagram_type: str, out_path: Path
     import matplotlib.pyplot as plt
     from metpy.units import units
 
-    plt.rcParams.setdefault("font.family", "DejaVu Sans")
+    apply_meteo_rcparams(plt)
 
     df = _prepare_profile(result)
 
@@ -107,36 +136,42 @@ def _plot_metpy_diagram(result: ProfileResult, diagram_type: str, out_path: Path
 
     fig = None
     try:
-        fig = plt.figure(figsize=(10, 10))
+        fig = plt.figure(figsize=(10.5, 10.2), facecolor=METEO.figure_bg)
         diagram = _create_metpy_diagram(fig, diagram_type)
-        diagram.plot(pressure, temperature, linewidth=2.2, label="T — температура")
-        diagram.plot(pressure, dewpoint, linewidth=2.0, label="Td — точка росы")
-        diagram.plot_barbs(pressure, u_wind, v_wind, xloc=1.04)
-        diagram.plot_dry_adiabats(linewidth=0.55, alpha=0.55)
-        diagram.plot_moist_adiabats(linewidth=0.55, alpha=0.55)
-        diagram.plot_mixing_lines(linewidth=0.45, alpha=0.45)
+        diagram.ax.set_facecolor(METEO.axes_bg)
+
+        diagram.plot(pressure, temperature, linewidth=2.5, color=METEO.temperature, label="T — температура", zorder=6)
+        diagram.plot(pressure, dewpoint, linewidth=2.25, color=METEO.dewpoint, label="Td — точка росы", zorder=6)
+        diagram.plot_barbs(pressure, u_wind, v_wind, xloc=1.045, color=METEO.wind, linewidth=0.75)
+        diagram.plot_dry_adiabats(linewidth=0.55, alpha=0.55, color="#C7A569")
+        diagram.plot_moist_adiabats(linewidth=0.60, alpha=0.55, color="#3BA99C")
+        diagram.plot_mixing_lines(linewidth=0.45, alpha=0.46, color="#74A57F")
 
         temp_min = min(-70.0, float(df[["temperature_c", "dewpoint_c"]].min().min()) - 8.0)
         temp_max = max(35.0, float(df["temperature_c"].max()) + 8.0)
         diagram.ax.set_ylim(1050, 100)
         diagram.ax.set_xlim(temp_min, temp_max)
-        diagram.ax.set_title(_diagram_title(result, diagram_type), fontsize=10)
+        _add_isotherm_guides(diagram.ax, temp_min, temp_max)
+
+        style_axis(diagram.ax)
+        diagram.ax.set_title(_diagram_title(result, diagram_type), fontsize=10.5, fontweight="bold", color=METEO.axis_text, pad=14)
         diagram.ax.set_xlabel("Температура T, °C")
         diagram.ax.set_ylabel("Давление p, гПа")
-        diagram.ax.grid(True, which="both", linewidth=0.4, alpha=0.6)
-        diagram.ax.legend(loc="upper right", fontsize=8, framealpha=0.92)
+        diagram.ax.legend(loc="upper right", fontsize=8, framealpha=0.94)
         diagram.ax.text(
-            0.02,
-            0.02,
+            0.022,
+            0.025,
             _diagnostic_box_text(result, df),
             transform=diagram.ax.transAxes,
             ha="left",
             va="bottom",
             fontsize=8,
-            bbox={"boxstyle": "round,pad=0.35", "facecolor": "white", "alpha": 0.88, "edgecolor": "0.4"},
+            color=METEO.axis_text,
+            bbox=annotation_box_kwargs(),
         )
-        fig.tight_layout()
-        fig.savefig(out_path, dpi=170, bbox_inches="tight")
+        add_footer(fig, "Сухие/влажные адиабаты и линии отношения смеси — справочная термодинамическая сетка MetPy. Данные: модельная точка GFS.")
+        fig.tight_layout(rect=(0, 0.04, 1, 0.98))
+        fig.savefig(out_path, dpi=180, bbox_inches="tight")
     finally:
         if fig is not None:
             plt.close(fig)
