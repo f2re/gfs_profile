@@ -45,6 +45,19 @@ SIMPLE_ROWS = (
     CloudgramRow("hazard_simple", "Опасность", ""),
 )
 
+SIMPLE_LEGEND_ITEMS = (
+    ("clear", "ясно"),
+    ("partly", "мало"),
+    ("cloud", "облачно"),
+    ("overcast", "пасмурно"),
+    ("rain_light", "слаб. ос."),
+    ("rain", "осадки"),
+    ("storm", "гроза"),
+    ("fog", "туман"),
+    ("snow", "снег"),
+    ("ice_rain", "лед. дождь"),
+)
+
 HAZARD_COLORS = ("#E8F5E9", "#CDECCB", "#F5D76E", "#F59E0B", "#991B1B")
 VIS_COLORS = ("#7F1D1D", "#EA580C", "#D6A800", "#DCEEFF", "#FFFFFF")
 VIS_BOUNDS = (1.0, 3.0, 5.0, 10.0)
@@ -216,6 +229,18 @@ def _draw_icon(ax, kind: str, x: float, y: float) -> None:
         _draw_raindrops(ax, x + 0.12, y - 0.02, scale=0.11, count=2)
     elif kind.startswith("hazard_"):
         _draw_hazard_icon(ax, x, y, int(kind.rsplit("_", 1)[1]))
+
+
+def _draw_simple_icon_legend(ax, n_cols: int) -> None:
+    if n_cols <= 0:
+        return
+    y_icon = -1.08
+    y_text = -0.78
+    ax.text(-0.48, y_icon, "Легенда:", ha="left", va="center", fontsize=7.2, color=METEO.axis_text, fontweight="bold")
+    for idx, (kind, label) in enumerate(SIMPLE_LEGEND_ITEMS):
+        x = -0.15 + (idx + 0.72) * max(float(n_cols), 14.0) / len(SIMPLE_LEGEND_ITEMS)
+        _draw_icon(ax, kind, x, y_icon)
+        ax.text(x, y_text, label, ha="center", va="center", fontsize=5.6, color=METEO.muted_text)
 
 
 def _draw_cloud_layers_cell(ax, x: int, y: int, cell: CloudgramCell, rectangle_cls, *, simple: bool = False) -> None:
@@ -416,7 +441,7 @@ def _simple_footer(data: CloudgramData) -> str:
     max_hazard = max((cell.hazard_score for cell in data.cells), default=0)
     return (
         "Облака: В/С/Н = верхний/средний/нижний ярус, цвет полосы = покрытие, значок = общая облачность. "
-        "Осадки/гроза/явления рисуются цветными векторными значками; видимость — км. "
+        "Верхняя легенда расшифровывает значки погоды; видимость — км. "
         f"Опасность 0–4: 0 спокойно, 4 опасно. Макс: {max_hazard}."
     )
 
@@ -432,7 +457,7 @@ def _write_grid(data: CloudgramData, rows: tuple[CloudgramRow, ...], cell_func, 
     n_cols = len(data.cells)
     n_rows = len(rows)
     fig_width = max(11.0, n_cols * (0.54 if not simple else 0.50))
-    fig_height = 5.6 if simple else 6.7
+    fig_height = 6.15 if simple else 6.7
 
     tmp = tempfile.NamedTemporaryFile(prefix="gfs_cloudgram", suffix=".png", delete=False)
     out_path = Path(tmp.name)
@@ -441,6 +466,8 @@ def _write_grid(data: CloudgramData, rows: tuple[CloudgramRow, ...], cell_func, 
     try:
         fig, ax = plt.subplots(figsize=(fig_width, fig_height), facecolor=METEO.figure_bg)
         ax.set_facecolor(METEO.axes_bg)
+        if simple:
+            _draw_simple_icon_legend(ax, n_cols)
         for y, row in enumerate(rows):
             for x, cell in enumerate(data.cells):
                 if row.key == "cloud_layers":
@@ -462,8 +489,8 @@ def _write_grid(data: CloudgramData, rows: tuple[CloudgramRow, ...], cell_func, 
         if not simple:
             for y in (0.5, 2.5, 4.5):
                 ax.axhline(y, color="#53687D", linewidth=1.05, alpha=0.72)
-        ax.set_xlim(-0.5, n_cols - 0.5)
-        ax.set_ylim(n_rows + 0.58, -0.5)
+        ax.set_xlim(-0.5, max(n_cols, 14) - 0.5 if simple else n_cols - 0.5)
+        ax.set_ylim(n_rows + 0.58, -1.36 if simple else -0.5)
         ax.set_xticks(range(n_cols))
         ax.set_xticklabels(_hour_lead_labels(data, sparse=n_cols > 60), rotation=0, fontsize=7)
         ax.set_yticks(range(n_rows))
