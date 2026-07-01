@@ -33,17 +33,29 @@ class FormatterTests(unittest.TestCase):
             dataframe=add_derived_parameters(df),
         )
 
-    def test_summary_contains_russian_operational_fields(self) -> None:
+    def test_summary_contains_compact_telegram_fields(self) -> None:
         summary = format_profile_summary(self._result())
         self.assertIn("GFS 0.25", summary)
-        self.assertIn("Узел GFS", summary)
-        self.assertIn("Профиль по уровням", summary)
-        self.assertIn("1.5 км", summary)
-        self.assertIn("Особые точки", summary)
-        self.assertIn("Макс. ветер", summary)
-        self.assertIn("Действительно на", summary)
+        self.assertIn("⊞GFS", summary)
+        self.assertIn("<pre>", summary)
+        self.assertIn("pгПа zкм", summary)
+        self.assertIn("T/Td°C", summary)
+        self.assertIn("🌬 max", summary)
+        self.assertIn("NOMADS subset", summary)
+        self.assertNotIn("температура", summary)
+        self.assertNotIn("точка росы", summary)
+        self.assertNotIn("Макс. ветер", summary)
+        self.assertNotIn("Действительно на", summary)
         self.assertNotIn("Max wind", summary)
         self.assertNotIn("Valid:", summary)
+
+    def test_compact_level_lines_are_short(self) -> None:
+        summary = format_profile_summary(self._result())
+        table = summary.split("<pre>", 1)[1].split("</pre>", 1)[0]
+        level_lines = [line for line in table.splitlines() if line[:1].isdigit()]
+        self.assertTrue(level_lines)
+        for line in level_lines:
+            self.assertLessEqual(len(line), 42)
 
     def test_csv_is_written(self) -> None:
         path = write_profile_csv(self._result())
