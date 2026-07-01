@@ -16,6 +16,7 @@ ASSUME_YES=0
 NO_RESTART=0
 SKIP_PIP=0
 STATUS_ONLY=0
+SKIP_COMMANDS=0
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$SCRIPT_DIR"
@@ -51,6 +52,7 @@ usage() {
   --python PATH           Python-интерпретатор для создания venv, если venv отсутствует
   --yes                   не задавать подтверждающие вопросы
   --skip-pip              не обновлять pip-зависимости
+  --skip-commands         не регистрировать Telegram slash-команды
   --no-restart            не перезапускать systemd-сервис
   --status                только показать состояние
   -h, --help              показать справку
@@ -65,6 +67,7 @@ while [[ $# -gt 0 ]]; do
     --python) PYTHON_BIN="$2"; shift 2 ;;
     --yes) ASSUME_YES=1; shift ;;
     --skip-pip) SKIP_PIP=1; shift ;;
+    --skip-commands) SKIP_COMMANDS=1; shift ;;
     --no-restart) NO_RESTART=1; shift ;;
     --status) STATUS_ONLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -127,6 +130,7 @@ print_status() {
   [[ -f "$ENV_FILE" ]] && success ".env найден: $ENV_FILE" || warn ".env не найден: $ENV_FILE"
   [[ -x "$VENV_DIR/bin/python" ]] && success "venv найден: $VENV_DIR" || warn "venv не найден: $VENV_DIR"
   [[ -f "$UNIT_PATH" ]] && success "systemd unit найден: $UNIT_PATH" || warn "systemd unit не найден: $UNIT_PATH"
+  [[ -f "$INSTALL_DIR/register_telegram_commands.py" ]] && success "registrar команд найден" || warn "registrar команд не найден в $INSTALL_DIR"
   if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files "${SERVICE_NAME}.service" >/dev/null 2>&1; then
     printf 'Активность сервиса: ' >&2
     systemctl is-active "${SERVICE_NAME}.service" >&2 || true
@@ -139,6 +143,7 @@ require_ready_install() {
   [[ -f "$REPO_ROOT/requirements.txt" ]] || fail "В источнике нет requirements.txt: $REPO_ROOT"
   [[ -f "$REPO_ROOT/gfs_core.py" ]] || fail "В источнике нет gfs_core.py: $REPO_ROOT"
   [[ -f "$REPO_ROOT/runtime_check.py" ]] || fail "В источнике нет runtime_check.py: $REPO_ROOT"
+  [[ -f "$REPO_ROOT/register_telegram_commands.py" ]] || fail "В источнике нет register_telegram_commands.py: $REPO_ROOT"
   [[ -d "$INSTALL_DIR" ]] || fail "Каталог $INSTALL_DIR не существует. Сначала выполните bash install_telegram_bot.sh"
   [[ -f "$ENV_FILE" ]] || fail "Нет $ENV_FILE. Сначала выполните первичную установку, чтобы задать TELEGRAM_BOT_TOKEN"
   id "$SERVICE_USER" >/dev/null 2>&1 || fail "Пользователь $SERVICE_USER не найден. Сначала выполните первичную установку"
@@ -208,6 +213,23 @@ restart_service() {
   fi
 }
 
+register_telegram_commands() {
+  if [[ "$SKIP_COMMANDS" -eq 1 ]]; then
+    warn "Регистрация Telegram-команд пропущена (--skip-commands)"
+    return 0
+  fi
+  if [[ ! -f "$INSTALL_DIR/register_telegram_commands.py" ]]; then
+    warn "register_telegram_commands.py не найден; меню Telegram не обновлено"
+    return 0
+  fi
+  log "Регистрирую Telegram slash-команды"
+  if run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" MPLBACKEND=Agg "$VENV_DIR/bin/python" "$INSTALL_DIR/register_telegram_commands.py"; then
+    success "Telegram-команды зарегистрированы"
+  else
+    warn "Не удалось зарегистрировать Telegram-команды. Сервис уже обновлён; повторите вручную: cd $INSTALL_DIR && $VENV_DIR/bin/python register_telegram_commands.py"
+  fi
+}
+
 write_state() {
   local rev installed_at
   rev="$(git_rev)"
@@ -223,6 +245,7 @@ service_user=$SERVICE_USER
 venv=$VENV_DIR
 unit=$UNIT_PATH
 runtime_check=ok
+telegram_commands=attempted
 EOF
   run_root chown "$SERVICE_USER:$SERVICE_USER" "$STATE_FILE"
 }
@@ -242,8 +265,9 @@ main() {
   copy_project
   ensure_venv_and_deps
   runtime_check
-  write_state
   restart_service
+  register_telegram_commands
+  write_state
   success "Deploy завершён: $(git_rev)"
 }
 
