@@ -7,7 +7,7 @@ from typing import NamedTuple
 
 from telegram import InputFile
 
-from geocode import GeocodeError
+from geocode import GeoPoint, GeocodeError
 from geocode_choices import search_location_candidates
 from gfs_core import GfsProfileError, GfsRun, latest_available_run_for_lead
 from product_progress import run_product_with_progress
@@ -72,28 +72,14 @@ def format_windgram_caption(data: WindgramData) -> str:
     )
 
 
-async def resolve_windgram_request(message, raw: str, gfs_semaphore, geocode_semaphore) -> None:
-    try:
-        parsed = parse_windgram_request(raw)
-        async with geocode_semaphore:
-            candidates = await asyncio.to_thread(search_location_candidates, parsed.location_query, 3)
-    except (GeocodeError, ValueError, GfsProfileError) as exc:
-        await message.reply_text(f"Ошибка: {exc}")
-        return
+def repeat_windgram_command(point: GeoPoint, parsed: ParsedWindgramRequest, run: GfsRun) -> str:
+    return (
+        f"/windgram {point.lat:.4f} {point.lon:.4f} run={run.date}/{run.cycle} "
+        f"from={parsed.lead_from} to={parsed.lead_to} step={parsed.step} top={parsed.top_hpa}"
+    )
 
-    if not candidates:
-        await message.reply_text("Точка не найдена. Пришлите координаты или геолокацию Telegram.")
-        return
-    if len(candidates) > 1:
-        labels = "\n".join(f"{i + 1}. {point.label}" for i, point in enumerate(candidates[:3]))
-        await message.reply_text(
-            "Найдено несколько точек. Для windgram уточните запрос текстом, например:\n"
-            f"/windgram {candidates[0].label} to={parsed.lead_to}\n\n"
-            f"Варианты:\n{labels}"
-        )
-        return
 
-    point = candidates[0]
+async def run_windgram_product(message, point: GeoPoint, parsed: ParsedWindgramRequest, gfs_semaphore) -> None:
     leads = windgram_leads(lead_from=parsed.lead_from, lead_to=parsed.lead_to, step=parsed.step)
     selected_run = parsed.run or await asyncio.to_thread(latest_available_run_for_lead, max(leads))
     status = await message.reply_text("0/6 Готовлю windgram: выбираю единый запуск GFS…")
@@ -129,6 +115,7 @@ async def resolve_windgram_request(message, raw: str, gfs_semaphore, geocode_sem
                     await message.reply_document(document=InputFile(file_obj, filename=png_path.name), caption="Windgram GFS: полный PNG")
                 else:
                     await message.reply_photo(photo=InputFile(file_obj, filename=png_path.name), caption="Windgram GFS")
+        await message.reply_text("Команда для повтора:\n" + repeat_windgram_command(point, parsed, selected_run))
     except (GfsProfileError, GeocodeError, ValueError) as exc:
         await status.edit_text(f"Ошибка: {exc}")
     except Exception as exc:
@@ -136,3 +123,27 @@ async def resolve_windgram_request(message, raw: str, gfs_semaphore, geocode_sem
     finally:
         if png_path:
             png_path.unlink(missing_ok=True)
+
+
+async def resolve_windgram_request(message, raw: str, gfs_semaphore, geocode_semaphore) -> None:
+    try:
+        parsed = parse_windgram_request(raw)
+        async with geocode_semaphore:
+            candidates = await asyncio.to_thread(search_location_candidates, parsed.location_query, 3)
+    except (GeocodeError, ValueError, GfsProfileError) as exc:
+        await message.reply_text(f"Ошибка: {exc}")
+        return
+
+    if not candidates:
+        await message.reply_text("Точка не найдена. Пришлите координаты или геолокацию Telegram.")
+        return
+    if len(candidates) > 1:
+        labels = "\n".join(f"{i + 1}. {point.label}" for i, point in enumerate(candidates[:3]))
+        await message.reply_text(
+            "Найдено несколько точек. Для windgram уточните запрос текстом, например:\n"
+            f"/windgram {candidates[0].label} to={parsed.lead_to}\n\n"
+            f"Варианты:\n{labels}"
+        )
+        return
+
+    await run_windgram_product(message, candidates[0], parsed, gfs_semaphore)
