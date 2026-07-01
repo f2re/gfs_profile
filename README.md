@@ -12,7 +12,7 @@ Telegram-бот и веб-интерфейс для модельных верт�
 - 📈 `/profile` — вертикальный профиль T/Td/RH/ветер/изотермы.
 - 🧾 `/aero` и `/skewt` — аэрологические диаграммы Stüve/Emagram/Skew-T через MetPy.
 - 🟦 `/windgram` — срок × уровень: ветер, температура или влажность, со стрелками направления ветра.
-- ☁️ `/cloudgram` — единый график облачности, зелёных осадков, типа осадков, грозового proxy и ВНГО.
+- ☁️ `/cloudgram` — облачность, осадки, явления, видимость, грозовой риск и общая опасность в режимах `pro` и `simple`.
 - 📋 После настройки wizard показывает команду для копирования и повторного запуска.
 
 ## Быстрая установка
@@ -43,8 +43,6 @@ sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
 ```
 
 ## Telegram-команды
-
-Команды для регистрации через Bot API / BotFather menu:
 
 ```text
 start - 🚀 Старт и геолокация
@@ -93,7 +91,8 @@ Flow:
 ```text
 /aero 45.0000 39.0000 +24 type=skewt
 /windgram 45.0000 39.0000 from=0 to=120 step=6 top=500 param=temp
-/cloudgram 45.0000 39.0000 from=0 to=72 step=3
+/cloudgram 45.0000 39.0000 from=0 to=72 step=3 mode=pro
+/cloudgram 45.0000 39.0000 from=0 to=72 step=3 mode=simple
 ```
 
 ## Примеры ручных команд
@@ -112,14 +111,24 @@ Flow:
 /windgram 55.75 37.62 run=20260701/00 from=0 to=120 step=6 top=500 param=temp
 
 /cloudgram Москва
-/cloudgram Москва to=72 step=3
-/clouds Москва to=72 step=3
-/cloudgram 55.75 37.62 run=20260701/00 from=0 to=72 step=3
+/cloudgram Москва to=72 step=3 mode=pro
+/cloudgram Москва to=72 step=3 mode=simple
+/clouds Москва to=72 step=3 mode=simple
+/cloudgram 55.75 37.62 run=20260701/00 from=0 to=72 step=3 mode=pro
 ```
 
 ## Cloudgram
 
-`/cloudgram` — единый лаконичный график, без режимов переключения. Ось X — сроки прогноза. Строки фиксированы:
+`/cloudgram` строит единый график состояния погоды по срокам GFS. Поддерживаются два режима:
+
+```text
+mode=pro      профессиональная таблица параметров
+mode=simple   упрощённая схема для неметеорологов
+```
+
+### `mode=pro`
+
+Профессиональный режим показывает фиксированные строки:
 
 ```text
 Высокая облачность  HCDC, %
@@ -128,18 +137,27 @@ Flow:
 Общая облачность    TCDC, %
 Осадки              APCP, мм за срок
 Тип осадков         R / S / FZ / IP / mix
-Гроза               Cb proxy 0–3
+Явления             RA / SN / FZRA / FG / TSRA
+Видимость           VIS, км
 ВНГО                cloud ceiling, м
+Грозовой риск       proxy 0–3
+Опасность           composite 0–4
 ```
 
-Визуальные правила:
+### `mode=simple`
 
-- облачность — однородная серо-синяя палитра;
-- в центре каждой облачной ячейки — значение покрытия в процентах;
-- осадки — только зелёная шкала, в центре мм за срок;
-- гроза — отдельная строка proxy 0–3, не факт наблюдения Cb;
-- ВНГО — отдельная строка с высотой;
-- default `to=72 step=3`, максимум `to=120`.
+Упрощённый режим агрегирует параметры в понятные строки:
+
+```text
+Облака      ☀️ / 🌤️ / ⛅ / ☁️
+Осадки      🌦️ / 🌧️ / 🌧️🌧️
+Гроза       ⚡ / ⚡⚡ / ⛈️
+Явления     🌧️ / 🌨️ / 🧊🌧️ / 🌫️ / ⛈️
+Видимость   км
+Опасность   ✅ / 🟡 / 🟠 / 🔴 / ⛔
+```
+
+Для обоих режимов ось X подписывается горизонтально: сверху дата/час UTC, ниже заблаговременность `+N`.
 
 ## Windgram
 
@@ -177,7 +195,7 @@ aero_plot.py             MetPy Stüve/Emagram/Skew-T
 windgram_product.py      V/T/RH matrix
 windgram_plot.py         windgram renderer
 cloudgram_product.py     cloud/precip/thunder/ceiling summary
-cloudgram_plot.py        cloudgram renderer
+cloudgram_plot.py        cloudgram pro/simple renderer
 telegram_product_wizard.py wizard UI
 telegram_aero.py         /aero и /skewt
 telegram_windgram.py     /windgram
@@ -205,6 +223,6 @@ PYTHONUNBUFFERED         1
 ## Ограничения
 
 - Все продукты — модель GFS, не наблюдения.
-- ВНГО и Cb в `/cloudgram` — модельная диагностика; Cb отображается как proxy/риск 0–3.
+- ВНГО, грозовой риск и общая опасность в `/cloudgram` — модельная диагностика, не факт наблюдения.
 - Для части GFS-полей возможны пропуски; продукт должен строиться с доступными слоями и показывать список отсутствующих полей.
 - Для широких PNG Telegram может отправлять документ вместо фото, чтобы не сжимать изображение.
