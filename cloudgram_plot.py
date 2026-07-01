@@ -131,7 +131,7 @@ def _draw_cloud_layers_cell(ax, x: int, y: int, cell: CloudgramCell, rectangle_c
             ha="center",
             va="center",
             fontsize=7.0,
-            color=value_text_color(float(cell.total_cloud_pct or 0.0), param="cloud"),
+            color=METEO.axis_text,
             fontweight="bold",
             bbox={"boxstyle": "round,pad=0.10", "facecolor": "#FFFFFF", "alpha": 0.78, "edgecolor": "none"},
         )
