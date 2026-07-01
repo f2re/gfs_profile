@@ -22,6 +22,7 @@ SERVICE_USER="${SERVICE_USER:-$DEFAULT_SERVICE_USER}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 ASSUME_YES=0
 SKIP_APT=0
+SKIP_COMMANDS=0
 NO_START=0
 STATUS_ONLY=0
 TELEGRAM_BOT_TOKEN_FINAL=""
@@ -56,6 +57,7 @@ $APP_NAME — установка Telegram-бота
   --python PATH           Python-интерпретатор, по умолчанию python3
   --yes                   не задавать подтверждающие вопросы, брать значения по умолчанию
   --skip-apt              не устанавливать системные пакеты через apt
+  --skip-commands         не регистрировать Telegram slash-команды
   --no-start              создать сервис, но не запускать
   --status                только показать состояние установки
   -h, --help              показать справку
@@ -75,6 +77,7 @@ while [[ $# -gt 0 ]]; do
     --python) PYTHON_BIN="$2"; shift 2 ;;
     --yes) ASSUME_YES=1; shift ;;
     --skip-apt) SKIP_APT=1; shift ;;
+    --skip-commands) SKIP_COMMANDS=1; shift ;;
     --no-start) NO_START=1; shift ;;
     --status) STATUS_ONLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -156,9 +159,9 @@ append_rw_path() {
 
 print_status() {
   section "Состояние"
-  if [[ -d "$INSTALL_DIR" ]]; then success "Каталог установки: $INSTALL_DIR"; else warn "Каталог установки отсутствует: $INSTALL_DIR"; fi
-  if id "$SERVICE_USER" >/dev/null 2>&1; then success "Пользователь сервиса: $SERVICE_USER"; else warn "Пользователь сервиса отсутствует: $SERVICE_USER"; fi
-  if [[ -x "$VENV_DIR/bin/python" ]]; then success "Python venv: $VENV_DIR"; else warn "Python venv не найден: $VENV_DIR"; fi
+  [[ -d "$INSTALL_DIR" ]] && success "Каталог установки: $INSTALL_DIR" || warn "Каталог установки отсутствует: $INSTALL_DIR"
+  id "$SERVICE_USER" >/dev/null 2>&1 && success "Пользователь сервиса: $SERVICE_USER" || warn "Пользователь сервиса отсутствует: $SERVICE_USER"
+  [[ -x "$VENV_DIR/bin/python" ]] && success "Python venv: $VENV_DIR" || warn "Python venv не найден: $VENV_DIR"
   if [[ -f "$ENV_FILE" ]]; then
     local token
     token="$(get_env_value TELEGRAM_BOT_TOKEN "$ENV_FILE")"
@@ -166,19 +169,15 @@ print_status() {
   else
     warn ".env не найден: $ENV_FILE"
   fi
-  if [[ -f "$UNIT_PATH" ]]; then success "systemd unit: $UNIT_PATH"; else warn "systemd unit отсутствует: $UNIT_PATH"; fi
-  if command -v systemctl >/dev/null 2>&1; then
-    if systemctl list-unit-files "${SERVICE_NAME}.service" >/dev/null 2>&1; then
-      printf 'Активность сервиса: ' >&2
-      systemctl is-active "${SERVICE_NAME}.service" >&2 || true
-      printf 'Автозапуск: ' >&2
-      systemctl is-enabled "${SERVICE_NAME}.service" >&2 || true
-    fi
+  [[ -f "$UNIT_PATH" ]] && success "systemd unit: $UNIT_PATH" || warn "systemd unit отсутствует: $UNIT_PATH"
+  [[ -f "$INSTALL_DIR/register_telegram_commands.py" ]] && success "registrar команд найден" || warn "registrar команд не найден"
+  if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files "${SERVICE_NAME}.service" >/dev/null 2>&1; then
+    printf 'Активность сервиса: ' >&2
+    systemctl is-active "${SERVICE_NAME}.service" >&2 || true
+    printf 'Автозапуск: ' >&2
+    systemctl is-enabled "${SERVICE_NAME}.service" >&2 || true
   fi
-  if [[ -f "$STATE_FILE" ]]; then
-    echo "Состояние установки:" >&2
-    sed 's/^/  /' "$STATE_FILE" >&2 || true
-  fi
+  [[ -f "$STATE_FILE" ]] && { echo "Состояние установки:" >&2; sed 's/^/  /' "$STATE_FILE" >&2 || true; }
 }
 
 require_repo_files() {
@@ -186,6 +185,7 @@ require_repo_files() {
   [[ -f "$REPO_ROOT/requirements.txt" ]] || fail "Не найден requirements.txt."
   [[ -f "$REPO_ROOT/gfs_core.py" ]] || fail "Не найден gfs_core.py."
   [[ -f "$REPO_ROOT/runtime_check.py" ]] || fail "Не найден runtime_check.py. Обновите checkout перед установкой."
+  [[ -f "$REPO_ROOT/register_telegram_commands.py" ]] || fail "Не найден register_telegram_commands.py. Обновите checkout перед установкой."
 }
 
 install_system_packages() {
@@ -366,6 +366,23 @@ EOF
   run_root systemctl daemon-reload
 }
 
+register_telegram_commands() {
+  if [[ "$SKIP_COMMANDS" -eq 1 ]]; then
+    warn "Регистрация Telegram-команд пропущена (--skip-commands)"
+    return 0
+  fi
+  if [[ ! -f "$INSTALL_DIR/register_telegram_commands.py" ]]; then
+    warn "register_telegram_commands.py не найден; меню Telegram не обновлено"
+    return 0
+  fi
+  log "Регистрирую Telegram slash-команды"
+  if run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" MPLBACKEND=Agg "$VENV_DIR/bin/python" "$INSTALL_DIR/register_telegram_commands.py"; then
+    success "Telegram-команды зарегистрированы"
+  else
+    warn "Не удалось зарегистрировать Telegram-команды. Бот установлен; повторите вручную: cd $INSTALL_DIR && $VENV_DIR/bin/python register_telegram_commands.py"
+  fi
+}
+
 write_state() {
   cat <<EOF | run_root tee "$STATE_FILE" >/dev/null
 installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -377,6 +394,7 @@ venv=$VENV_DIR
 unit=$UNIT_PATH
 read_write_paths=$INSTALL_DIR$EXTRA_READ_WRITE_PATHS
 runtime_check=ok
+telegram_commands=attempted
 EOF
   run_root chown "$SERVICE_USER:$SERVICE_USER" "$STATE_FILE"
 }
@@ -429,8 +447,9 @@ main() {
   runtime_check
   write_env
   write_service
-  write_state
   start_service
+  register_telegram_commands
+  write_state
 
   section "Готово"
   success "Бот установлен и настроен"
