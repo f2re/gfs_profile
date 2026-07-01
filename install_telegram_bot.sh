@@ -10,7 +10,9 @@ DEFAULT_SERVICE_NAME="gfs-profile-bot"
 DEFAULT_SERVICE_USER="gfsbot"
 DEFAULT_DEFAULT_LEAD="24"
 DEFAULT_MAX_CONCURRENT_GFS="2"
+DEFAULT_MAX_CONCURRENT_GEOCODE="2"
 DEFAULT_CACHE_TTL="86400"
+DEFAULT_AVAILABILITY_CACHE_TTL="300"
 DEFAULT_REQUEST_TIMEOUT="35"
 DEFAULT_GEOCODE_TIMEOUT="12"
 
@@ -59,9 +61,9 @@ $APP_NAME — установка Telegram-бота
   -h, --help              показать справку
 
 Переменные окружения можно задать заранее:
-  TELEGRAM_BOT_TOKEN, DEFAULT_LEAD, MAX_CONCURRENT_GFS, GFS_CACHE_DIR,
-  GFS_CACHE_TTL_SECONDS, GFS_REQUEST_TIMEOUT, GEOCODER_USER_AGENT,
-  GEOCODE_CACHE_DIR, GEOCODE_TIMEOUT
+  TELEGRAM_BOT_TOKEN, DEFAULT_LEAD, MAX_CONCURRENT_GFS, MAX_CONCURRENT_GEOCODE,
+  GFS_CACHE_DIR, GFS_CACHE_TTL_SECONDS, GFS_AVAILABILITY_CACHE_TTL_SECONDS,
+  GFS_REQUEST_TIMEOUT, GEOCODER_USER_AGENT, GEOCODE_CACHE_DIR, GEOCODE_TIMEOUT
 EOF
 }
 
@@ -273,12 +275,14 @@ ask_token() {
 }
 
 write_env() {
-  local token default_lead max_concurrent cache_dir ttl timeout ua geocode_dir geocode_timeout
+  local token default_lead max_concurrent max_geocode cache_dir ttl availability_ttl timeout ua geocode_dir geocode_timeout
   token="${TELEGRAM_BOT_TOKEN_FINAL:-$(ask_token)}"
   default_lead="$(ask_default "Срок прогноза по умолчанию, часы" "${DEFAULT_LEAD:-$DEFAULT_DEFAULT_LEAD}")"
   max_concurrent="$(ask_default "Максимум одновременных GFS-запросов" "${MAX_CONCURRENT_GFS:-$DEFAULT_MAX_CONCURRENT_GFS}")"
+  max_geocode="$(ask_default "Максимум одновременных геокодинг-запросов" "${MAX_CONCURRENT_GEOCODE:-$DEFAULT_MAX_CONCURRENT_GEOCODE}")"
   cache_dir="$(ask_default "Каталог кэша GRIB2" "${GFS_CACHE_DIR:-.cache_gfs}")"
   ttl="$(ask_default "TTL кэша GRIB2, секунд" "${GFS_CACHE_TTL_SECONDS:-$DEFAULT_CACHE_TTL}")"
+  availability_ttl="$(ask_default "TTL проверки публикации GFS, секунд" "${GFS_AVAILABILITY_CACHE_TTL_SECONDS:-$DEFAULT_AVAILABILITY_CACHE_TTL}")"
   timeout="$(ask_default "Timeout NOMADS, секунд" "${GFS_REQUEST_TIMEOUT:-$DEFAULT_REQUEST_TIMEOUT}")"
   ua="$(ask_default "User-Agent геокодера" "${GEOCODER_USER_AGENT:-gfs-profile-telegram-bot/0.1}")"
   geocode_dir="$(ask_default "Каталог кэша геокодера" "${GEOCODE_CACHE_DIR:-.cache_gfs/geocode}")"
@@ -290,8 +294,10 @@ write_env() {
 TELEGRAM_BOT_TOKEN=$token
 DEFAULT_LEAD=$default_lead
 MAX_CONCURRENT_GFS=$max_concurrent
+MAX_CONCURRENT_GEOCODE=$max_geocode
 GFS_CACHE_DIR=$cache_dir
 GFS_CACHE_TTL_SECONDS=$ttl
+GFS_AVAILABILITY_CACHE_TTL_SECONDS=$availability_ttl
 GFS_REQUEST_TIMEOUT=$timeout
 GEOCODER_USER_AGENT=$ua
 GEOCODE_CACHE_DIR=$geocode_dir

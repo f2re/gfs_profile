@@ -6,6 +6,7 @@ import math
 import os
 import sys
 import tempfile
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -23,10 +24,21 @@ from requests import RequestException
 NOMADS_BASE = os.getenv("NOMADS_BASE", "https://nomads.ncep.noaa.gov")
 REQUEST_TIMEOUT = int(os.getenv("GFS_REQUEST_TIMEOUT", os.getenv("REQUEST_TIMEOUT", "35")))
 CACHE_TTL_SECONDS = int(os.getenv("GFS_CACHE_TTL_SECONDS", str(24 * 3600)))
+AVAILABILITY_CACHE_TTL_SECONDS = int(os.getenv("GFS_AVAILABILITY_CACHE_TTL_SECONDS", "300"))
 CACHE_DIR = Path(os.getenv("GFS_CACHE_DIR", os.getenv("CACHE_DIR", ".cache_gfs")))
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 GRID_STEP_DEG = 0.25
 ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+@dataclass
+class _DownloadLock:
+    lock: threading.Lock
+    refs: int = 0
+
+
+_DOWNLOAD_LOCKS: dict[str, _DownloadLock] = {}
+_DOWNLOAD_LOCKS_LOCK = threading.Lock()
 
 DEFAULT_PROFILE_LEVELS_HPA = (
     1000,
@@ -222,10 +234,12 @@ def grib_filter_url(
     return f"{NOMADS_BASE}/cgi-bin/filter_gfs_0p25_1hr.pl?{urlencode(query)}"
 
 
-@lru_cache(maxsize=4096)
-def forecast_file_exists(date: str, cycle: str, lead_hour: int) -> bool:
-    """Check that the exact GFS forecast file for this cycle and lead is published."""
+def _availability_cache_bucket() -> int:
+    return int(time.time() // max(1, AVAILABILITY_CACHE_TTL_SECONDS))
 
+
+@lru_cache(maxsize=4096)
+def _forecast_file_exists_cached(date: str, cycle: str, lead_hour: int, cache_bucket: int) -> bool:
     validate_lead(lead_hour)
     try:
         response = requests.head(source_idx_url(date, cycle, lead_hour), timeout=12)
@@ -234,9 +248,27 @@ def forecast_file_exists(date: str, cycle: str, lead_hour: int) -> bool:
         return False
 
 
+def forecast_file_exists(date: str, cycle: str, lead_hour: int) -> bool:
+    """Check that the exact GFS forecast file is published, with short-lived availability caching."""
+
+    return _forecast_file_exists_cached(date, cycle, lead_hour, _availability_cache_bucket())
+
+
+forecast_file_exists.cache_info = _forecast_file_exists_cached.cache_info  # type: ignore[attr-defined]
+forecast_file_exists.cache_clear = _forecast_file_exists_cached.cache_clear  # type: ignore[attr-defined]
+
+
 @lru_cache(maxsize=256)
-def cycle_exists(date: str, cycle: str) -> bool:
+def _cycle_exists_cached(date: str, cycle: str, cache_bucket: int) -> bool:
     return forecast_file_exists(date, cycle, 0)
+
+
+def cycle_exists(date: str, cycle: str) -> bool:
+    return _cycle_exists_cached(date, cycle, _availability_cache_bucket())
+
+
+cycle_exists.cache_info = _cycle_exists_cached.cache_info  # type: ignore[attr-defined]
+cycle_exists.cache_clear = _cycle_exists_cached.cache_clear  # type: ignore[attr-defined]
 
 
 def latest_available_run_for_lead(lead_hour: int, reference_time: datetime | None = None) -> GfsRun:
@@ -265,36 +297,76 @@ def latest_available_run(reference_time: datetime | None = None) -> GfsRun:
 
 def clean_old_cache() -> None:
     cutoff = time.time() - CACHE_TTL_SECONDS
-    for path in CACHE_DIR.glob("*.grib2"):
-        try:
-            if path.stat().st_mtime < cutoff:
-                path.unlink(missing_ok=True)
-        except OSError:
-            continue
+    for pattern in ("*.grib2", "*.part"):
+        for path in CACHE_DIR.glob(pattern):
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink(missing_ok=True)
+            except OSError:
+                continue
 
 
-def download_profile_grib_to_disk(
+def _acquire_download_lock(key: str) -> _DownloadLock:
+    with _DOWNLOAD_LOCKS_LOCK:
+        entry = _DOWNLOAD_LOCKS.get(key)
+        if entry is None:
+            entry = _DownloadLock(threading.Lock())
+            _DOWNLOAD_LOCKS[key] = entry
+        entry.refs += 1
+        return entry
+
+
+def _release_download_lock(key: str, entry: _DownloadLock) -> None:
+    with _DOWNLOAD_LOCKS_LOCK:
+        entry.refs -= 1
+        if entry.refs <= 0 and _DOWNLOAD_LOCKS.get(key) is entry:
+            _DOWNLOAD_LOCKS.pop(key, None)
+
+
+def _validate_grib_file(path: Path) -> None:
+    try:
+        with path.open("rb") as file_obj:
+            magic = file_obj.read(4)
+    except OSError as exc:
+        raise GfsProfileError(f"Не удалось прочитать загруженный GRIB2: {exc}") from exc
+    if magic != b"GRIB":
+        path.unlink(missing_ok=True)
+        raise GfsProfileError("NOMADS вернул ответ без сигнатуры GRIB")
+
+
+def invalidate_grib_cache_file(path: Path) -> None:
+    try:
+        if path.is_file() and path.suffix == ".grib2" and path.parent == CACHE_DIR:
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _download_profile_grib_to_disk_unlocked(
     date: str,
     cycle: str,
     lead_hour: int,
     lat: float,
     lon: float,
+    levels_hpa: tuple[int, ...] | None,
+    key: str,
+    out_path: Path,
     progress_callback: ProgressCallback | None = None,
 ) -> Path:
-    validate_lead(lead_hour)
-    clean_old_cache()
-    levels_hpa = configured_pressure_levels_hpa()
-    key = cache_key(date, cycle, lead_hour, lat, lon, levels_hpa)
-    out_path = CACHE_DIR / f"{key}.grib2"
     if out_path.exists():
-        _emit(progress_callback, stage="cache", message="GRIB2 найден в файловом кэше", file=str(out_path), bytes=out_path.stat().st_size)
-        return out_path
+        try:
+            _validate_grib_file(out_path)
+            _emit(progress_callback, stage="cache", message="GRIB2 найден в файловом кэше", file=str(out_path), bytes=out_path.stat().st_size)
+            return out_path
+        except GfsProfileError:
+            out_path.unlink(missing_ok=True)
 
     if not forecast_file_exists(date, cycle, lead_hour):
         raise GfsProfileError(f"Файл GFS для {date} {cycle}Z +{lead_hour} ч ещё не опубликован")
 
     url = grib_filter_url(date, cycle, lead_hour, lat, lon, levels_hpa)
     part_path = CACHE_DIR / f"{key}.part"
+    part_path.unlink(missing_ok=True)
     _emit(
         progress_callback,
         stage="download_start",
@@ -342,8 +414,41 @@ def download_profile_grib_to_disk(
         part_path.unlink(missing_ok=True)
         raise GfsProfileError("Получен слишком маленький ответ от GFS Filter")
 
+    _validate_grib_file(part_path)
     part_path.replace(out_path)
     return out_path
+
+
+def download_profile_grib_to_disk(
+    date: str,
+    cycle: str,
+    lead_hour: int,
+    lat: float,
+    lon: float,
+    progress_callback: ProgressCallback | None = None,
+) -> Path:
+    validate_lead(lead_hour)
+    clean_old_cache()
+    levels_hpa = configured_pressure_levels_hpa()
+    key = cache_key(date, cycle, lead_hour, lat, lon, levels_hpa)
+    out_path = CACHE_DIR / f"{key}.grib2"
+
+    lock_entry = _acquire_download_lock(key)
+    try:
+        with lock_entry.lock:
+            return _download_profile_grib_to_disk_unlocked(
+                date,
+                cycle,
+                lead_hour,
+                lat,
+                lon,
+                levels_hpa,
+                key,
+                out_path,
+                progress_callback=progress_callback,
+            )
+    finally:
+        _release_download_lock(key, lock_entry)
 
 
 def open_isobaric_dataset(grib_path: Path, idx_path: str):
@@ -474,7 +579,12 @@ def build_profile(
     grid_lat, grid_lon = snap_to_gfs_grid(lat, lon)
     _emit(progress_callback, stage="grid", message="Точка привязана к узлу GFS", grid_lat=grid_lat, grid_lon=grid_lon)
     grib_path = download_profile_grib_to_disk(run.date, run.cycle, lead_hour, grid_lat, grid_lon, progress_callback=progress_callback)
-    df = extract_profile_from_grib_file(grib_path, progress_callback=progress_callback)
+    try:
+        df = extract_profile_from_grib_file(grib_path, progress_callback=progress_callback)
+    except GfsProfileError as exc:
+        if "Ошибка чтения GRIB2" in str(exc):
+            invalidate_grib_cache_file(grib_path)
+        raise
     _emit(progress_callback, stage="done", message="Профиль готов", rows=len(df))
     return ProfileResult(
         run=run,

@@ -19,7 +19,9 @@ from telegram_ui import lead_keyboard, lead_page_text, location_keyboard, place_
 
 DEFAULT_LEAD = int(os.getenv("DEFAULT_LEAD", "24"))
 MAX_CONCURRENT_GFS = int(os.getenv("MAX_CONCURRENT_GFS", "2"))
+MAX_CONCURRENT_GEOCODE = int(os.getenv("MAX_CONCURRENT_GEOCODE", "2"))
 GFS_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_GFS)
+GEOCODE_SEMAPHORE = asyncio.Semaphore(MAX_CONCURRENT_GEOCODE)
 RUN_RE = re.compile(r"\brun=(?P<date>\d{8})[/-]?(?P<cycle>00|06|12|18)\b", re.IGNORECASE)
 LEAD_RE = re.compile(r"(?:^|\s)(?:lead=|\+|f)?(?P<lead>\d{1,3})(?:\s*(?:h|ч|час|часа|часов))?\s*$", re.IGNORECASE)
 
@@ -146,6 +148,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         except GfsProfileError as exc:
             lines.append(f"• +{lead} ч: недоступно — {exc}")
     lines.append(f"• Одновременных GFS-запросов: {MAX_CONCURRENT_GFS}")
+    lines.append(f"• Одновременных геокодинг-запросов: {MAX_CONCURRENT_GEOCODE}")
     lines.append(f"• Кэш GRIB2: {CACHE_DIR}")
     await message.reply_text("\n".join(lines))
 
@@ -155,28 +158,24 @@ async def run_profile(message, point: GeoPoint, lead_hour: int, run: GfsRun | No
     csv_path: Path | None = None
     png_path: Path | None = None
     try:
-        selected_run = run or await asyncio.to_thread(latest_available_run_for_lead, lead_hour)
         async with GFS_SEMAPHORE:
+            selected_run = run or await asyncio.to_thread(latest_available_run_for_lead, lead_hour)
             result = await build_profile_with_progress(status, selected_run, lead_hour, point)
-        await status.edit_text("5/5 Профиль рассчитан. Формирую русскую сводку, PNG и CSV…")
-        summary = format_profile_summary(result)
-        csv_path = write_profile_csv(result)
-        png_path = write_profile_png(result)
-    except (GfsProfileError, GeocodeError, ValueError) as exc:
-        await status.edit_text(f"Ошибка: {exc}")
-        return
-    except Exception as exc:
-        await status.edit_text(f"Непредвиденная ошибка: {exc}")
-        return
-
-    await status.edit_text(summary)
-    try:
+            await status.edit_text("5/5 Профиль рассчитан. Формирую русскую сводку, PNG и CSV…")
+            summary = format_profile_summary(result)
+            csv_path = write_profile_csv(result)
+            png_path = write_profile_png(result)
+        await status.edit_text(summary)
         if png_path:
             with png_path.open("rb") as file_obj:
                 await message.reply_photo(photo=InputFile(file_obj, filename=png_path.name), caption="График профиля GFS")
         if csv_path:
             with csv_path.open("rb") as file_obj:
                 await message.reply_document(document=InputFile(file_obj, filename=csv_path.name), caption="CSV-профиль по изобарическим уровням")
+    except (GfsProfileError, GeocodeError, ValueError) as exc:
+        await status.edit_text(f"Ошибка: {exc}")
+    except Exception as exc:
+        await status.edit_text(f"Непредвиденная ошибка: {exc}")
     finally:
         if png_path:
             png_path.unlink(missing_ok=True)
@@ -187,7 +186,8 @@ async def run_profile(message, point: GeoPoint, lead_hour: int, run: GfsRun | No
 async def resolve_profile_request(message, context: ContextTypes.DEFAULT_TYPE, raw: str) -> None:
     try:
         parsed = parse_request(raw)
-        candidates = await asyncio.to_thread(search_location_candidates, parsed.location_query, 3)
+        async with GEOCODE_SEMAPHORE:
+            candidates = await asyncio.to_thread(search_location_candidates, parsed.location_query, 3)
     except (GeocodeError, ValueError, GfsProfileError) as exc:
         await message.reply_text(f"Ошибка: {exc}")
         return

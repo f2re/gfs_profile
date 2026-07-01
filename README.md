@@ -287,8 +287,10 @@ http://127.0.0.1:8000
 TELEGRAM_BOT_TOKEN       токен Telegram-бота
 DEFAULT_LEAD             срок прогноза по умолчанию, часы; обычно 24
 MAX_CONCURRENT_GFS       максимум одновременных GFS-запросов; обычно 2
+MAX_CONCURRENT_GEOCODE   максимум одновременных запросов к геокодеру; обычно 2
 GFS_CACHE_DIR            каталог файлового кэша GRIB2
 GFS_CACHE_TTL_SECONDS    срок хранения GRIB2; обычно 86400
+GFS_AVAILABILITY_CACHE_TTL_SECONDS  срок кеша проверки публикации GFS; обычно 300
 GFS_REQUEST_TIMEOUT      timeout загрузки NOMADS, секунды
 GFS_PRESSURE_LEVELS_HPA  ограничение уровней: all/profile/список уровней
 GEOCODER_USER_AGENT      User-Agent для Nominatim fallback

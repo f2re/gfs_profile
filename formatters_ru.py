@@ -97,5 +97,9 @@ def write_profile_csv(result: ProfileResult) -> Path:
     out = tempfile.NamedTemporaryFile(prefix="gfs_profile", suffix=safe_suffix, delete=False)
     out_path = Path(out.name)
     out.close()
-    result.dataframe.round(3).to_csv(out_path, index=False)
+    try:
+        result.dataframe.round(3).to_csv(out_path, index=False)
+    except Exception:
+        out_path.unlink(missing_ok=True)
+        raise
     return out_path
