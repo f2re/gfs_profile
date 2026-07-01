@@ -15,10 +15,20 @@ from geocode import GeoPoint, GeocodeError
 from geocode_choices import search_location_candidates
 from gfs_core import CACHE_DIR, GfsProfileError, GfsRun, latest_available_run, latest_available_run_for_lead, validate_lead
 from profile_plot import write_profile_png
-from telegram_aero import resolve_aero_request
+from telegram_aero import ParsedAeroRequest, resolve_aero_request, run_aero_product
+from telegram_product_wizard import (
+    PRODUCT_WIZARD_KEY,
+    params_keyboard,
+    params_text,
+    place_keyboard as wizard_place_keyboard,
+    point_prompt_text,
+    set_point as wizard_set_point,
+    start_aero_wizard_state,
+    start_windgram_wizard_state,
+)
 from telegram_progress import build_profile_with_progress
 from telegram_ui import lead_keyboard, lead_page_text, location_keyboard, place_keyboard
-from telegram_windgram import resolve_windgram_request
+from telegram_windgram import ParsedWindgramRequest, resolve_windgram_request, run_windgram_product
 
 DEFAULT_LEAD = int(os.getenv("DEFAULT_LEAD", "24"))
 MAX_CONCURRENT_GFS = int(os.getenv("MAX_CONCURRENT_GFS", "2"))
@@ -77,6 +87,7 @@ def _unpack_run(payload: dict[str, str] | None) -> GfsRun | None:
 def _clear_pending(context: ContextTypes.DEFAULT_TYPE) -> None:
     context.user_data.pop("pending_profile", None)
     context.user_data.pop("pending_candidates", None)
+    context.user_data.pop(PRODUCT_WIZARD_KEY, None)
 
 
 def _set_pending_point(context: ContextTypes.DEFAULT_TYPE, point: GeoPoint, run: GfsRun | None = None) -> None:
@@ -85,6 +96,83 @@ def _set_pending_point(context: ContextTypes.DEFAULT_TYPE, point: GeoPoint, run:
 
 def _point_brief(point: GeoPoint) -> str:
     return f"{point.label}\n{point.lat:.4f}, {point.lon:.4f}"
+
+
+def _wizard_state(context: ContextTypes.DEFAULT_TYPE) -> dict[str, object] | None:
+    state = context.user_data.get(PRODUCT_WIZARD_KEY)
+    return state if isinstance(state, dict) else None
+
+
+async def _start_product_wizard(message, context: ContextTypes.DEFAULT_TYPE, state: dict[str, object]) -> None:
+    _clear_pending(context)
+    context.user_data[PRODUCT_WIZARD_KEY] = state
+    await message.reply_text(point_prompt_text(state), reply_markup=location_keyboard())
+
+
+async def _show_wizard_params(message, context: ContextTypes.DEFAULT_TYPE, state: dict[str, object]) -> None:
+    context.user_data[PRODUCT_WIZARD_KEY] = state
+    await message.reply_text(params_text(state), reply_markup=params_keyboard(state))
+
+
+async def _resolve_wizard_point(message, context: ContextTypes.DEFAULT_TYPE, raw: str) -> bool:
+    state = _wizard_state(context)
+    if not state or state.get("step") != "await_point":
+        return False
+    try:
+        async with GEOCODE_SEMAPHORE:
+            candidates = await asyncio.to_thread(search_location_candidates, raw, 5)
+    except (GeocodeError, ValueError, GfsProfileError) as exc:
+        await message.reply_text(f"Ошибка: {exc}")
+        return True
+
+    if not candidates:
+        await message.reply_text("Точка не найдена. Отправьте координаты, город или Telegram-геолокацию.")
+        return True
+
+    if len(candidates) > 1:
+        state["candidates"] = [_pack_point(point) for point in candidates[:5]]
+        state["step"] = "choose_place"
+        context.user_data[PRODUCT_WIZARD_KEY] = state
+        await message.reply_text("Найдено несколько вариантов. Выберите точку:", reply_markup=wizard_place_keyboard([point.label for point in candidates[:5]]))
+        return True
+
+    new_state = wizard_set_point(state, _pack_point(candidates[0]))
+    await _show_wizard_params(message, context, new_state)
+    return True
+
+
+async def _run_wizard_product(message, context: ContextTypes.DEFAULT_TYPE, state: dict[str, object]) -> None:
+    point_payload = state.get("point")
+    if not isinstance(point_payload, dict):
+        await message.reply_text("Сначала выберите точку.")
+        return
+    point = _unpack_point(point_payload)
+    product = str(state.get("product", ""))
+    context.user_data.pop(PRODUCT_WIZARD_KEY, None)
+
+    if product == "aero":
+        parsed = ParsedAeroRequest(
+            location_query=f"{point.lat:.4f} {point.lon:.4f}",
+            lead_hour=int(state.get("lead", DEFAULT_LEAD)),
+            run=None,
+            diagram_type=str(state.get("diagram_type", "stuve")),
+        )
+        await run_aero_product(message, point, parsed, GFS_SEMAPHORE)
+        return
+
+    if product == "windgram":
+        parsed = ParsedWindgramRequest(
+            location_query=f"{point.lat:.4f} {point.lon:.4f}",
+            run=None,
+            lead_from=int(state.get("from", 0)),
+            lead_to=int(state.get("to", 120)),
+            step=int(state.get("time_step", 6)),
+            top_hpa=int(state.get("top", 500)),
+        )
+        await run_windgram_product(message, point, parsed, GFS_SEMAPHORE)
+        return
+
+    await message.reply_text("Неизвестный продукт. Повторите команду.")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -99,7 +187,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "2) выберите срок кнопкой;\n"
         "3) видите ход проверки, загрузки GRIB2 и построения;\n"
         "4) получите сводку, PNG и CSV.\n\n"
-        "Можно написать: Москва, /profile Москва +24, /aero Москва +24, /skewt Москва +24 или /windgram Москва to=120. Полный диапазон GFS — до +384 ч.",
+        "Можно написать: Москва, /profile Москва +24, /aero, /skewt или /windgram. Команды без параметров запускают пошаговый выбор.",
         reply_markup=location_keyboard(),
     )
 
@@ -115,10 +203,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• или координаты: 55.75 37.62;\n"
         "• профиль: /profile Москва run=20260630/06 +24;\n"
         "• аэродиаграмма: /aero Москва +24 type=stuve|emagram|skewt;\n"
-        "• Skew-T: /skewt Москва +24;\n"
-        "• ветер×время: /windgram Москва to=120 step=6 top=500.\n\n"
-        "Во время расчёта бот показывает этапы: проверка fXXX.idx, загрузка GRIB2, cfgrib/eccodes, построение PNG/CSV.\n"
-        "Это модель GFS, не радиозонд.",
+        "• пошаговая аэродиаграмма: /aero или /skewt;\n"
+        "• ветер×время: /windgram Москва to=120 step=6 top=500;\n"
+        "• пошаговый windgram: /windgram.\n\n"
+        "После построения бот отдаёт команду для повтора без ручной настройки.",
         reply_markup=location_keyboard(),
     )
 
@@ -237,7 +325,7 @@ async def aero_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
     raw = " ".join(context.args).strip()
     if not raw:
-        await message.reply_text("Напишите точку: /aero Москва +24 type=stuve, /aero 55.75 37.62 +24 type=emagram")
+        await _start_product_wizard(message, context, start_aero_wizard_state(DEFAULT_LEAD, "stuve"))
         return
     await resolve_aero_request(message, raw, DEFAULT_LEAD, GFS_SEMAPHORE, GEOCODE_SEMAPHORE, default_diagram_type="stuve")
 
@@ -248,7 +336,7 @@ async def skewt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     raw = " ".join(context.args).strip()
     if not raw:
-        await message.reply_text("Напишите точку: /skewt Москва +24 или /skewt 55.75 37.62 +24")
+        await _start_product_wizard(message, context, start_aero_wizard_state(DEFAULT_LEAD, "skewt"))
         return
     await resolve_aero_request(message, raw, DEFAULT_LEAD, GFS_SEMAPHORE, GEOCODE_SEMAPHORE, default_diagram_type="skewt")
 
@@ -259,7 +347,7 @@ async def windgram_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
     raw = " ".join(context.args).strip()
     if not raw:
-        await message.reply_text("Напишите точку: /windgram Москва to=120 step=6 top=500")
+        await _start_product_wizard(message, context, start_windgram_wizard_state())
         return
     await resolve_windgram_request(message, raw, GFS_SEMAPHORE, GEOCODE_SEMAPHORE)
 
@@ -272,6 +360,8 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if text in {"❓ Помощь", "Помощь", "help"}:
         await help_command(update, context)
         return
+    if await _resolve_wizard_point(message, context, text):
+        return
     await resolve_profile_request(message, context, text)
 
 
@@ -280,8 +370,75 @@ async def location_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not message or not message.location:
         return
     point = GeoPoint(message.location.latitude, message.location.longitude, "геолокация Telegram", "telegram")
+    state = _wizard_state(context)
+    if state and state.get("step") in {"await_point", "choose_place"}:
+        new_state = wizard_set_point(state, _pack_point(point))
+        await _show_wizard_params(message, context, new_state)
+        return
     _set_pending_point(context, point)
     await message.reply_text(f"Геолокация получена:\n{_point_brief(point)}\n\n{lead_page_text(0)}", reply_markup=lead_keyboard(0))
+
+
+async def product_wizard_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    if not query:
+        return
+    await query.answer()
+    state = _wizard_state(context)
+    data = query.data or ""
+    if data == "wiz:cancel":
+        context.user_data.pop(PRODUCT_WIZARD_KEY, None)
+        await query.edit_message_text("Выбор продукта отменён. Можно начать заново: /aero, /skewt или /windgram.")
+        return
+    if not state:
+        await query.edit_message_text("Сценарий устарел. Начните заново: /aero, /skewt или /windgram.")
+        return
+
+    if data == "wiz:point":
+        state = dict(state)
+        state["step"] = "await_point"
+        state.pop("point", None)
+        state.pop("candidates", None)
+        context.user_data[PRODUCT_WIZARD_KEY] = state
+        await query.edit_message_text(point_prompt_text(state))
+        return
+
+    if data.startswith("wiz:place:"):
+        index = int(data.rsplit(":", 1)[1])
+        candidates = state.get("candidates", [])
+        if not isinstance(candidates, list) or index < 0 or index >= len(candidates):
+            await query.edit_message_text("Вариант точки устарел. Введите город или координаты ещё раз.")
+            return
+        point_payload = candidates[index]
+        if not isinstance(point_payload, dict):
+            await query.edit_message_text("Вариант точки повреждён. Повторите выбор.")
+            return
+        state = wizard_set_point(state, point_payload)
+        context.user_data[PRODUCT_WIZARD_KEY] = state
+        await query.edit_message_text(params_text(state), reply_markup=params_keyboard(state))
+        return
+
+    state = dict(state)
+    if data.startswith("wiz:aero:type:"):
+        state["diagram_type"] = data.rsplit(":", 1)[1]
+    elif data.startswith("wiz:aero:lead:"):
+        state["lead"] = int(data.rsplit(":", 1)[1])
+    elif data.startswith("wiz:wind:to:"):
+        state["to"] = int(data.rsplit(":", 1)[1])
+    elif data.startswith("wiz:wind:step:"):
+        state["time_step"] = int(data.rsplit(":", 1)[1])
+    elif data.startswith("wiz:wind:top:"):
+        state["top"] = int(data.rsplit(":", 1)[1])
+    elif data == "wiz:run":
+        if query.message:
+            await query.edit_message_text("Параметры выбраны. Запускаю расчёт…")
+            await _run_wizard_product(query.message, context, state)
+        return
+    else:
+        return
+
+    context.user_data[PRODUCT_WIZARD_KEY] = state
+    await query.edit_message_text(params_text(state), reply_markup=params_keyboard(state))
 
 
 async def lead_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -376,6 +533,7 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("skewt", skewt_command))
     application.add_handler(CommandHandler("windgram", windgram_command))
     application.add_handler(MessageHandler(filters.LOCATION, location_message))
+    application.add_handler(CallbackQueryHandler(product_wizard_callback, pattern=r"^wiz:"))
     application.add_handler(CallbackQueryHandler(lead_callback, pattern=r"^lead:\d+$"))
     application.add_handler(CallbackQueryHandler(lead_page_callback, pattern=r"^leadpage:\d+$"))
     application.add_handler(CallbackQueryHandler(noop_callback, pattern=r"^noop$"))
