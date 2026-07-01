@@ -41,9 +41,7 @@ def product_title(product: str) -> str:
 
 def point_prompt_text(state: dict[str, object]) -> str:
     product = str(state.get("product", ""))
-    examples = (
-        "Москва\n55.75 37.62\nКраснодар"
-    )
+    examples = "Москва\n55.75 37.62\nКраснодар"
     return (
         f"{product_title(product)}\n\n"
         "Шаг 1/3 — выберите точку.\n"
@@ -68,6 +66,31 @@ def _point_line(state: dict[str, object]) -> str:
     return f"Точка: {label}\n{lat:.4f}, {lon:.4f}"
 
 
+def copy_command(state: dict[str, object]) -> str | None:
+    point = state.get("point")
+    if not isinstance(point, dict):
+        return None
+    lat = float(point.get("lat", 0.0))
+    lon = float(point.get("lon", 0.0))
+    product = str(state.get("product", ""))
+    if product == "aero":
+        return f"/aero {lat:.4f} {lon:.4f} +{int(state.get('lead', 24))} type={str(state.get('diagram_type', 'stuve'))}"
+    if product == "windgram":
+        return (
+            f"/windgram {lat:.4f} {lon:.4f} "
+            f"from={int(state.get('from', 0))} to={int(state.get('to', 120))} "
+            f"step={int(state.get('time_step', 6))} top={int(state.get('top', 500))}"
+        )
+    return None
+
+
+def _command_block(state: dict[str, object]) -> str:
+    command = copy_command(state)
+    if not command:
+        return ""
+    return f"\n\nКоманда для копирования:\n{command}"
+
+
 def params_text(state: dict[str, object]) -> str:
     product = str(state.get("product", ""))
     if product == "aero":
@@ -76,7 +99,8 @@ def params_text(state: dict[str, object]) -> str:
             f"{_point_line(state)}\n\n"
             "Шаг 2/3 — параметры.\n"
             f"Тип: {str(state.get('diagram_type', 'stuve')).upper()}\n"
-            f"Срок: +{int(state.get('lead', 24))} ч\n\n"
+            f"Срок: +{int(state.get('lead', 24))} ч"
+            f"{_command_block(state)}\n\n"
             "Нажмите параметр для изменения или «Построить»."
         )
     if product == "windgram":
@@ -86,7 +110,8 @@ def params_text(state: dict[str, object]) -> str:
             "Шаг 2/3 — параметры.\n"
             f"Диапазон: +{int(state.get('from', 0))}…+{int(state.get('to', 120))} ч\n"
             f"Шаг: {int(state.get('time_step', 6))} ч\n"
-            f"Верхняя граница: {int(state.get('top', 500))} гПа\n\n"
+            f"Верхняя граница: {int(state.get('top', 500))} гПа"
+            f"{_command_block(state)}\n\n"
             "Нажмите параметр для изменения или «Построить»."
         )
     return "Параметры продукта"
