@@ -24,7 +24,13 @@ class ProductWizardTests(unittest.TestCase):
         state = set_point(state, {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
         state["to"] = 72
         state["time_step"] = 3
-        self.assertEqual(copy_command(state), "/cloudgram 45.0000 39.0000 from=0 to=72 step=3")
+        self.assertEqual(copy_command(state), "/cloudgram 45.0000 39.0000 from=0 to=72 step=3 mode=pro")
+
+    def test_cloudgram_copy_command_can_use_simple_mode(self) -> None:
+        state = start_cloudgram_wizard_state()
+        state = set_point(state, {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
+        state["mode"] = "simple"
+        self.assertEqual(copy_command(state), "/cloudgram 45.0000 39.0000 from=0 to=72 step=3 mode=simple")
 
 
 if __name__ == "__main__":
