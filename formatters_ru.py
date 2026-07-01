@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import html
+import math
 import tempfile
 from pathlib import Path
 
 import pandas as pd
 
-from gfs_core import DEFAULT_PROFILE_LEVELS_HPA, ProfileResult, freezing_level_diagnostic
+from gfs_core import DEFAULT_PROFILE_LEVELS_HPA, ProfileResult
 
 PROFILE_LEVELS_HPA = DEFAULT_PROFILE_LEVELS_HPA
+ISOTHERM_TARGETS_C = (0.0, -10.0, -20.0)
 
 
 def _nearest_level_row(df: pd.DataFrame, pressure_hpa: int) -> pd.Series | None:
@@ -54,16 +56,39 @@ def _fmt_level_compact(row: pd.Series) -> str:
     )
 
 
-def _format_freezing_level(result: ProfileResult) -> str:
-    diagnostic = freezing_level_diagnostic(result.dataframe)
-    if diagnostic["status"] == "found":
-        height_m = float(diagnostic["height_m"])
-        return f"❄ 0°C: {height_m / 1000.0:.1f} км"
-    if diagnostic["status"] == "below_lowest_level":
-        return "❄ 0°C: ниже профиля"
-    if diagnostic["status"] == "above_highest_level":
-        return "❄ 0°C: выше профиля"
-    return "❄ 0°C: н/д"
+def _isotherm_height_m(df: pd.DataFrame, target_c: float) -> float | None:
+    if df.empty or "temperature_c" not in df or "geopotential_height_m" not in df:
+        return None
+
+    prof = df.sort_values("geopotential_height_m")[["temperature_c", "geopotential_height_m"]].dropna()
+    if prof.empty:
+        return None
+
+    temps = prof["temperature_c"].to_numpy(dtype=float)
+    heights = prof["geopotential_height_m"].to_numpy(dtype=float)
+
+    for i in range(len(temps) - 1):
+        t0, t1 = temps[i], temps[i + 1]
+        h0, h1 = heights[i], heights[i + 1]
+        if math.isclose(t0, target_c, abs_tol=0.05):
+            return float(h0)
+        if (t0 >= target_c >= t1) or (t0 <= target_c <= t1):
+            if math.isclose(t0, t1, abs_tol=1e-9):
+                return float(h0)
+            ratio = (target_c - t0) / (t1 - t0)
+            return float(h0 + ratio * (h1 - h0))
+
+    if math.isclose(temps[-1], target_c, abs_tol=0.05):
+        return float(heights[-1])
+    return None
+
+
+def _format_isotherms(result: ProfileResult) -> str:
+    values = []
+    for target in ISOTHERM_TARGETS_C:
+        height_m = _isotherm_height_m(result.dataframe, target)
+        values.append("н/д" if height_m is None else f"{height_m / 1000.0:.1f}")
+    return f"❄ 0/-10/-20°C: {'/'.join(values)} км"
 
 
 def _compact_table(result: ProfileResult) -> str:
@@ -101,7 +126,7 @@ def format_profile_summary(result: ProfileResult) -> str:
         max_wind_height_km = _height_km(max_wind_row)
         lines.extend(
             [
-                _format_freezing_level(result),
+                _format_isotherms(result),
                 f"🌬 max: {max_wind:.1f} м/с @ {max_wind_level} гПа ({max_wind_height_km:.1f} км)",
                 f"📄 уровней: {len(df)}",
             ]
