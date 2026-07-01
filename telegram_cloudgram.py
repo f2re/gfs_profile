@@ -27,7 +27,7 @@ class ParsedCloudgramRequest(NamedTuple):
     lead_from: int
     lead_to: int
     step: int
-    mode: str
+    mode: str = "pro"
 
 
 def normalize_cloudgram_mode(value: str | None) -> str:
