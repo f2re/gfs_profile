@@ -1,0 +1,56 @@
+from __future__ import annotations
+
+import importlib
+import sys
+
+REQUIRED_MODULES = (
+    "numpy",
+    "pandas",
+    "requests",
+    "xarray",
+    "cfgrib",
+    "eccodes",
+    "telegram",
+    "matplotlib",
+    "metpy",
+    "scipy",
+    "pint",
+)
+
+OPTIONAL_RUNTIME_MODULES = (
+    "aero_plot",
+    "aero_product",
+    "windgram_product",
+    "windgram_plot",
+    "telegram_aero",
+    "telegram_windgram",
+)
+
+
+def check_modules(modules: tuple[str, ...]) -> list[str]:
+    errors: list[str] = []
+    for module_name in modules:
+        try:
+            importlib.import_module(module_name)
+        except Exception as exc:
+            errors.append(f"{module_name}: {exc}")
+    return errors
+
+
+def main() -> int:
+    errors = check_modules(REQUIRED_MODULES + OPTIONAL_RUNTIME_MODULES)
+    if errors:
+        print("Runtime check failed:", file=sys.stderr)
+        for error in errors:
+            print(f"  - {error}", file=sys.stderr)
+        return 1
+
+    import matplotlib
+
+    matplotlib.use("Agg", force=True)
+    print("Runtime check OK: dependencies and product modules import successfully")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
