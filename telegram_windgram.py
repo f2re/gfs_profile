@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import re
 from pathlib import Path
 from typing import NamedTuple
 
 from telegram import InputFile
+from telegram.constants import ParseMode
 
 from geocode import GeoPoint, GeocodeError
 from geocode_choices import search_location_candidates
@@ -21,10 +23,11 @@ STEP_RE = re.compile(r"\bstep=(?P<value>\d{1,2})\b", re.IGNORECASE)
 TOP_RE = re.compile(r"\btop=(?P<value>\d{3,4})\b", re.IGNORECASE)
 PARAM_RE = re.compile(r"\b(?:param|field|параметр)=(?P<value>wind|ветер|v|speed|temp|t|temperature|температура|rh|humidity|влажность)\b", re.IGNORECASE)
 
+PARAM_NAMES = {"wind": "ветер", "temp": "температура", "rh": "влажность"}
 PARAM_CAPTIONS = {
-    "wind": "Цвет и число — скорость ветра, стрелка — направление переноса.",
-    "temp": "Цвет и число — температура, стрелка — направление переноса.",
-    "rh": "Цвет и число — относительная влажность, стрелка — направление переноса.",
+    "wind": "цвет/число = скорость ветра, стрелка = направление",
+    "temp": "цвет/число = температура, стрелка = направление ветра",
+    "rh": "цвет/число = влажность, стрелка = направление ветра",
 }
 
 
@@ -80,13 +83,22 @@ def parse_windgram_request(raw_text: str) -> ParsedWindgramRequest:
     return ParsedWindgramRequest(text, run, lead_from, lead_to, step, top_hpa, param)
 
 
+def _lead_step(data: WindgramData) -> int:
+    return data.leads[1] - data.leads[0] if len(data.leads) > 1 else 0
+
+
 def format_windgram_caption(data: WindgramData) -> str:
     return (
-        f"🟦 GFS 0.25 windgram · {data.param}\n"
-        f"{data.run.date} {data.run.cycle}Z | +{data.leads[0]}…+{data.leads[-1]} ч | шаг {data.leads[1] - data.leads[0] if len(data.leads) > 1 else 0} ч\n"
-        f"⊞ {data.grid_lat:.3f},{data.grid_lon:.3f}\n"
-        f"{PARAM_CAPTIONS.get(data.param, PARAM_CAPTIONS['wind'])}"
+        f"🟦 Windgram GFS 0.25 · {PARAM_NAMES.get(data.param, data.param)}\n"
+        f"🕒 {data.run.date} {data.run.cycle}Z · UTC · +{data.leads[0]}…+{data.leads[-1]} ч · шаг {_lead_step(data)} ч\n"
+        f"📍 Узел GFS: {data.grid_lat:.3f}, {data.grid_lon:.3f}\n"
+        f"📊 {PARAM_CAPTIONS.get(data.param, PARAM_CAPTIONS['wind'])}\n"
+        "PNG ниже. Команда для повтора — отдельным сообщением."
     )
+
+
+def format_windgram_file_caption(data: WindgramData) -> str:
+    return f"PNG · WINDGRAM · {PARAM_NAMES.get(data.param, data.param)} · GFS {data.run.date} {data.run.cycle}Z · +{data.leads[0]}…+{data.leads[-1]} ч · UTC"
 
 
 def repeat_windgram_command(point: GeoPoint, parsed: ParsedWindgramRequest, run: GfsRun) -> str:
@@ -96,15 +108,26 @@ def repeat_windgram_command(point: GeoPoint, parsed: ParsedWindgramRequest, run:
     )
 
 
+def format_repeat_windgram_message(point: GeoPoint, parsed: ParsedWindgramRequest, run: GfsRun) -> str:
+    command = html.escape(repeat_windgram_command(point, parsed, run))
+    return "📋 Повторить этот расчёт:\n" f"<code>{command}</code>\n\n" "Нажмите на строку команды и скопируйте её целиком."
+
+
 async def run_windgram_product(message, point: GeoPoint, parsed: ParsedWindgramRequest, gfs_semaphore) -> None:
     leads = windgram_leads(lead_from=parsed.lead_from, lead_to=parsed.lead_to, step=parsed.step)
     selected_run = parsed.run or await asyncio.to_thread(latest_available_run_for_lead, max(leads))
-    status = await message.reply_text("0/6 Готовлю windgram: выбираю единый запуск GFS…")
+    status = await message.reply_text(
+        f"⏳ Windgram · {PARAM_NAMES.get(parsed.param, parsed.param)}\n"
+        f"📍 {point.label}\n"
+        f"🕒 GFS +{leads[0]}…+{leads[-1]} ч, шаг {parsed.step} ч\n"
+        "1/6 выбираю опубликованный цикл GFS…"
+    )
     png_path: Path | None = None
     try:
         async with gfs_semaphore:
             header = (
-                f"WINDGRAM {parsed.param.upper()} | GFS {selected_run.date} {selected_run.cycle}Z | +{leads[0]}…+{leads[-1]} ч\n"
+                f"🟦 WINDGRAM · {PARAM_NAMES.get(parsed.param, parsed.param)}\n"
+                f"GFS {selected_run.date} {selected_run.cycle}Z · UTC · +{leads[0]}…+{leads[-1]} ч · шаг {parsed.step} ч\n"
                 f"{point.label}\n{point.lat:.4f}, {point.lon:.4f}"
             )
 
@@ -120,20 +143,21 @@ async def run_windgram_product(message, point: GeoPoint, parsed: ParsedWindgramR
                     param=parsed.param,
                     progress_callback=progress_callback,
                 )
-                progress_callback({"stage": "plot_start", "message": "Строю windgram"})
+                progress_callback({"stage": "plot_start", "message": "строю PNG"})
                 path = write_windgram_png(data, param=parsed.param)
-                progress_callback({"stage": "plot_done", "message": "Windgram готов", "file": str(path)})
+                progress_callback({"stage": "plot_done", "message": "PNG готов", "file": str(path)})
                 return data, path
 
             data, png_path = await run_product_with_progress(status, header, worker)
         await status.edit_text(format_windgram_caption(data))
         if png_path:
+            caption = format_windgram_file_caption(data)
             with png_path.open("rb") as file_obj:
                 if len(leads) > 25:
-                    await message.reply_document(document=InputFile(file_obj, filename=png_path.name), caption=f"Windgram GFS: {parsed.param}")
+                    await message.reply_document(document=InputFile(file_obj, filename=png_path.name), caption=caption)
                 else:
-                    await message.reply_photo(photo=InputFile(file_obj, filename=png_path.name), caption=f"Windgram GFS: {parsed.param}")
-        await message.reply_text("Команда для повтора:\n" + repeat_windgram_command(point, parsed, selected_run))
+                    await message.reply_photo(photo=InputFile(file_obj, filename=png_path.name), caption=caption)
+        await message.reply_text(format_repeat_windgram_message(point, parsed, selected_run), parse_mode=ParseMode.HTML)
     except (GfsProfileError, GeocodeError, ValueError) as exc:
         await status.edit_text(f"Ошибка: {exc}")
     except Exception as exc:
@@ -153,13 +177,13 @@ async def resolve_windgram_request(message, raw: str, gfs_semaphore, geocode_sem
         return
 
     if not candidates:
-        await message.reply_text("Точка не найдена. Пришлите координаты или геолокацию Telegram.")
+        await message.reply_text("Точка не найдена. Пришлите координаты, город или геолокацию Telegram.")
         return
     if len(candidates) > 1:
         labels = "\n".join(f"{i + 1}. {point.label}" for i, point in enumerate(candidates[:3]))
         await message.reply_text(
-            "Найдено несколько точек. Для windgram уточните запрос текстом, например:\n"
-            f"/windgram {candidates[0].label} to={parsed.lead_to} param={parsed.param}\n\n"
+            "Найдено несколько точек. Уточните запрос или используйте координаты.\n\n"
+            f"Пример:\n/windgram {candidates[0].label} to={parsed.lead_to} step={parsed.step} param={parsed.param}\n\n"
             f"Варианты:\n{labels}"
         )
         return
