@@ -29,15 +29,39 @@ METEO = MeteoColors()
 
 WIND_SPEED_BOUNDS_MS = (0, 3, 6, 10, 15, 20, 25, 30, 40, 60)
 WIND_SPEED_COLORS = (
-    "#F5FBFF",  # 0-3 calm, almost white-blue
-    "#D5ECFF",  # 3-6 weak blue
-    "#9FD3FF",  # 6-10 blue
-    "#5BB6E5",  # 10-15 cyan-blue
-    "#3DBB89",  # 15-20 green
-    "#B5D94A",  # 20-25 yellow-green
-    "#F4C542",  # 25-30 amber
-    "#E46A3A",  # 30-40 orange-red
-    "#B83280",  # 40-60 magenta storm-level
+    "#F5FBFF",
+    "#D5ECFF",
+    "#9FD3FF",
+    "#5BB6E5",
+    "#3DBB89",
+    "#B5D94A",
+    "#F4C542",
+    "#E46A3A",
+    "#B83280",
+)
+
+TEMPERATURE_BOUNDS_C = (-70, -50, -40, -30, -20, -10, 0, 10, 20, 30, 40)
+TEMPERATURE_COLORS = (
+    "#442A83",
+    "#3555A8",
+    "#2D8ACF",
+    "#58C3D9",
+    "#BDE7E3",
+    "#F3F6D0",
+    "#F6D36B",
+    "#F39B45",
+    "#D95335",
+    "#9E2F2F",
+)
+
+HUMIDITY_BOUNDS_PCT = (0, 20, 40, 60, 80, 90, 100)
+HUMIDITY_COLORS = (
+    "#F4F1D4",
+    "#DDECCB",
+    "#B6DDB4",
+    "#79C7B0",
+    "#3E9BC5",
+    "#2364AA",
 )
 
 
@@ -93,21 +117,47 @@ def annotation_box_kwargs() -> dict[str, object]:
     }
 
 
-def wind_speed_cmap_and_norm():
+def _listed_cmap_and_norm(name: str, colors: tuple[str, ...], bounds: tuple[int, ...]):
     from matplotlib.colors import BoundaryNorm, ListedColormap
 
-    cmap = ListedColormap(WIND_SPEED_COLORS, name="gfs_wind_speed_meteo")
+    cmap = ListedColormap(colors, name=name)
     cmap.set_bad("#E6EBF1")
-    norm = BoundaryNorm(WIND_SPEED_BOUNDS_MS, cmap.N, clip=True)
+    norm = BoundaryNorm(bounds, cmap.N, clip=True)
     return cmap, norm
 
 
-def wind_text_color(value: float) -> str:
-    if value < 10:
+def wind_speed_cmap_and_norm():
+    return _listed_cmap_and_norm("gfs_wind_speed_meteo", WIND_SPEED_COLORS, WIND_SPEED_BOUNDS_MS)
+
+
+def temperature_cmap_and_norm():
+    return _listed_cmap_and_norm("gfs_temperature_meteo", TEMPERATURE_COLORS, TEMPERATURE_BOUNDS_C)
+
+
+def humidity_cmap_and_norm():
+    return _listed_cmap_and_norm("gfs_humidity_meteo", HUMIDITY_COLORS, HUMIDITY_BOUNDS_PCT)
+
+
+def value_text_color(value: float, *, param: str) -> str:
+    if param == "wind":
+        if value < 10:
+            return "#102033"
+        if value < 20:
+            return "#071B22"
+        return "#FFFFFF"
+    if param == "temp":
+        if value <= -40 or value >= 25:
+            return "#FFFFFF"
         return "#102033"
-    if value < 20:
-        return "#071B22"
-    return "#FFFFFF"
+    if param == "rh":
+        if value >= 80:
+            return "#FFFFFF"
+        return "#102033"
+    return "#102033"
+
+
+def wind_text_color(value: float) -> str:
+    return value_text_color(value, param="wind")
 
 
 def wind_speed_bin_labels(bounds: Iterable[int] = WIND_SPEED_BOUNDS_MS) -> list[str]:
