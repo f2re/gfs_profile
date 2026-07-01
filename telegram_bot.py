@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import html
 import os
 import re
 from pathlib import Path
@@ -66,7 +67,7 @@ def parse_request(raw_text: str) -> ParsedRequest:
 
     validate_lead(lead_hour)
     if not text:
-        raise ValueError("Не указана точка. Напишите город, координаты или отправьте геолокацию.")
+        raise ValueError("Не указана точка. Пример: /profile Москва +24")
     return ParsedRequest(text, lead_hour, run, lead_from_user)
 
 
@@ -105,6 +106,15 @@ def _wizard_state(context: ContextTypes.DEFAULT_TYPE) -> dict[str, object] | Non
     return state if isinstance(state, dict) else None
 
 
+def _profile_command(point: GeoPoint, lead_hour: int, run: GfsRun) -> str:
+    return f"/profile {point.lat:.4f} {point.lon:.4f} run={run.date}/{run.cycle} +{lead_hour}"
+
+
+def _profile_repeat_message(point: GeoPoint, lead_hour: int, run: GfsRun) -> str:
+    command = html.escape(_profile_command(point, lead_hour, run))
+    return "📋 Повторить профиль:\n" f"<code>{command}</code>\n\n" "Нажмите на строку команды и скопируйте её целиком."
+
+
 async def _start_product_wizard(message, context: ContextTypes.DEFAULT_TYPE, state: dict[str, object]) -> None:
     _clear_pending(context)
     context.user_data[PRODUCT_WIZARD_KEY] = state
@@ -128,7 +138,7 @@ async def _resolve_wizard_point(message, context: ContextTypes.DEFAULT_TYPE, raw
         return True
 
     if not candidates:
-        await message.reply_text("Точка не найдена. Отправьте координаты, город или Telegram-геолокацию.")
+        await message.reply_text("Точка не найдена. Отправьте координаты, город или геолокацию Telegram.")
         return True
 
     if len(candidates) > 1:
@@ -187,7 +197,7 @@ async def _run_wizard_product(message, context: ContextTypes.DEFAULT_TYPE, state
         await run_cloudgram_product(message, point, parsed, GFS_SEMAPHORE)
         return
 
-    await message.reply_text("Неизвестный продукт. Повторите команду.")
+    await message.reply_text("Неизвестный продукт. Начните заново: /aero, /skewt, /windgram или /cloudgram.")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -195,14 +205,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not message:
         return
     await message.reply_text(
-        "🌦️ Профиль GFS 0.25\n"
-        "Модельный вертикальный профиль ближайшего узла GFS: температура, точка росы, влажность, ветер и уровень 0 °C.\n\n"
-        "Минимальный путь:\n"
-        "1) отправьте геолокацию;\n"
-        "2) выберите срок кнопкой;\n"
-        "3) видите ход проверки, загрузки GRIB2 и построения;\n"
-        "4) получите сводку, PNG и CSV.\n\n"
-        "Команды без параметров запускают пошаговый выбор: /aero, /skewt, /windgram, /cloudgram.",
+        "🌦️ GFS 0.25 по точке\n"
+        "Бот строит модельные продукты ближайшего узла GFS: профиль, аэродиаграммы, windgram и cloudgram.\n\n"
+        "Быстро:\n"
+        "• отправьте геолокацию или город — для профиля;\n"
+        "• /cloudgram — облака, осадки, гроза, видимость;\n"
+        "• /windgram — срок × уровень;\n"
+        "• /aero или /skewt — аэрологическая диаграмма.\n\n"
+        "После расчёта бот отдаёт PNG/CSV и команду для повтора.",
         reply_markup=location_keyboard(),
     )
 
@@ -212,16 +222,13 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not message:
         return
     await message.reply_text(
-        "Как пользоваться:\n"
-        "• 📍 отправьте геолокацию и выберите срок;\n"
-        "• или напишите город: Москва;\n"
-        "• или координаты: 55.75 37.62;\n"
-        "• профиль: /profile Москва run=20260630/06 +24;\n"
-        "• аэродиаграмма: /aero Москва +24 type=stuve|emagram|skewt;\n"
-        "• windgram: /windgram Москва to=120 step=6 top=500 param=wind|temp|rh;\n"
-        "• cloudgram: /cloudgram Москва to=72 step=3 mode=pro|simple;\n"
-        "• wizard: /aero, /skewt, /windgram, /cloudgram.\n\n"
-        "После построения бот отдаёт команду для повтора без ручной настройки.",
+        "Команды:\n"
+        "<code>/profile Москва +24</code> — вертикальный профиль\n"
+        "<code>/aero Москва +24 type=skewt</code> — аэродиаграмма\n"
+        "<code>/windgram Москва to=120 step=6 param=temp</code> — срок × уровень\n"
+        "<code>/cloudgram Москва to=72 step=3 mode=simple</code> — облака и явления\n\n"
+        "Без параметров /aero, /skewt, /windgram и /cloudgram запускают пошаговый выбор. Время на графиках — UTC.",
+        parse_mode=ParseMode.HTML,
         reply_markup=location_keyboard(),
     )
 
@@ -230,7 +237,7 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     _clear_pending(context)
     message = update.effective_message
     if message:
-        await message.reply_text("Текущий выбор сброшен. Напишите город или отправьте геолокацию.", reply_markup=location_keyboard())
+        await message.reply_text("Выбор сброшен. Отправьте город, координаты или геолокацию.", reply_markup=location_keyboard())
 
 
 async def cycle_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -239,7 +246,7 @@ async def cycle_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     try:
         run = await asyncio.to_thread(latest_available_run)
-        await message.reply_text(f"Последний опубликованный анализ GFS: {run.date} {run.cycle}Z")
+        await message.reply_text(f"🕒 Последний цикл GFS: {run.date} {run.cycle}Z")
     except GfsProfileError as exc:
         await message.reply_text(str(exc))
 
@@ -248,38 +255,47 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     message = update.effective_message
     if not message:
         return
-    lines = ["Состояние бота:"]
+    lines = ["⚙️ Статус GFS"]
     for lead in dict.fromkeys((0, DEFAULT_LEAD, 24, 48, 72, 120, 240, 384)):
         try:
             run = await asyncio.to_thread(latest_available_run_for_lead, lead)
-            lines.append(f"• +{lead} ч: GFS {run.date} {run.cycle}Z опубликован")
-        except GfsProfileError as exc:
-            lines.append(f"• +{lead} ч: недоступно — {exc}")
-    lines.append(f"• Одновременных GFS-запросов: {MAX_CONCURRENT_GFS}")
-    lines.append(f"• Одновременных геокодинг-запросов: {MAX_CONCURRENT_GEOCODE}")
-    lines.append(f"• Кэш GRIB2: {CACHE_DIR}")
+            lines.append(f"+{lead:03d} ч → {run.date} {run.cycle}Z")
+        except GfsProfileError:
+            lines.append(f"+{lead:03d} ч → недоступно")
+    lines.append("")
+    lines.append(f"GFS-запросы: до {MAX_CONCURRENT_GFS} одновременно")
+    lines.append(f"Геокодинг: до {MAX_CONCURRENT_GEOCODE} одновременно")
+    lines.append(f"Кэш GRIB2: {CACHE_DIR}")
     await message.reply_text("\n".join(lines))
 
 
 async def run_profile(message, point: GeoPoint, lead_hour: int, run: GfsRun | None = None) -> None:
-    status = await message.reply_text("0/5 Ищу опубликованный цикл GFS для выбранного срока…")
+    status = await message.reply_text(
+        "⏳ Профиль GFS\n"
+        f"📍 {point.label}\n"
+        f"🕒 срок +{lead_hour} ч\n"
+        "1/5 выбираю опубликованный цикл GFS…"
+    )
     csv_path: Path | None = None
     png_path: Path | None = None
+    selected_run: GfsRun | None = None
     try:
         async with GFS_SEMAPHORE:
             selected_run = run or await asyncio.to_thread(latest_available_run_for_lead, lead_hour)
             result = await build_profile_with_progress(status, selected_run, lead_hour, point)
-            await status.edit_text("5/5 Профиль рассчитан. Формирую компактную сводку, PNG и CSV…")
+            await status.edit_text("5/5 Профиль рассчитан. Готовлю PNG и CSV…")
             summary = format_profile_summary(result)
             csv_path = write_profile_csv(result)
             png_path = write_profile_png(result)
         await status.edit_text(summary, parse_mode=ParseMode.HTML)
         if png_path:
             with png_path.open("rb") as file_obj:
-                await message.reply_photo(photo=InputFile(file_obj, filename=png_path.name), caption="График профиля GFS")
+                await message.reply_photo(photo=InputFile(file_obj, filename=png_path.name), caption=f"PNG · PROFILE · GFS {selected_run.date} {selected_run.cycle}Z · +{lead_hour} ч · UTC")
         if csv_path:
             with csv_path.open("rb") as file_obj:
-                await message.reply_document(document=InputFile(file_obj, filename=csv_path.name), caption="CSV-профиль по изобарическим уровням")
+                await message.reply_document(document=InputFile(file_obj, filename=csv_path.name), caption=f"CSV · PROFILE · GFS {selected_run.date} {selected_run.cycle}Z · +{lead_hour} ч")
+        if selected_run:
+            await message.reply_text(_profile_repeat_message(point, lead_hour, selected_run), parse_mode=ParseMode.HTML)
     except (GfsProfileError, GeocodeError, ValueError) as exc:
         await status.edit_text(f"Ошибка: {exc}")
     except Exception as exc:
@@ -301,7 +317,7 @@ async def resolve_profile_request(message, context: ContextTypes.DEFAULT_TYPE, r
         return
 
     if not candidates:
-        await message.reply_text("Точка не найдена. Пришлите координаты или геолокацию Telegram.")
+        await message.reply_text("Точка не найдена. Пришлите координаты, город или геолокацию Telegram.")
         return
 
     if len(candidates) > 1:
@@ -320,7 +336,7 @@ async def resolve_profile_request(message, context: ContextTypes.DEFAULT_TYPE, r
         return
 
     _set_pending_point(context, point, parsed.run)
-    await message.reply_text(f"Точка выбрана:\n{_point_brief(point)}\n\n{lead_page_text(0)}", reply_markup=lead_keyboard(0))
+    await message.reply_text(f"📍 Точка выбрана:\n{_point_brief(point)}\n\nВыберите срок прогноза:\n{lead_page_text(0)}", reply_markup=lead_keyboard(0))
 
 
 async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -329,7 +345,7 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
     raw = " ".join(context.args).strip()
     if not raw:
-        await message.reply_text("Напишите точку: /profile Москва +24, /profile 55.75 37.62 или отправьте геолокацию.")
+        await message.reply_text("Укажите точку. Пример: /profile Москва +24 или /profile 55.75 37.62 +48")
         return
     await resolve_profile_request(message, context, raw)
 
@@ -402,7 +418,7 @@ async def location_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await _show_wizard_params(message, context, new_state)
         return
     _set_pending_point(context, point)
-    await message.reply_text(f"Геолокация получена:\n{_point_brief(point)}\n\n{lead_page_text(0)}", reply_markup=lead_keyboard(0))
+    await message.reply_text(f"📍 Геолокация получена:\n{_point_brief(point)}\n\nВыберите срок прогноза:\n{lead_page_text(0)}", reply_markup=lead_keyboard(0))
 
 
 async def product_wizard_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -414,7 +430,7 @@ async def product_wizard_callback(update: Update, context: ContextTypes.DEFAULT_
     data = query.data or ""
     if data == "wiz:cancel":
         context.user_data.pop(PRODUCT_WIZARD_KEY, None)
-        await query.edit_message_text("Выбор продукта отменён. Можно начать заново: /aero, /skewt, /windgram или /cloudgram.")
+        await query.edit_message_text("Выбор отменён. Начните заново: /aero, /skewt, /windgram или /cloudgram.")
         return
     if not state:
         await query.edit_message_text("Сценарий устарел. Начните заново: /aero, /skewt, /windgram или /cloudgram.")
@@ -485,7 +501,7 @@ async def lead_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     pending = context.user_data.get("pending_profile")
     if not pending:
-        await query.edit_message_text("Сначала отправьте геолокацию или напишите город/координаты.")
+        await query.edit_message_text("Сначала выберите точку: город, координаты или геолокация.")
         return
     point = _unpack_point(pending["point"])
     run = _unpack_run(pending.get("run"))
@@ -503,11 +519,11 @@ async def lead_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await query.answer()
     pending = context.user_data.get("pending_profile")
     if not pending:
-        await query.edit_message_text("Сначала выберите точку: отправьте город, координаты или геолокацию.")
+        await query.edit_message_text("Сначала выберите точку: город, координаты или геолокация.")
         return
     page = int((query.data or "leadpage:0").split(":", 1)[1])
     point = _unpack_point(pending["point"])
-    await query.edit_message_text(f"Точка:\n{_point_brief(point)}\n\n{lead_page_text(page)}", reply_markup=lead_keyboard(page))
+    await query.edit_message_text(f"📍 Точка:\n{_point_brief(point)}\n\nВыберите срок прогноза:\n{lead_page_text(page)}", reply_markup=lead_keyboard(page))
 
 
 async def noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -524,7 +540,7 @@ async def place_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     data = query.data or ""
     if data == "cancel":
         _clear_pending(context)
-        await query.edit_message_text("Выбор отменён. Напишите город или отправьте геолокацию.")
+        await query.edit_message_text("Выбор отменён. Отправьте город, координаты или геолокацию.")
         return
     if not data.startswith("place:"):
         return
@@ -549,7 +565,7 @@ async def place_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await run_profile(query.message, point, lead_hour, run)
         return
     _set_pending_point(context, point, run)
-    await query.edit_message_text(f"Выбрано:\n{_point_brief(point)}\n\n{lead_page_text(0)}", reply_markup=lead_keyboard(0))
+    await query.edit_message_text(f"📍 Выбрано:\n{_point_brief(point)}\n\nВыберите срок прогноза:\n{lead_page_text(0)}", reply_markup=lead_keyboard(0))
 
 
 def build_application() -> Application:
