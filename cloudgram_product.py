@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from gfs_core import GfsProfileError, GfsRun, ProgressCallback, canonical_leads
@@ -152,19 +152,24 @@ def _read_cloudgram_cell(run: GfsRun, lead_hour: int, lat: float, lon: float, pr
     missing: set[str] = set()
     with tempfile.TemporaryDirectory() as tmp:
         datasets = open_grib_datasets(path, Path(tmp))
-
-    low = _clip_pct(scalar_from_datasets(datasets, ("lcc", "lcdc")))
-    mid = _clip_pct(scalar_from_datasets(datasets, ("mcc", "mcdc")))
-    high = _clip_pct(scalar_from_datasets(datasets, ("hcc", "hcdc")))
-    total = _clip_pct(scalar_from_datasets(datasets, ("tcc", "tcdc")))
-    ceiling = scalar_from_datasets(datasets, ("gh", "h", "hgt"))
-    apcp = _mm_from_kgm2(scalar_from_datasets(datasets, ("tp", "apcp")))
-    prate = _mmh_from_prate(scalar_from_datasets(datasets, ("prate",)))
-    acpcp = _mm_from_kgm2(scalar_from_datasets(datasets, ("acpcp",)))
-    cprat = _mmh_from_prate(scalar_from_datasets(datasets, ("cprat",)))
-    cape = scalar_from_datasets(datasets, ("cape",))
-    cin = scalar_from_datasets(datasets, ("cin",))
-    conv_cloud = _clip_pct(scalar_from_datasets(datasets, ("tcc", "tcdc"), default=None))
+        low = _clip_pct(scalar_from_datasets(datasets, ("lcc", "lcdc")))
+        mid = _clip_pct(scalar_from_datasets(datasets, ("mcc", "mcdc")))
+        high = _clip_pct(scalar_from_datasets(datasets, ("hcc", "hcdc")))
+        total = _clip_pct(scalar_from_datasets(datasets, ("tcc", "tcdc")))
+        ceiling = scalar_from_datasets(datasets, ("gh", "h", "hgt"))
+        apcp = _mm_from_kgm2(scalar_from_datasets(datasets, ("tp", "apcp")))
+        prate = _mmh_from_prate(scalar_from_datasets(datasets, ("prate",)))
+        acpcp = _mm_from_kgm2(scalar_from_datasets(datasets, ("acpcp",)))
+        cprat = _mmh_from_prate(scalar_from_datasets(datasets, ("cprat",)))
+        cape = scalar_from_datasets(datasets, ("cape",))
+        cin = scalar_from_datasets(datasets, ("cin",))
+        conv_cloud = _clip_pct(scalar_from_datasets(datasets, ("tcc", "tcdc"), default=None))
+        precip_type = _precip_type_from_flags(
+            bool_from_datasets(datasets, ("crain",)),
+            bool_from_datasets(datasets, ("csnow",)),
+            bool_from_datasets(datasets, ("cfrzr",)),
+            bool_from_datasets(datasets, ("cicep",)),
+        )
 
     for name, value in {
         "low_cloud": low,
@@ -177,14 +182,8 @@ def _read_cloudgram_cell(run: GfsRun, lead_hour: int, lat: float, lon: float, pr
         if value is None:
             missing.add(name)
 
-    precip_type = _precip_type_from_flags(
-        bool_from_datasets(datasets, ("crain",)),
-        bool_from_datasets(datasets, ("csnow",)),
-        bool_from_datasets(datasets, ("cfrzr",)),
-        bool_from_datasets(datasets, ("cicep",)),
-    )
     cb = _cb_score(cape, cin, acpcp, conv_cloud, cprat or prate)
-    valid_time = run.run_datetime_utc.replace() + __import__("datetime").timedelta(hours=lead_hour)
+    valid_time = run.run_datetime_utc + timedelta(hours=lead_hour)
 
     return (
         CloudgramCell(
