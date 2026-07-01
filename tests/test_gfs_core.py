@@ -43,6 +43,7 @@ class GfsCoreTests(unittest.TestCase):
         self.assertIn("var_UGRD=on", url)
         self.assertIn("var_VGRD=on", url)
         self.assertIn("var_HGT=on", url)
+        self.assertIn("subregion=", url)
         self.assertIn("all_lev=on", url)
 
     def test_grib_filter_url_can_limit_pressure_levels(self) -> None:

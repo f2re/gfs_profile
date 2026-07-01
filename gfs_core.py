@@ -224,6 +224,7 @@ def grib_filter_url(
         "var_UGRD": "on",
         "var_VGRD": "on",
         "var_HGT": "on",
+        "subregion": "",
         "leftlon": f"{lon_360:.3f}",
         "rightlon": f"{lon_360 + 0.001:.3f}",
         "toplat": f"{top_lat:.3f}",
@@ -332,6 +333,27 @@ def _validate_grib_file(path: Path) -> None:
     if magic != b"GRIB":
         path.unlink(missing_ok=True)
         raise GfsProfileError("NOMADS вернул ответ без сигнатуры GRIB")
+
+    try:
+        import eccodes
+
+        with path.open("rb") as file_obj:
+            gid = eccodes.codes_grib_new_from_file(file_obj)
+            if gid is None:
+                path.unlink(missing_ok=True)
+                raise GfsProfileError("GRIB2 не содержит сообщений")
+            try:
+                points = int(eccodes.codes_get(gid, "numberOfDataPoints"))
+            finally:
+                eccodes.codes_release(gid)
+    except GfsProfileError:
+        raise
+    except Exception as exc:
+        raise GfsProfileError(f"Не удалось проверить сетку GRIB2: {exc}") from exc
+
+    if points > 16:
+        path.unlink(missing_ok=True)
+        raise GfsProfileError(f"NOMADS вернул слишком большую GRIB-сетку вместо точечного subset: {points} точек")
 
 
 def invalidate_grib_cache_file(path: Path) -> None:
