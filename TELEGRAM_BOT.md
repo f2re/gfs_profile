@@ -2,7 +2,7 @@
 
 Бот строит вертикальный профиль атмосферы GFS 0.25° по городу, координатам или Telegram-геолокации.
 
-Схема работы: точка → кнопочный выбор срока → опубликованный цикл GFS → малый GRIB2-срез → сводка, PNG и CSV.
+Схема работы: точка → кнопочный выбор срока → опубликованный цикл GFS → малый GRIB2-срез → xarray/cfgrib/eccodes → сводка, PNG и CSV.
 
 ## ✅ Что возвращает
 
@@ -55,7 +55,7 @@
 1/5 Проверяю публикацию forecast-файла fXXX.idx
 2/5 Привязываю точку к узлу GFS
 3/5 Скачиваю GRIB2 из NOMADS, по возможности с процентом и размером
-4/5 Читаю GRIB2 через cfgrib/eccodes
+4/5 Читаю GRIB2 через xarray/cfgrib/eccodes
 5/5 Формирую сводку, PNG и CSV
 ```
 
@@ -97,7 +97,32 @@ bash install_telegram_bot.sh --status
 sudo journalctl -u gfs-profile-bot.service -f
 ```
 
-Ручной запуск для разработки:
+## 🔄 Обновление после git pull
+
+Если вы просто сделали `git pull`, код в `/opt/gfs_profile` сам не изменится. Для обновления установленного бота выполните:
+
+```bash
+git pull
+bash deploy_telegram_bot.sh
+```
+
+Для автоматического deploy после pull один раз установите локальные git hooks:
+
+```bash
+bash install_git_hooks.sh
+```
+
+После этого hooks будут вызывать `deploy_telegram_bot.sh --yes`, синхронизировать код в `/opt/gfs_profile`, обновлять зависимости и перезапускать `gfs-profile-bot.service`.
+
+Лог автообновления:
+
+```text
+.git/gfs-profile-deploy.log
+```
+
+Подробности: `DEPLOY.md`.
+
+## 🛠️ Ручной запуск для разработки
 
 ```bash
 python -m venv .venv
@@ -122,6 +147,7 @@ MAX_CONCURRENT_GFS=2
 GFS_CACHE_DIR=.cache_gfs
 GFS_CACHE_TTL_SECONDS=86400
 GFS_REQUEST_TIMEOUT=35
+GFS_PRESSURE_LEVELS_HPA=profile
 GEOCODER_USER_AGENT=gfs-profile-telegram-bot/0.1
 GEOCODE_CACHE_DIR=.cache_gfs/geocode
 GEOCODE_TIMEOUT=12
@@ -158,6 +184,11 @@ python -m unittest discover -s tests
 Файл GFS для YYYYMMDD HHZ +N ч ещё не опубликован
 ```
 Нужный forecast lead ещё не опубликован. Без фиксированного `run=...` бот сам откатывается на предыдущий опубликованный цикл.
+
+```text
+Ошибка чтения GRIB2 через xarray/cfgrib
+```
+Переустановите зависимости через deploy: `bash deploy_telegram_bot.sh` или вручную `pip install -r requirements.txt` внутри venv.
 
 ```text
 NOMADS вернул HTML вместо GRIB2
