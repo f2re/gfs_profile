@@ -18,6 +18,7 @@ from profile_plot import write_profile_png
 from telegram_aero import resolve_aero_request
 from telegram_progress import build_profile_with_progress
 from telegram_ui import lead_keyboard, lead_page_text, location_keyboard, place_keyboard
+from telegram_windgram import resolve_windgram_request
 
 DEFAULT_LEAD = int(os.getenv("DEFAULT_LEAD", "24"))
 MAX_CONCURRENT_GFS = int(os.getenv("MAX_CONCURRENT_GFS", "2"))
@@ -98,7 +99,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "2) выберите срок кнопкой;\n"
         "3) видите ход проверки, загрузки GRIB2 и построения;\n"
         "4) получите сводку, PNG и CSV.\n\n"
-        "Можно просто написать: Москва, 55.75 37.62, /profile Москва +24, /aero Москва +24 или /skewt Москва +24. Полный диапазон GFS — до +384 ч.",
+        "Можно написать: Москва, /profile Москва +24, /aero Москва +24, /skewt Москва +24 или /windgram Москва to=120. Полный диапазон GFS — до +384 ч.",
         reply_markup=location_keyboard(),
     )
 
@@ -112,10 +113,10 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "• 📍 отправьте геолокацию и выберите срок;\n"
         "• или напишите город: Москва;\n"
         "• или координаты: 55.75 37.62;\n"
-        "• экспертно: /profile Москва run=20260630/06 +24.\n"
+        "• профиль: /profile Москва run=20260630/06 +24;\n"
         "• аэродиаграмма: /aero Москва +24 type=stuve|emagram|skewt;\n"
-        "• Skew-T: /skewt Москва +24.\n\n"
-        "Кнопки показывают частые сроки, через пагинацию доступны все сроки GFS до +384 ч.\n"
+        "• Skew-T: /skewt Москва +24;\n"
+        "• ветер×время: /windgram Москва to=120 step=6 top=500.\n\n"
         "Во время расчёта бот показывает этапы: проверка fXXX.idx, загрузка GRIB2, cfgrib/eccodes, построение PNG/CSV.\n"
         "Это модель GFS, не радиозонд.",
         reply_markup=location_keyboard(),
@@ -252,6 +253,17 @@ async def skewt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await resolve_aero_request(message, raw, DEFAULT_LEAD, GFS_SEMAPHORE, GEOCODE_SEMAPHORE, default_diagram_type="skewt")
 
 
+async def windgram_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if not message:
+        return
+    raw = " ".join(context.args).strip()
+    if not raw:
+        await message.reply_text("Напишите точку: /windgram Москва to=120 step=6 top=500")
+        return
+    await resolve_windgram_request(message, raw, GFS_SEMAPHORE, GEOCODE_SEMAPHORE)
+
+
 async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if not message or not message.text:
@@ -362,6 +374,7 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("profile", profile_command))
     application.add_handler(CommandHandler("aero", aero_command))
     application.add_handler(CommandHandler("skewt", skewt_command))
+    application.add_handler(CommandHandler("windgram", windgram_command))
     application.add_handler(MessageHandler(filters.LOCATION, location_message))
     application.add_handler(CallbackQueryHandler(lead_callback, pattern=r"^lead:\d+$"))
     application.add_handler(CallbackQueryHandler(lead_page_callback, pattern=r"^leadpage:\d+$"))
