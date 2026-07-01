@@ -185,15 +185,21 @@ require_repo_files() {
   [[ -f "$REPO_ROOT/telegram_bot.py" ]] || fail "Не найден telegram_bot.py. Запускайте скрипт из корня репозитория или из файла в корне проекта."
   [[ -f "$REPO_ROOT/requirements.txt" ]] || fail "Не найден requirements.txt."
   [[ -f "$REPO_ROOT/gfs_core.py" ]] || fail "Не найден gfs_core.py."
+  [[ -f "$REPO_ROOT/runtime_check.py" ]] || fail "Не найден runtime_check.py. Обновите checkout перед установкой."
 }
 
 install_system_packages() {
   [[ "$SKIP_APT" -eq 1 ]] && { warn "Установка системных пакетов пропущена (--skip-apt)"; return 0; }
   command -v apt-get >/dev/null 2>&1 || { warn "apt-get не найден. Пропускаю системные пакеты."; return 0; }
-  confirm "Установить/обновить системные пакеты python3-venv, python3-pip, ca-certificates?" || return 0
+  confirm "Установить/обновить системные пакеты Python, rsync, шрифты и библиотеки сборки?" || return 0
   log "Обновляю apt и ставлю базовые пакеты"
   run_root apt-get update
-  run_root apt-get install -y python3 python3-venv python3-pip ca-certificates
+  local base_packages=(python3 python3-venv python3-pip ca-certificates rsync fonts-dejavu-core)
+  run_root apt-get install -y "${base_packages[@]}"
+  local optional_packages=(python3-dev build-essential pkg-config libeccodes0)
+  if ! run_root apt-get install -y "${optional_packages[@]}"; then
+    warn "Часть дополнительных пакетов не установлена. Если pip wheel не соберётся, установите вручную: ${optional_packages[*]}"
+  fi
 }
 
 ensure_service_user() {
@@ -237,8 +243,13 @@ create_venv() {
   log "Создаю Python-окружение"
   run_user "$SERVICE_USER" "$PYTHON_BIN" -m venv "$VENV_DIR"
   log "Обновляю pip и ставлю зависимости"
-  run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" "$VENV_DIR/bin/python" -m pip install --upgrade pip
-  run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" "$VENV_DIR/bin/python" -m pip install -r "$INSTALL_DIR/requirements.txt"
+  run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" "$VENV_DIR/bin/python" -m pip install --upgrade pip setuptools wheel
+  run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" "$VENV_DIR/bin/python" -m pip install --prefer-binary -r "$INSTALL_DIR/requirements.txt"
+}
+
+runtime_check() {
+  log "Проверяю runtime-зависимости и импорты продуктовых модулей"
+  run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" MPLBACKEND=Agg "$VENV_DIR/bin/python" "$INSTALL_DIR/runtime_check.py"
 }
 
 ask_token() {
@@ -302,6 +313,8 @@ GFS_REQUEST_TIMEOUT=$timeout
 GEOCODER_USER_AGENT=$ua
 GEOCODE_CACHE_DIR=$geocode_dir
 GEOCODE_TIMEOUT=$geocode_timeout
+MPLBACKEND=Agg
+PYTHONUNBUFFERED=1
 EOF
   run_root chmod 0640 "$ENV_FILE"
   run_root chown root:"$SERVICE_USER" "$ENV_FILE"
@@ -334,6 +347,8 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=$INSTALL_DIR
 EnvironmentFile=$ENV_FILE
+Environment=PYTHONUNBUFFERED=1
+Environment=MPLBACKEND=Agg
 ExecStart=$VENV_DIR/bin/python $INSTALL_DIR/telegram_bot.py
 Restart=always
 RestartSec=5
@@ -361,6 +376,7 @@ python=$PYTHON_BIN
 venv=$VENV_DIR
 unit=$UNIT_PATH
 read_write_paths=$INSTALL_DIR$EXTRA_READ_WRITE_PATHS
+runtime_check=ok
 EOF
   run_root chown "$SERVICE_USER:$SERVICE_USER" "$STATE_FILE"
 }
@@ -410,6 +426,7 @@ main() {
   ensure_service_user
   copy_project
   create_venv
+  runtime_check
   write_env
   write_service
   write_state
