@@ -138,6 +138,7 @@ require_ready_install() {
   [[ -f "$REPO_ROOT/telegram_bot.py" ]] || fail "В источнике нет telegram_bot.py: $REPO_ROOT"
   [[ -f "$REPO_ROOT/requirements.txt" ]] || fail "В источнике нет requirements.txt: $REPO_ROOT"
   [[ -f "$REPO_ROOT/gfs_core.py" ]] || fail "В источнике нет gfs_core.py: $REPO_ROOT"
+  [[ -f "$REPO_ROOT/runtime_check.py" ]] || fail "В источнике нет runtime_check.py: $REPO_ROOT"
   [[ -d "$INSTALL_DIR" ]] || fail "Каталог $INSTALL_DIR не существует. Сначала выполните bash install_telegram_bot.sh"
   [[ -f "$ENV_FILE" ]] || fail "Нет $ENV_FILE. Сначала выполните первичную установку, чтобы задать TELEGRAM_BOT_TOKEN"
   id "$SERVICE_USER" >/dev/null 2>&1 || fail "Пользователь $SERVICE_USER не найден. Сначала выполните первичную установку"
@@ -182,8 +183,13 @@ ensure_venv_and_deps() {
   fi
 
   log "Обновляю Python-зависимости"
-  run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" "$VENV_DIR/bin/python" -m pip install --upgrade pip
-  run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" "$VENV_DIR/bin/python" -m pip install -r "$INSTALL_DIR/requirements.txt"
+  run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" "$VENV_DIR/bin/python" -m pip install --upgrade pip setuptools wheel
+  run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" "$VENV_DIR/bin/python" -m pip install --prefer-binary -r "$INSTALL_DIR/requirements.txt"
+}
+
+runtime_check() {
+  log "Проверяю runtime-зависимости до перезапуска сервиса"
+  run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" MPLBACKEND=Agg "$VENV_DIR/bin/python" "$INSTALL_DIR/runtime_check.py"
 }
 
 restart_service() {
@@ -203,10 +209,11 @@ restart_service() {
 }
 
 write_state() {
-  local rev
+  local rev installed_at
   rev="$(git_rev)"
+  installed_at="$(grep '^installed_at=' "$STATE_FILE" 2>/dev/null | cut -d= -f2- || true)"
   cat <<EOF | run_root tee "$STATE_FILE" >/dev/null
-installed_at=$(grep '^installed_at=' "$STATE_FILE" 2>/dev/null | cut -d= -f2- || true)
+installed_at=$installed_at
 last_deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 source_repo=$REPO_ROOT
 source_rev=$rev
@@ -215,6 +222,7 @@ service_name=$SERVICE_NAME
 service_user=$SERVICE_USER
 venv=$VENV_DIR
 unit=$UNIT_PATH
+runtime_check=ok
 EOF
   run_root chown "$SERVICE_USER:$SERVICE_USER" "$STATE_FILE"
 }
@@ -233,6 +241,7 @@ main() {
 
   copy_project
   ensure_venv_and_deps
+  runtime_check
   write_state
   restart_service
   success "Deploy завершён: $(git_rev)"
