@@ -12,7 +12,7 @@ WINDGRAM_STEPS = (3, 6, 12)
 WINDGRAM_TOPS = (500,)
 CLOUDGRAM_TO_HOURS = (24, 48, 72, 120)
 CLOUDGRAM_STEPS = (3, 6)
-CLOUDGRAM_MODES = (("pro", "👨‍🔬 Профи"), ("simple", "🙂 Упрощённо"))
+CLOUDGRAM_MODES = (("pro", "Профи"), ("simple", "Упрощённо"))
 
 
 def start_aero_wizard_state(default_lead: int, diagram_type: str = "stuve") -> dict[str, object]:
@@ -29,23 +29,30 @@ def start_cloudgram_wizard_state() -> dict[str, object]:
 
 def product_title(product: str) -> str:
     if product == "aero":
-        return "🧾 Аэрологическая диаграмма"
+        return "Аэродиаграмма GFS"
     if product == "windgram":
-        return "🟦 Windgram: срок × уровень"
+        return "Windgram GFS"
     if product == "cloudgram":
-        return "☁️ Cloudgram: облачность и погода"
+        return "Cloudgram GFS"
     return "Продукт GFS"
 
 
 def point_prompt_text(state: dict[str, object]) -> str:
     product = str(state.get("product", ""))
-    examples = "Москва\n55.75 37.62\nКраснодар"
-    return f"{product_title(product)}\n\nШаг 1/3 — выберите точку.\nОтправьте геолокацию Telegram, город или координаты.\n\nПримеры:\n{examples}"
+    return (
+        f"{product_title(product)}\n"
+        "Шаг 1/3 — точка\n\n"
+        "Отправьте город, координаты или геолокацию Telegram.\n\n"
+        "Примеры:\n"
+        "Москва\n"
+        "55.75 37.62\n"
+        "Краснодар"
+    )
 
 
 def place_keyboard(labels: list[str]) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(label[:58], callback_data=f"wiz:place:{index}")] for index, label in enumerate(labels[:5])]
-    rows.append([InlineKeyboardButton("✖ Отмена", callback_data="wiz:cancel")])
+    rows.append([InlineKeyboardButton("Отмена", callback_data="wiz:cancel")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -60,7 +67,7 @@ def _point_line(state: dict[str, object]) -> str:
 
 
 def _param_label(param: str) -> str:
-    return {"wind": "ветер V", "temp": "температура T", "rh": "влажность RH"}.get(param, param)
+    return {"wind": "ветер", "temp": "температура", "rh": "влажность"}.get(param, param)
 
 
 def _cloud_mode_label(mode: str) -> str:
@@ -93,34 +100,46 @@ def copy_command(state: dict[str, object]) -> str | None:
 
 def _command_block(state: dict[str, object]) -> str:
     command = copy_command(state)
-    return f"\n\nКоманда для копирования:\n{command}" if command else ""
+    return f"\n\nКоманда:\n{command}" if command else ""
 
 
 def params_text(state: dict[str, object]) -> str:
     product = str(state.get("product", ""))
     if product == "aero":
         return (
-            f"{product_title(product)}\n\n{_point_line(state)}\n\nШаг 2/3 — параметры.\n"
-            f"Тип: {str(state.get('diagram_type', 'stuve')).upper()}\nСрок: +{int(state.get('lead', 24))} ч"
-            f"{_command_block(state)}\n\nНажмите параметр для изменения или «Построить»."
+            f"{product_title(product)}\n"
+            "Шаг 2/3 — параметры\n\n"
+            f"{_point_line(state)}\n\n"
+            f"Тип: {str(state.get('diagram_type', 'stuve')).upper()}\n"
+            f"Срок: +{int(state.get('lead', 24))} ч"
+            f"{_command_block(state)}\n\n"
+            "Измените параметр кнопкой или нажмите «Построить»."
         )
     if product == "windgram":
         param = str(state.get("param", "wind"))
         return (
-            f"{product_title(product)}\n\n{_point_line(state)}\n\nШаг 2/3 — параметры.\n"
-            f"Подсветка: {_param_label(param)}\nДиапазон: +{int(state.get('from', 0))}…+{int(state.get('to', 120))} ч\n"
-            f"Шаг: {int(state.get('time_step', 6))} ч\nВерхняя граница: {int(state.get('top', 500))} гПа\n"
-            f"Стрелки ветра будут внутри каждой ячейки.{_command_block(state)}\n\nНажмите параметр для изменения или «Построить»."
+            f"{product_title(product)}\n"
+            "Шаг 2/3 — параметры\n\n"
+            f"{_point_line(state)}\n\n"
+            f"Параметр: {_param_label(param)}\n"
+            f"Диапазон: +{int(state.get('from', 0))}…+{int(state.get('to', 120))} ч\n"
+            f"Шаг: {int(state.get('time_step', 6))} ч\n"
+            f"Уровни: до {int(state.get('top', 500))} гПа"
+            f"{_command_block(state)}\n\n"
+            "Цвет/число — выбранный параметр; стрелка — направление ветра."
         )
     if product == "cloudgram":
         mode = str(state.get("mode", "pro"))
-        mode_hint = "профессиональная таблица параметров" if mode == "pro" else "простая схема с эмодзи и общей опасностью"
+        mode_hint = "детальная таблица" if mode == "pro" else "простая схема"
         return (
-            f"{product_title(product)}\n\n{_point_line(state)}\n\nШаг 2/3 — параметры.\n"
-            f"Режим: {_cloud_mode_label(mode)} — {mode_hint}\n"
+            f"{product_title(product)}\n"
+            "Шаг 2/3 — параметры\n\n"
+            f"{_point_line(state)}\n\n"
+            f"Режим: {_cloud_mode_label(mode)} ({mode_hint})\n"
             f"Диапазон: +{int(state.get('from', 0))}…+{int(state.get('to', 72))} ч\n"
             f"Шаг: {int(state.get('time_step', 3))} ч"
-            f"{_command_block(state)}\n\nНажмите параметр для изменения или «Построить»."
+            f"{_command_block(state)}\n\n"
+            "Профи — больше параметров; упрощённо — для быстрого чтения."
         )
     return "Параметры продукта"
 
@@ -150,8 +169,8 @@ def params_keyboard(state: dict[str, object]) -> InlineKeyboardMarkup:
         current_step = int(state.get("time_step", 3))
         rows.append([InlineKeyboardButton(("✓ " if current_step == value else "") + f"шаг {value}ч", callback_data=f"wiz:cloud:step:{value}") for value in CLOUDGRAM_STEPS])
 
-    rows.append([InlineKeyboardButton("▶ Построить", callback_data="wiz:run")])
-    rows.append([InlineKeyboardButton("↩ Выбрать другую точку", callback_data="wiz:point"), InlineKeyboardButton("✖ Отмена", callback_data="wiz:cancel")])
+    rows.append([InlineKeyboardButton("Построить", callback_data="wiz:run")])
+    rows.append([InlineKeyboardButton("Другая точка", callback_data="wiz:point"), InlineKeyboardButton("Отмена", callback_data="wiz:cancel")])
     return InlineKeyboardMarkup(rows)
 
 
