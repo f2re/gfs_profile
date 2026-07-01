@@ -346,23 +346,33 @@ def download_profile_grib_to_disk(
     return out_path
 
 
+def open_isobaric_dataset(grib_path: Path, idx_path: str):
+    """Open GRIB through the supported xarray cfgrib engine."""
+
+    try:
+        import xarray as xr
+    except Exception as exc:
+        raise GfsProfileError("Не установлен xarray. Выполните pip install -r requirements.txt") from exc
+
+    try:
+        return xr.open_dataset(
+            str(grib_path),
+            engine="cfgrib",
+            backend_kwargs={
+                "indexpath": idx_path,
+                "errors": "raise",
+                "filter_by_keys": {"typeOfLevel": "isobaricInhPa"},
+            },
+        )
+    except Exception as exc:
+        raise GfsProfileError(f"Ошибка чтения GRIB2 через xarray/cfgrib: {exc}") from exc
+
+
 def extract_profile_from_grib_file(grib_path: Path, progress_callback: ProgressCallback | None = None) -> pd.DataFrame:
-    _emit(progress_callback, stage="parse_start", message="Читаю GRIB2 через cfgrib/eccodes", file=str(grib_path))
+    _emit(progress_callback, stage="parse_start", message="Читаю GRIB2 через xarray/cfgrib/eccodes", file=str(grib_path))
     with tempfile.TemporaryDirectory() as tmp_dir:
         idx_path = os.path.join(tmp_dir, "profile.idx")
-        try:
-            import cfgrib
-
-            ds = cfgrib.open_dataset(
-                str(grib_path),
-                backend_kwargs={
-                    "indexpath": idx_path,
-                    "errors": "raise",
-                    "filter_by_keys": {"typeOfLevel": "isobaricInhPa"},
-                },
-            )
-        except Exception as exc:
-            raise GfsProfileError(f"Ошибка чтения GRIB2: {exc}") from exc
+        ds = open_isobaric_dataset(grib_path, idx_path)
 
         required = ["t", "r", "u", "v", "gh", "isobaricInhPa"]
         for name in required:
