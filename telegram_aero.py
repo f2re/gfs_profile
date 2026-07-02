@@ -13,6 +13,7 @@ from aero_product import build_aero_product, format_aero_caption
 from geocode import GeoPoint, GeocodeError
 from geocode_choices import search_location_candidates
 from gfs_core import GfsProfileError, GfsRun, latest_available_run_for_lead, validate_lead
+from user_location_session import remember_location
 from product_progress import run_product_with_progress
 
 AERO_TYPE_RE = re.compile(r"\btype=(?P<type>stuve|emagram|skewt)\b", re.IGNORECASE)
@@ -115,7 +116,7 @@ async def run_aero_product(message, point: GeoPoint, parsed: ParsedAeroRequest, 
             png_path.unlink(missing_ok=True)
 
 
-async def resolve_aero_request(message, raw: str, default_lead: int, gfs_semaphore, geocode_semaphore, default_diagram_type: str = "stuve") -> None:
+async def resolve_aero_request(message, raw: str, default_lead: int, gfs_semaphore, geocode_semaphore, default_diagram_type: str = "stuve", user_id: int = 0) -> None:
     try:
         parsed = parse_aero_request(raw, default_lead=default_lead, default_diagram_type=default_diagram_type)
         async with geocode_semaphore:
@@ -137,4 +138,5 @@ async def resolve_aero_request(message, raw: str, default_lead: int, gfs_semapho
         )
         return
 
+    remember_location(user_id, candidates[0])
     await run_aero_product(message, candidates[0], parsed, gfs_semaphore)

@@ -13,6 +13,7 @@ from geocode import GeoPoint, GeocodeError
 from geocode_choices import search_location_candidates
 from gfs_core import GfsProfileError, GfsRun, latest_available_run_for_lead
 from product_progress import run_product_with_progress
+from user_location_session import remember_location
 from windgram_plot import write_windgram_png
 from windgram_product import WindgramData, build_windgram_data, normalize_windgram_param, windgram_leads
 
@@ -167,7 +168,7 @@ async def run_windgram_product(message, point: GeoPoint, parsed: ParsedWindgramR
             png_path.unlink(missing_ok=True)
 
 
-async def resolve_windgram_request(message, raw: str, gfs_semaphore, geocode_semaphore) -> None:
+async def resolve_windgram_request(message, raw: str, gfs_semaphore, geocode_semaphore, user_id: int = 0) -> None:
     try:
         parsed = parse_windgram_request(raw)
         async with geocode_semaphore:
@@ -188,4 +189,5 @@ async def resolve_windgram_request(message, raw: str, gfs_semaphore, geocode_sem
         )
         return
 
+    remember_location(user_id, candidates[0])
     await run_windgram_product(message, candidates[0], parsed, gfs_semaphore)

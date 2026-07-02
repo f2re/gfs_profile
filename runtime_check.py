@@ -29,6 +29,7 @@ OPTIONAL_RUNTIME_MODULES = (
     "cloudgram_product",
     "cloudgram_plot",
     "weather_diagnostics",
+    "user_location_session",
     "composite_map",
     "telegram_commands",
     "telegram_product_wizard",

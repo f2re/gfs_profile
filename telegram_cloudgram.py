@@ -15,6 +15,7 @@ from geocode import GeocodeError, GeoPoint
 from geocode_choices import search_location_candidates
 from gfs_core import GfsProfileError, GfsRun, latest_available_run_for_lead
 from product_progress import run_product_with_progress
+from user_location_session import remember_location
 
 RUN_RE = re.compile(r"\brun=(?P<date>\d{8})[/-]?(?P<cycle>00|06|12|18)\b", re.IGNORECASE)
 FROM_RE = re.compile(r"\bfrom=(?P<value>\d{1,3})\b", re.IGNORECASE)
@@ -185,7 +186,7 @@ async def run_cloudgram_product(message, point: GeoPoint, parsed: ParsedCloudgra
             png_path.unlink(missing_ok=True)
 
 
-async def resolve_cloudgram_request(message, raw: str, gfs_semaphore, geocode_semaphore) -> None:
+async def resolve_cloudgram_request(message, raw: str, gfs_semaphore, geocode_semaphore, user_id: int = 0) -> None:
     try:
         parsed = parse_cloudgram_request(raw)
         async with geocode_semaphore:
@@ -206,4 +207,5 @@ async def resolve_cloudgram_request(message, raw: str, gfs_semaphore, geocode_se
         )
         return
 
+    remember_location(user_id, candidates[0])
     await run_cloudgram_product(message, candidates[0], parsed, gfs_semaphore)

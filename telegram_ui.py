@@ -4,7 +4,9 @@ import math
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
+from geocode import GeoPoint
 from gfs_core import canonical_leads
+from user_location_session import recent_location_button_label
 
 COMMON_LEADS = (0, 3, 6, 12, 24, 48)
 LEAD_PAGE_SIZE = 15
@@ -81,9 +83,16 @@ def place_keyboard(labels: list[str]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def location_keyboard() -> ReplyKeyboardMarkup:
+def location_keyboard(recent_locations: list[GeoPoint] | None = None) -> ReplyKeyboardMarkup:
+    rows: list[list[KeyboardButton]] = [[KeyboardButton("📍 Отправить геолокацию", request_location=True)]]
+    recent_buttons = [KeyboardButton(recent_location_button_label(point)) for point in (recent_locations or [])[:4]]
+    if len(recent_buttons) == 1:
+        rows.append([recent_buttons[0]])
+    else:
+        for index in range(0, len(recent_buttons), 2):
+            rows.append(recent_buttons[index : index + 2])
     return ReplyKeyboardMarkup(
-        [[KeyboardButton("📍 Отправить геолокацию", request_location=True)], [KeyboardButton("❓ Помощь")]],
+        rows,
         resize_keyboard=True,
         one_time_keyboard=False,
         input_field_placeholder="Город, координаты или /profile Москва +24",
