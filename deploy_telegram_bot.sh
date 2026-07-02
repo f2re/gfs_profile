@@ -143,6 +143,7 @@ require_ready_install() {
   [[ -f "$REPO_ROOT/requirements.txt" ]] || fail "В источнике нет requirements.txt: $REPO_ROOT"
   [[ -f "$REPO_ROOT/gfs_core.py" ]] || fail "В источнике нет gfs_core.py: $REPO_ROOT"
   [[ -f "$REPO_ROOT/runtime_check.py" ]] || fail "В источнике нет runtime_check.py: $REPO_ROOT"
+  [[ -f "$REPO_ROOT/prepare_basemap_cache.py" ]] || fail "В источнике нет prepare_basemap_cache.py: $REPO_ROOT"
   [[ -f "$REPO_ROOT/register_telegram_commands.py" ]] || fail "В источнике нет register_telegram_commands.py: $REPO_ROOT"
   [[ -d "$INSTALL_DIR" ]] || fail "Каталог $INSTALL_DIR не существует. Сначала выполните bash install_telegram_bot.sh"
   [[ -f "$ENV_FILE" ]] || fail "Нет $ENV_FILE. Сначала выполните первичную установку, чтобы задать TELEGRAM_BOT_TOKEN"
@@ -156,6 +157,7 @@ copy_project() {
       --exclude '.git/' \
       --exclude '.venv/' \
       --exclude '.cache_gfs/' \
+      --exclude 'data/basemap/' \
       --exclude '.env' \
       --exclude '.install-state' \
       --exclude '__pycache__/' \
@@ -167,6 +169,7 @@ copy_project() {
       --exclude='./.git' \
       --exclude='./.venv' \
       --exclude='./.cache_gfs' \
+      --exclude='./data/basemap' \
       --exclude='./.env' \
       --exclude='./.install-state' \
       --exclude='*/__pycache__' \
@@ -195,6 +198,19 @@ ensure_venv_and_deps() {
 runtime_check() {
   log "Проверяю runtime-зависимости до перезапуска сервиса"
   run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" MPLBACKEND=Agg "$VENV_DIR/bin/python" "$INSTALL_DIR/runtime_check.py"
+}
+
+prepare_basemap_cache() {
+  log "Проверяю офлайн-подложку Natural Earth"
+  if run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" MPLBACKEND=Agg "$VENV_DIR/bin/python" "$INSTALL_DIR/prepare_basemap_cache.py" --check; then
+    success "Офлайн-подложка карт уже готова"
+    return 0
+  fi
+  if run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" MPLBACKEND=Agg "$VENV_DIR/bin/python" "$INSTALL_DIR/prepare_basemap_cache.py" --resolution "${MAP_BASEMAP_RESOLUTION:-10m}"; then
+    success "Офлайн-подложка карт подготовлена"
+  else
+    warn "Не удалось подготовить basemap cache. Deploy продолжится; карта использует fallback при отсутствии кэша."
+  fi
 }
 
 restart_service() {
@@ -265,6 +281,7 @@ main() {
   copy_project
   ensure_venv_and_deps
   runtime_check
+  prepare_basemap_cache
   restart_service
   register_telegram_commands
   write_state

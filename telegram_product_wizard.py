@@ -18,7 +18,7 @@ MAP_FROM_HOURS = (0, 6, 12, 24)
 MAP_TO_HOURS = (24, 48, 72)
 MAP_STEPS = (3, 6)
 MAP_MODES = (("single", "Одна карта"), ("series", "Серия PNG"), ("gif", "GIF"))
-MAP_BASEMAPS = (("basic", "Базовая"), ("water", "Водоёмы"), ("places", "Города+вода"), ("roads", "Дороги"))
+MAP_BASEMAPS = (("basic", "База"), ("water", "Вода"), ("places", "Города"), ("roads", "Дороги"))
 
 
 def start_aero_wizard_state(default_lead: int, diagram_type: str = "stuve") -> dict[str, object]:
@@ -184,7 +184,12 @@ def params_text(state: dict[str, object]) -> str:
             time_line = f"GIF-анимация: от +{int(state.get('from', 0))} до +{int(state.get('to', 24))} ч, шаг {int(state.get('time_step', 3))} ч"
         else:
             time_line = f"Серия PNG: от +{int(state.get('from', 0))} до +{int(state.get('to', 24))} ч, шаг {int(state.get('time_step', 3))} ч"
-        basemap_label = {"basic": "базовая", "water": "реки и водоёмы", "places": "города и водоёмы", "roads": "города, водоёмы и дороги"}.get(str(state.get("basemap", "places")), "города и водоёмы")
+        basemap_label = {
+            "basic": "без геослоёв",
+            "water": "береговая линия, реки, водоёмы",
+            "places": "вода, города и границы",
+            "roads": "города и основные дороги, если слой доступен",
+        }.get(str(state.get("basemap", "places")), "вода, города и границы")
         return (
             f"{product_title(product)}\n"
             "Шаг 2/3 — параметры\n\n"

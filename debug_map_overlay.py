@@ -5,7 +5,8 @@ import json
 import sys
 from pathlib import Path
 
-from composite_map import MAP_BASEMAPS, MAP_RADIUS_KM, _overlay_cache_path, area_box_from_radius, load_basemap_outlines, load_overlay, summarize_overlay
+from basemap_cache import check_basemap_cache, local_basemap_overlay
+from composite_map import MAP_BASEMAPS, MAP_RADIUS_KM, area_box_from_radius
 from geocode import GeoPoint, resolve_location
 
 
@@ -19,26 +20,14 @@ def _point_from_args(args: argparse.Namespace) -> GeoPoint:
     return resolve_location(args.location)
 
 
-def _format_attempt(attempt: dict) -> str:
-    parts = [
-        f"endpoint={attempt.get('endpoint') or '-'}",
-        f"http={attempt.get('http_status') if attempt.get('http_status') is not None else '-'}",
-        f"elapsed_ms={attempt.get('elapsed_ms') if attempt.get('elapsed_ms') is not None else '-'}",
-        f"bytes={attempt.get('response_bytes') if attempt.get('response_bytes') is not None else '-'}",
-        f"elements={attempt.get('elements') if attempt.get('elements') is not None else '-'}",
-    ]
-    if attempt.get("error_type") or attempt.get("error"):
-        parts.append(f"error={attempt.get('error_type') or 'Error'}: {attempt.get('error') or ''}")
-    return "  - " + ", ".join(parts)
-
-
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Diagnose OSM/Overpass overlay loading for /map.")
+    parser = argparse.ArgumentParser(description="Diagnose local Natural Earth basemap overlay for /map.")
     parser.add_argument("location", nargs="?", help="Location name, for example Москва or Краснодар")
     parser.add_argument("--lat", type=float, help="Latitude")
     parser.add_argument("--lon", type=float, help="Longitude")
-    parser.add_argument("--basemap", choices=MAP_BASEMAPS, default="places", help="Overlay mode")
+    parser.add_argument("--basemap", choices=MAP_BASEMAPS, default="places", help="Basemap mode")
     parser.add_argument("--radius-km", type=float, default=MAP_RADIUS_KM, help="Map radius in km")
+    parser.add_argument("--resolution", default=None, help="Natural Earth resolution: 10m, 50m or 110m")
     parser.add_argument("--json", action="store_true", help="Print full diagnostic payload as JSON")
     return parser
 
@@ -46,43 +35,30 @@ def build_parser() -> argparse.ArgumentParser:
 def diagnostic_payload(args: argparse.Namespace) -> dict:
     point = _point_from_args(args)
     bbox = area_box_from_radius(point.lat, point.lon, float(args.radius_km))
-    cache_path = _overlay_cache_path(bbox, args.basemap)
-    cache_existed_before = cache_path.exists()
-    overlay = load_overlay(bbox, args.basemap)
-    outlines = load_basemap_outlines(bbox) if args.basemap != "basic" else {"_meta": {"status": "disabled"}}
-    meta = overlay.get("_meta") or {}
-    outline_meta = outlines.get("_meta") or {}
-    stats = summarize_overlay(overlay, point.lat, point.lon)
-    parsed_counts = {
-        "cities": stats.get("city_count", 0),
-        "water": stats.get("water_count", 0),
-        "rivers": stats.get("river_count", 0),
-        "roads": stats.get("road_count", 0),
-    }
+    cache = check_basemap_cache(args.resolution)
+    overlay = local_basemap_overlay(point.lat, point.lon, float(args.radius_km), args.basemap, args.resolution)
+    stats = overlay.get("stats") or {}
     return {
         "point": {"lat": point.lat, "lon": point.lon, "label": point.label, "source": point.source},
         "bbox": bbox,
         "basemap": args.basemap,
-        "cache_path": str(cache_path),
-        "cache_hit": bool(meta.get("cache_hit")),
-        "cache_miss": not bool(meta.get("cache_hit")),
-        "cache_existed_before": cache_existed_before,
-        "query_hash": meta.get("query_hash"),
-        "endpoint_attempts": meta.get("attempts") or [],
-        "http_status": meta.get("http_status"),
-        "response_bytes": meta.get("response_bytes"),
-        "raw_elements_count": len(overlay.get("elements") or []),
-        "element_counts": meta.get("element_counts") or {},
-        "parsed_counts": parsed_counts,
-        "outline_status": outline_meta.get("status", "unknown"),
-        "outline_resolution": outline_meta.get("resolution"),
-        "outline_cache_hit": bool(outline_meta.get("cache_hit")),
-        "outline_feature_counts": outline_meta.get("feature_counts") or {},
-        "outline_line_count": int(outline_meta.get("line_count") or 0),
-        "outline_point_count": int(outline_meta.get("point_count") or 0),
-        "outline_error": outline_meta.get("error"),
-        "final_status": meta.get("status", "unknown"),
-        "error": meta.get("error"),
+        "resolution": cache.resolution,
+        "data_dir": str(cache.data_dir),
+        "manifest": str(cache.manifest_path),
+        "cache_ready": cache.ready,
+        "missing_layers": cache.missing_layers,
+        "failed_layers": cache.failed_layers,
+        "layer_status": {name: {"ok": status.ok, "path": str(status.path) if status.path else None, "error": status.error} for name, status in cache.layers.items()},
+        "overlay_status": stats.get("status", "unknown"),
+        "overlay_warnings": stats.get("warnings") or [],
+        "counts": {
+            "coastline": stats.get("coastline_count", 0),
+            "water": stats.get("water_count", 0),
+            "rivers": stats.get("river_count", 0),
+            "admin": stats.get("admin_count", 0),
+            "roads": stats.get("road_count", 0),
+            "cities": stats.get("city_count", 0),
+        },
     }
 
 
@@ -90,32 +66,24 @@ def print_text(payload: dict) -> None:
     print(f"point: {payload['point']['label']} ({payload['point']['lat']:.4f}, {payload['point']['lon']:.4f}) source={payload['point']['source']}")
     print(f"bbox: {payload['bbox']}")
     print(f"basemap mode: {payload['basemap']}")
-    print(f"cache path: {Path(payload['cache_path'])}")
-    print(f"cache hit / miss: {'hit' if payload['cache_hit'] else 'miss'} (existed_before={payload['cache_existed_before']})")
-    print(f"query hash: {payload.get('query_hash') or '-'}")
-    print("endpoint attempts:")
-    attempts = payload.get("endpoint_attempts") or []
-    if attempts:
-        for attempt in attempts:
-            print(_format_attempt(attempt))
-    else:
-        print("  - none")
-    print(f"HTTP status: {payload.get('http_status') if payload.get('http_status') is not None else '-'}")
-    print(f"response bytes: {payload.get('response_bytes') if payload.get('response_bytes') is not None else '-'}")
-    print(f"raw elements count: {payload['raw_elements_count']}")
-    counts = payload["parsed_counts"]
-    print(f"parsed city/water/river/road counts: {counts['cities']}/{counts['water']}/{counts['rivers']}/{counts['roads']}")
+    print(f"resolution: {payload['resolution']}")
+    print(f"data dir: {Path(payload['data_dir'])}")
+    print(f"manifest: {Path(payload['manifest'])}")
+    print(f"cache ready: {'yes' if payload['cache_ready'] else 'no'}")
+    if payload["missing_layers"]:
+        print("missing layers: " + ", ".join(payload["missing_layers"]))
+    if payload["failed_layers"]:
+        print("failed layers:")
+        for layer, error in payload["failed_layers"].items():
+            print(f"  - {layer}: {error}")
+    counts = payload["counts"]
     print(
-        "basemap outlines: "
-        f"status={payload['outline_status']}, resolution={payload.get('outline_resolution') or '-'}, "
-        f"cache_hit={payload['outline_cache_hit']}, lines={payload['outline_line_count']}, "
-        f"points={payload['outline_point_count']}, features={payload['outline_feature_counts']}"
+        "parsed coastline/water/river/admin/road/city counts: "
+        f"{counts['coastline']}/{counts['water']}/{counts['rivers']}/{counts['admin']}/{counts['roads']}/{counts['cities']}"
     )
-    if payload.get("outline_error"):
-        print(f"outline error: {payload['outline_error']}")
-    if payload.get("error"):
-        print(f"error: {payload['error']}")
-    print(f"final status: {payload['final_status']}")
+    if payload["overlay_warnings"]:
+        print("warnings: " + "; ".join(payload["overlay_warnings"]))
+    print(f"final status: {payload['overlay_status']}")
 
 
 def main(argv: list[str] | None = None) -> int:

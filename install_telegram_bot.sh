@@ -15,6 +15,9 @@ DEFAULT_CACHE_TTL="86400"
 DEFAULT_AVAILABILITY_CACHE_TTL="300"
 DEFAULT_REQUEST_TIMEOUT="35"
 DEFAULT_GEOCODE_TIMEOUT="12"
+DEFAULT_MAP_BASEMAP_RESOLUTION="10m"
+DEFAULT_MAP_BASEMAP_AUTO_DOWNLOAD="1"
+DEFAULT_MAP_BASEMAP_DOWNLOAD_TIMEOUT="30"
 
 INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 SERVICE_NAME="${SERVICE_NAME:-$DEFAULT_SERVICE_NAME}"
@@ -65,7 +68,9 @@ $APP_NAME — установка Telegram-бота
 Переменные окружения можно задать заранее:
   TELEGRAM_BOT_TOKEN, DEFAULT_LEAD, MAX_CONCURRENT_GFS, MAX_CONCURRENT_GEOCODE,
   GFS_CACHE_DIR, GFS_CACHE_TTL_SECONDS, GFS_AVAILABILITY_CACHE_TTL_SECONDS,
-  GFS_REQUEST_TIMEOUT, GEOCODER_USER_AGENT, GEOCODE_CACHE_DIR, GEOCODE_TIMEOUT
+  GFS_REQUEST_TIMEOUT, GEOCODER_USER_AGENT, GEOCODE_CACHE_DIR, GEOCODE_TIMEOUT,
+  MAP_BASEMAP_DIR, MAP_BASEMAP_RESOLUTION, MAP_BASEMAP_AUTO_DOWNLOAD,
+  MAP_BASEMAP_DOWNLOAD_TIMEOUT
 EOF
 }
 
@@ -185,6 +190,7 @@ require_repo_files() {
   [[ -f "$REPO_ROOT/requirements.txt" ]] || fail "Не найден requirements.txt."
   [[ -f "$REPO_ROOT/gfs_core.py" ]] || fail "Не найден gfs_core.py."
   [[ -f "$REPO_ROOT/runtime_check.py" ]] || fail "Не найден runtime_check.py. Обновите checkout перед установкой."
+  [[ -f "$REPO_ROOT/prepare_basemap_cache.py" ]] || fail "Не найден prepare_basemap_cache.py. Обновите checkout перед установкой."
   [[ -f "$REPO_ROOT/register_telegram_commands.py" ]] || fail "Не найден register_telegram_commands.py. Обновите checkout перед установкой."
 }
 
@@ -219,6 +225,7 @@ copy_project() {
       --exclude '.git/' \
       --exclude '.venv/' \
       --exclude '.cache_gfs/' \
+      --exclude 'data/basemap/' \
       --exclude '.env' \
       --exclude '.install-state' \
       --exclude '__pycache__/' \
@@ -230,6 +237,7 @@ copy_project() {
       --exclude='./.git' \
       --exclude='./.venv' \
       --exclude='./.cache_gfs' \
+      --exclude='./data/basemap' \
       --exclude='./.env' \
       --exclude='./.install-state' \
       --exclude='*/__pycache__' \
@@ -286,7 +294,7 @@ ask_token() {
 }
 
 write_env() {
-  local token default_lead max_concurrent max_geocode cache_dir ttl availability_ttl timeout ua geocode_dir geocode_timeout
+  local token default_lead max_concurrent max_geocode cache_dir ttl availability_ttl timeout ua geocode_dir geocode_timeout basemap_dir basemap_resolution basemap_auto basemap_timeout
   token="${TELEGRAM_BOT_TOKEN_FINAL:-$(ask_token)}"
   default_lead="$(ask_default "Срок прогноза по умолчанию, часы" "${DEFAULT_LEAD:-$DEFAULT_DEFAULT_LEAD}")"
   max_concurrent="$(ask_default "Максимум одновременных GFS-запросов" "${MAX_CONCURRENT_GFS:-$DEFAULT_MAX_CONCURRENT_GFS}")"
@@ -298,6 +306,10 @@ write_env() {
   ua="$(ask_default "User-Agent геокодера" "${GEOCODER_USER_AGENT:-gfs-profile-telegram-bot/0.1}")"
   geocode_dir="$(ask_default "Каталог кэша геокодера" "${GEOCODE_CACHE_DIR:-.cache_gfs/geocode}")"
   geocode_timeout="$(ask_default "Timeout геокодера, секунд" "${GEOCODE_TIMEOUT:-$DEFAULT_GEOCODE_TIMEOUT}")"
+  basemap_dir="$(ask_default "Каталог офлайн-подложки карт" "${MAP_BASEMAP_DIR:-$INSTALL_DIR/data/basemap}")"
+  basemap_resolution="$(ask_default "Разрешение Natural Earth basemap" "${MAP_BASEMAP_RESOLUTION:-$DEFAULT_MAP_BASEMAP_RESOLUTION}")"
+  basemap_auto="$(ask_default "Автоскачивание basemap при отсутствии кэша (1/0)" "${MAP_BASEMAP_AUTO_DOWNLOAD:-$DEFAULT_MAP_BASEMAP_AUTO_DOWNLOAD}")"
+  basemap_timeout="$(ask_default "Timeout скачивания basemap, секунд" "${MAP_BASEMAP_DOWNLOAD_TIMEOUT:-$DEFAULT_MAP_BASEMAP_DOWNLOAD_TIMEOUT}")"
 
   log "Записываю $ENV_FILE"
   run_root install -m 0640 -o root -g "$SERVICE_USER" /dev/null "$ENV_FILE"
@@ -313,6 +325,10 @@ GFS_REQUEST_TIMEOUT=$timeout
 GEOCODER_USER_AGENT=$ua
 GEOCODE_CACHE_DIR=$geocode_dir
 GEOCODE_TIMEOUT=$geocode_timeout
+MAP_BASEMAP_DIR=$basemap_dir
+MAP_BASEMAP_RESOLUTION=$basemap_resolution
+MAP_BASEMAP_AUTO_DOWNLOAD=$basemap_auto
+MAP_BASEMAP_DOWNLOAD_TIMEOUT=$basemap_timeout
 MPLBACKEND=Agg
 PYTHONUNBUFFERED=1
 EOF
@@ -332,6 +348,24 @@ EOF
     run_root mkdir -p "$geocode_dir"
     run_root chown -R "$SERVICE_USER:$SERVICE_USER" "$geocode_dir"
     append_rw_path "$geocode_dir"
+  fi
+
+  if [[ "$basemap_dir" = /* ]]; then
+    run_root mkdir -p "$basemap_dir"
+    run_root chown -R "$SERVICE_USER:$SERVICE_USER" "$basemap_dir"
+    append_rw_path "$basemap_dir"
+  else
+    run_root mkdir -p "$INSTALL_DIR/$basemap_dir"
+    run_root chown -R "$SERVICE_USER:$SERVICE_USER" "$INSTALL_DIR/$basemap_dir"
+  fi
+}
+
+prepare_basemap_cache() {
+  log "Готовлю офлайн-подложку Natural Earth"
+  if run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" MPLBACKEND=Agg "$VENV_DIR/bin/python" "$INSTALL_DIR/prepare_basemap_cache.py" --resolution "${MAP_BASEMAP_RESOLUTION:-$DEFAULT_MAP_BASEMAP_RESOLUTION}"; then
+    success "Офлайн-подложка карт готова"
+  else
+    warn "Не удалось подготовить basemap cache. Бот продолжит работать с fallback; повторите вручную: cd $INSTALL_DIR && $VENV_DIR/bin/python prepare_basemap_cache.py"
   fi
 }
 
@@ -446,6 +480,7 @@ main() {
   create_venv
   runtime_check
   write_env
+  prepare_basemap_cache
   write_service
   start_service
   register_telegram_commands

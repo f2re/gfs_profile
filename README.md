@@ -163,18 +163,52 @@ AT500        разреженные стрелки UGRD/VGRD 500 гПа, м/с
 Видимость    подписи только при VIS < 10 км: например 9 км, 3 км, 0.8 км
 ```
 
-Подложка использует лёгкие данные OSM/Overpass с кэшем и имеет режимы:
+Подложка `/map` использует офлайн-векторный кэш Natural Earth и не ходит в OSM/Overpass во время построения карты. Режимы:
 
 ```text
-basemap=basic   белая подложка, центр и радиусы
-basemap=water   реки, водоёмы и озёра
-basemap=places  города/населённые пункты + вода, режим по умолчанию
-basemap=roads   города, вода и основные дороги
+basemap=basic   без геослоёв: сетка, кольца, центр
+basemap=water   береговая линия, водоёмы, реки
+basemap=places  water + города + административные границы, режим по умолчанию
+basemap=roads   places + основные дороги, если локальный слой roads доступен
 ```
 
-Запрос к Overpass использует `out tags geom qt`: water/rivers для `water`, water/rivers/places для `places`, water/rivers/places/major roads для `roads`. Если основной endpoint недоступен или пустой, бот пробует fallback endpoints и использует только v2-кэш успешного непустого ответа. Пустые/error responses не продлевают кэш. Дополнительно карта грузит Natural Earth basemap outlines через Cartopy: coastlines, lake outlines и river centerlines с разрешением `10m` для локальных bbox. Этот слой кэшируется отдельно и рисуется под OSM/метеослоями. Если OSM всё равно недоступен, карта строится на простой белой подложке с доступными outlines, центральная точка всё равно подписана, а footer/caption сообщает краткую причину. Для расширенной подписи включите `MAP_OVERLAY_DEBUG=1`.
+Офлайн-подложка хранится в `MAP_BASEMAP_DIR` (по умолчанию `data/basemap`) в структуре:
 
-Диагностика overlay:
+```text
+data/basemap/
+  natural_earth/
+    10m/
+      ne_10m_coastline.*
+      ne_10m_lakes.*
+      ne_10m_rivers_lake_centerlines.*
+      ne_10m_admin_0_boundary_lines_land.*
+      ne_10m_admin_1_states_provinces_lines.*
+      ne_10m_populated_places.*
+      ne_10m_roads.*              # optional
+      manifest.json
+```
+
+Подготовка и проверка кэша:
+
+```bash
+python prepare_basemap_cache.py
+python prepare_basemap_cache.py --resolution 10m
+python prepare_basemap_cache.py --resolution 50m
+python prepare_basemap_cache.py --check
+```
+
+Переменные окружения:
+
+```text
+MAP_BASEMAP_DIR               каталог офлайн-подложки, default data/basemap
+MAP_BASEMAP_RESOLUTION        10m|50m|110m, default 10m
+MAP_BASEMAP_AUTO_DOWNLOAD     1/0, попробовать скачать кэш при отсутствии
+MAP_BASEMAP_DOWNLOAD_TIMEOUT  timeout скачивания Natural Earth, default 30
+```
+
+Если локальный слой отсутствует, карта не падает: footer/caption пишет, например, `Подложка: слой roads отсутствует в локальном кэше`. Если кэша нет совсем, строится fallback-карта с сеткой, кольцами и центральной точкой.
+
+Диагностика локальной подложки:
 
 ```bash
 python debug_map_overlay.py Москва --basemap places
@@ -182,7 +216,7 @@ python debug_map_overlay.py Краснодар --basemap roads
 python debug_map_overlay.py --lat 44.0393 --lon 43.0708 --basemap places
 ```
 
-CLI показывает bbox, режим подложки, путь к кэшу, cache hit/miss, попытки endpoint, HTTP status, размер ответа, raw elements, parsed city/water/river/road counts, статус Natural Earth outlines и итоговый статус.
+CLI показывает bbox, режим подложки, готовность локального кэша, отсутствующие слои и parsed coastline/water/river/admin/road/city counts.
 
 ## Cloudgram
 
@@ -284,6 +318,9 @@ GFS_CACHE_DIR            каталог кэша GRIB2
 GFS_CACHE_TTL_SECONDS    TTL кэша GRIB2
 GFS_REQUEST_TIMEOUT      timeout NOMADS
 GFS_PRESSURE_LEVELS_HPA  уровни для базового профиля: all/profile/list
+MAP_BASEMAP_DIR          каталог офлайн-подложки Natural Earth
+MAP_BASEMAP_RESOLUTION   разрешение подложки: 10m|50m|110m
+MAP_BASEMAP_AUTO_DOWNLOAD автоскачивание кэша: 1/0
 MPLBACKEND               для сервиса: Agg
 PYTHONUNBUFFERED         1
 ```
@@ -293,6 +330,6 @@ PYTHONUNBUFFERED         1
 - Все продукты — модель GFS, не наблюдения.
 - ВНГО, грозовой риск и общая опасность в `/cloudgram` — модельная диагностика, не факт наблюдения.
 - Грозовой слой `/map` — модельный риск, не фактические молнии; пространственная детализация ограничена сеткой GFS 0.25.
-- Подложка `/map` зависит от доступности Overpass, но при сбое заменяется простой белой картой.
+- Подложка `/map` берётся из локального Natural Earth cache; детализация и дороги ограничены доступностью этих слоёв.
 - Для части GFS-полей возможны пропуски; продукт должен строиться с доступными слоями и показывать список отсутствующих полей.
 - Для широких PNG Telegram может отправлять документ вместо фото, чтобы не сжимать изображение.

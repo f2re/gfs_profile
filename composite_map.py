@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import hashlib
-import json
-import logging
 import math
 import os
 import tempfile
 import time
 from datetime import timedelta
 from pathlib import Path
-from urllib.parse import urlencode, urlparse
+from urllib.parse import urlencode
 
 import matplotlib
 matplotlib.use("Agg")
@@ -20,11 +18,10 @@ from matplotlib.colors import BoundaryNorm, ListedColormap
 from PIL import Image
 from requests import RequestException
 
+from basemap_cache import local_basemap_overlay
 from geocode import GeoPoint
 from gfs_core import CACHE_DIR, NOMADS_BASE, REQUEST_TIMEOUT, GfsProfileError, GfsRun, ProgressCallback, clean_old_cache, forecast_file_exists, run_dir, run_file_name, validate_lead
 from weather_diagnostics import DASH, precipitation_code, thunder_score, visibility_km, weather_code
-
-logger = logging.getLogger(__name__)
 
 MAP_RADIUS_KM = 100.0
 MAP_RING_STEP_KM = 25.0
@@ -36,18 +33,6 @@ MAP_BASEMAP_PLACES = "places"
 MAP_BASEMAP_ROADS = "roads"
 MAP_BASEMAP_DEFAULT = MAP_BASEMAP_PLACES
 MAP_BASEMAPS = (MAP_BASEMAP_BASIC, MAP_BASEMAP_WATER, MAP_BASEMAP_PLACES, MAP_BASEMAP_ROADS)
-OVERPASS_ENDPOINTS = (
-    "https://overpass-api.de/api/interpreter",
-    "https://overpass.kumi.systems/api/interpreter",
-    "https://overpass.openstreetmap.ru/api/interpreter",
-)
-OVERPASS_TIMEOUT_SECONDS = 8
-OVERLAY_CACHE_VERSION = 2
-OVERLAY_CACHE_TTL_SECONDS = 30 * 86400
-BASEMAP_OUTLINE_CACHE_VERSION = 1
-BASEMAP_OUTLINE_CACHE_TTL_SECONDS = 30 * 86400
-BASEMAP_OUTLINE_DEFAULT_RESOLUTION = os.getenv("MAP_BASEMAP_OUTLINE_RESOLUTION", "10m")
-BASEMAP_OUTLINES_ENABLED = os.getenv("MAP_BASEMAP_OUTLINES", "1").strip().lower() not in {"0", "false", "no", "off"}
 MAP_VARIABLES = (
     "TCDC", "APCP", "PRATE", "ACPCP", "CPRAT", "CAPE", "CIN", "VIS",
     "CRAIN", "CSNOW", "CFRZR", "CICEP", "UGRD", "VGRD",
@@ -500,566 +485,10 @@ def _masked(values, mask):
     return np.ma.masked_where(~mask, values)
 
 
-def _overlay_cache_path(box: tuple[float, float, float, float], basemap: str) -> Path:
-    return CACHE_DIR / ("osm_overlay_v2_" + basemap + "_" + _box_token(box) + ".json")
-
-
-def _basemap_outline_cache_path(box: tuple[float, float, float, float], resolution: str) -> Path:
-    return CACHE_DIR / ("basemap_outlines_v1_" + resolution + "_" + _box_token(box) + ".json")
-
-
-def _query_hash(query: str) -> str:
-    return hashlib.sha1(query.encode("utf-8")).hexdigest()[:12]
-
-
-def _endpoint_label(endpoint: str | None) -> str | None:
-    if not endpoint:
-        return None
-    parsed = urlparse(endpoint)
-    return parsed.netloc or endpoint
-
-
-def _base_overlay_meta(
-    basemap: str,
-    status: str,
-    *,
-    error: str | None = None,
-    endpoint: str | None = None,
-    attempts: list[dict] | None = None,
-    cache_hit: bool = False,
-    response_bytes: int | None = None,
-    http_status: int | None = None,
-    elapsed_ms: int | None = None,
-    query_hash: str | None = None,
-    bbox: tuple[float, float, float, float] | None = None,
-    element_counts: dict | None = None,
-    parsed_counts: dict | None = None,
-) -> dict:
-    return {
-        "cache_version": OVERLAY_CACHE_VERSION,
-        "basemap": basemap,
-        "status": status,
-        "endpoint": endpoint,
-        "endpoint_label": _endpoint_label(endpoint),
-        "error": error,
-        "attempts": attempts or [],
-        "cache_hit": cache_hit,
-        "response_bytes": response_bytes,
-        "http_status": http_status,
-        "elapsed_ms": elapsed_ms,
-        "query_hash": query_hash,
-        "bbox": list(bbox) if bbox else None,
-        "element_counts": element_counts or {},
-        "parsed_counts": parsed_counts or {"cities": 0, "water": 0, "rivers": 0, "roads": 0},
-    }
-
-
-def _empty_overlay(
-    basemap: str,
-    status: str,
-    error: str | None = None,
-    endpoint: str | None = None,
-    *,
-    attempts: list[dict] | None = None,
-    cache_hit: bool = False,
-    response_bytes: int | None = None,
-    http_status: int | None = None,
-    elapsed_ms: int | None = None,
-    query_hash: str | None = None,
-    bbox: tuple[float, float, float, float] | None = None,
-    parsed_counts: dict | None = None,
-) -> dict:
-    return {
-        "elements": [],
-        "_meta": _base_overlay_meta(
-            basemap,
-            status,
-            error=error,
-            endpoint=endpoint,
-            attempts=attempts,
-            cache_hit=cache_hit,
-            response_bytes=response_bytes,
-            http_status=http_status,
-            elapsed_ms=elapsed_ms,
-            query_hash=query_hash,
-            bbox=bbox,
-            parsed_counts=parsed_counts,
-        ),
-    }
-
-
-def _overlay_element_counts(elements: list[dict]) -> dict[str, int]:
-    counts = {
-        "raw_elements": len(elements),
-        "place_nodes": 0,
-        "place_areas": 0,
-        "water_ways": 0,
-        "water_relations": 0,
-        "river_ways": 0,
-        "river_relations": 0,
-        "highway_ways": 0,
-        "with_geometry": 0,
-    }
-    for element in elements:
-        tags = element.get("tags") or {}
-        element_type = element.get("type")
-        if element.get("geometry"):
-            counts["with_geometry"] += 1
-        if element_type == "node" and tags.get("place"):
-            counts["place_nodes"] += 1
-        elif element_type in {"way", "relation"} and tags.get("place"):
-            counts["place_areas"] += 1
-        if element_type == "way" and tags.get("natural") == "water":
-            counts["water_ways"] += 1
-        elif element_type == "relation" and tags.get("natural") == "water":
-            counts["water_relations"] += 1
-        if element_type == "way" and tags.get("waterway") in {"river", "canal", "stream"}:
-            counts["river_ways"] += 1
-        elif element_type == "relation" and tags.get("waterway") in {"river", "canal"}:
-            counts["river_relations"] += 1
-        if element_type == "way" and tags.get("highway"):
-            counts["highway_ways"] += 1
-    return counts
-
-
-def _overpass_query(box: tuple[float, float, float, float], basemap: str) -> str:
-    south, north, west, east = box
-    selectors = [
-        f'way["natural"="water"]({south},{west},{north},{east});',
-        f'relation["natural"="water"]({south},{west},{north},{east});',
-        f'way["waterway"~"river|canal|stream"]({south},{west},{north},{east});',
-        f'relation["waterway"~"river|canal"]({south},{west},{north},{east});',
-    ]
-    if basemap in {MAP_BASEMAP_PLACES, MAP_BASEMAP_ROADS}:
-        selectors.insert(0, f'node["place"~"city|town|village|hamlet"]({south},{west},{north},{east});')
-        selectors.insert(1, f'way["place"~"city|town|village|hamlet"]({south},{west},{north},{east});')
-        selectors.insert(2, f'relation["place"~"city|town|village|hamlet"]({south},{west},{north},{east});')
-    if basemap == MAP_BASEMAP_ROADS:
-        selectors.append(f'way["highway"~"motorway|trunk|primary|secondary"]({south},{west},{north},{east});')
-    selector_block = "\n  ".join(selectors)
-    return f"""[out:json][timeout:12];
-(
-  {selector_block}
-);
-out tags geom qt;
-"""
-
-
-def _parsed_overlay_counts(elements: list[dict]) -> dict[str, int]:
-    overlay = {"elements": elements}
-    shapes = _extract_overlay_shapes_unbounded(overlay)
-    return {
-        "cities": len(shapes["city_points"]),
-        "water": len(shapes["water_polygons"]),
-        "rivers": len(shapes["river_lines"]),
-        "roads": len(shapes["road_lines"]),
-    }
-
-
-def load_overlay(box: tuple[float, float, float, float], basemap: str = MAP_BASEMAP_DEFAULT, progress_callback: ProgressCallback | None = None) -> dict:
-    basemap = _validate_basemap(basemap)
-    if basemap == MAP_BASEMAP_BASIC:
-        return _empty_overlay(basemap, "disabled", bbox=box)
-    south, north, west, east = box
-    west = max(-180.0, west)
-    east = min(180.0, east)
-    normalized_box = (south, north, west, east)
-    if east <= west:
-        logger.warning("OSM overlay invalid bbox basemap=%s bbox=%s", basemap, normalized_box)
-        return _empty_overlay(basemap, "invalid_bbox", "bbox crosses unsupported longitude range", bbox=normalized_box)
-
-    query = _overpass_query(normalized_box, basemap)
-    query_digest = _query_hash(query)
-    cache_path = _overlay_cache_path(normalized_box, basemap)
-    logger.info("OSM overlay load basemap=%s bbox=%s cache_path=%s query_hash=%s", basemap, normalized_box, cache_path, query_digest)
-    if cache_path.exists() and time.time() - cache_path.stat().st_mtime < OVERLAY_CACHE_TTL_SECONDS:
-        try:
-            cached = json.loads(cache_path.read_text(encoding="utf-8"))
-            meta = cached.get("_meta") or {}
-            elements = cached.get("elements") or []
-            if meta.get("cache_version") == OVERLAY_CACHE_VERSION and meta.get("status") == "ok" and elements:
-                element_counts = _overlay_element_counts(elements)
-                parsed_counts = _parsed_overlay_counts(elements)
-                cached["_meta"] = _base_overlay_meta(
-                    basemap,
-                    "ok",
-                    endpoint=meta.get("endpoint"),
-                    attempts=meta.get("attempts") or [],
-                    cache_hit=True,
-                    response_bytes=meta.get("response_bytes"),
-                    http_status=meta.get("http_status"),
-                    elapsed_ms=meta.get("elapsed_ms"),
-                    query_hash=meta.get("query_hash") or query_digest,
-                    bbox=normalized_box,
-                    element_counts=element_counts,
-                    parsed_counts=parsed_counts,
-                )
-                logger.info(
-                    "OSM overlay cache hit basemap=%s bbox=%s elements=%s parsed=%s",
-                    basemap,
-                    normalized_box,
-                    len(elements),
-                    parsed_counts,
-                )
-                return cached
-            logger.info(
-                "OSM overlay cache ignored basemap=%s bbox=%s reason=old_or_empty version=%s status=%s elements=%s",
-                basemap,
-                normalized_box,
-                meta.get("cache_version"),
-                meta.get("status"),
-                len(elements),
-            )
-        except Exception as exc:
-            logger.warning("OSM overlay cache ignored basemap=%s bbox=%s error=%s: %s", basemap, normalized_box, type(exc).__name__, exc)
-    else:
-        logger.info("OSM overlay cache miss basemap=%s bbox=%s cache_path=%s", basemap, normalized_box, cache_path)
-
-    errors: list[str] = []
-    attempts: list[dict] = []
-    for endpoint in OVERPASS_ENDPOINTS:
-        started = time.monotonic()
-        attempt = {
-            "endpoint": endpoint,
-            "endpoint_label": _endpoint_label(endpoint),
-            "http_status": None,
-            "elapsed_ms": None,
-            "response_bytes": None,
-            "elements": 0,
-            "error_type": None,
-            "error": None,
-        }
-        try:
-            _emit(progress_callback, stage="map_overlay", message="Загружаю OSM-подложку", endpoint=endpoint, basemap=basemap)
-            response = requests.post(endpoint, data={"data": query}, timeout=OVERPASS_TIMEOUT_SECONDS, headers={"User-Agent": "gfs-profile-map/1.0"})
-            attempt["elapsed_ms"] = int((time.monotonic() - started) * 1000)
-            attempt["http_status"] = response.status_code
-            attempt["response_bytes"] = len(response.content or b"")
-            logger.info(
-                "OSM overlay endpoint basemap=%s bbox=%s endpoint=%s http_status=%s elapsed_ms=%s response_bytes=%s",
-                basemap,
-                normalized_box,
-                endpoint,
-                attempt["http_status"],
-                attempt["elapsed_ms"],
-                attempt["response_bytes"],
-            )
-            if response.status_code != 200:
-                errors.append(f"{endpoint}: HTTP {response.status_code}")
-                attempts.append(attempt)
-                continue
-            data = response.json()
-            elements = data.get("elements") or []
-            attempt["elements"] = len(elements)
-            element_counts = _overlay_element_counts(elements)
-            parsed_counts = _parsed_overlay_counts(elements)
-            logger.info(
-                "OSM overlay parsed basemap=%s bbox=%s endpoint=%s elements=%s element_counts=%s parsed_counts=%s",
-                basemap,
-                normalized_box,
-                endpoint,
-                len(elements),
-                element_counts,
-                parsed_counts,
-            )
-            attempts.append(attempt)
-            meta = _base_overlay_meta(
-                basemap,
-                "ok" if elements else "empty",
-                endpoint=endpoint,
-                attempts=attempts,
-                cache_hit=False,
-                response_bytes=attempt["response_bytes"],
-                http_status=attempt["http_status"],
-                elapsed_ms=attempt["elapsed_ms"],
-                query_hash=query_digest,
-                bbox=normalized_box,
-                element_counts=element_counts,
-                parsed_counts=parsed_counts,
-            )
-            data["_meta"] = meta
-            if elements:
-                cache_path.write_text(json.dumps(data), encoding="utf-8")
-                return data
-            errors.append(f"{endpoint}: empty")
-        except Exception as exc:
-            attempt["elapsed_ms"] = int((time.monotonic() - started) * 1000)
-            attempt["error_type"] = type(exc).__name__
-            attempt["error"] = str(exc)
-            attempts.append(attempt)
-            logger.warning(
-                "OSM overlay endpoint failed basemap=%s bbox=%s endpoint=%s elapsed_ms=%s error=%s: %s",
-                basemap,
-                normalized_box,
-                endpoint,
-                attempt["elapsed_ms"],
-                type(exc).__name__,
-                exc,
-            )
-            errors.append(f"{endpoint}: {type(exc).__name__}: {exc}")
-    logger.warning("OSM overlay unavailable basemap=%s bbox=%s attempts=%s errors=%s", basemap, normalized_box, len(attempts), errors[-3:])
-    last = attempts[-1] if attempts else {}
-    return _empty_overlay(
-        basemap,
-        "unavailable",
-        "; ".join(errors[-3:]),
-        str(last.get("endpoint") or "") or None,
-        attempts=attempts,
-        cache_hit=False,
-        response_bytes=last.get("response_bytes"),
-        http_status=last.get("http_status"),
-        elapsed_ms=last.get("elapsed_ms"),
-        query_hash=query_digest,
-        bbox=normalized_box,
-    )
-
-
-def _empty_basemap_outlines(resolution: str, status: str, error: str | None = None, bbox: tuple[float, float, float, float] | None = None) -> dict:
-    return {
-        "features": [],
-        "_meta": {
-            "cache_version": BASEMAP_OUTLINE_CACHE_VERSION,
-            "status": status,
-            "resolution": resolution,
-            "error": error,
-            "bbox": list(bbox) if bbox else None,
-            "cache_hit": False,
-            "feature_counts": {},
-            "line_count": 0,
-            "point_count": 0,
-        },
-    }
-
-
-def _outline_resolution_for_box(box: tuple[float, float, float, float]) -> str:
-    configured = str(BASEMAP_OUTLINE_DEFAULT_RESOLUTION or "").lower()
-    if configured in {"10m", "50m", "110m"}:
-        return configured
-    south, north, west, east = box
-    span = max(abs(north - south), abs(east - west))
-    if span <= 4.0:
-        return "10m"
-    if span <= 12.0:
-        return "50m"
-    return "110m"
-
-
-def _expanded_box(box: tuple[float, float, float, float], margin_deg: float = 0.15) -> tuple[float, float, float, float]:
-    south, north, west, east = box
-    return south - margin_deg, north + margin_deg, west - margin_deg, east + margin_deg
-
-
-def _segment_intersects_box(a: tuple[float, float], b: tuple[float, float], box: tuple[float, float, float, float]) -> bool:
-    south, north, west, east = box
-    min_lon = min(a[0], b[0])
-    max_lon = max(a[0], b[0])
-    min_lat = min(a[1], b[1])
-    max_lat = max(a[1], b[1])
-    return max_lon >= west and min_lon <= east and max_lat >= south and min_lat <= north
-
-
-def _coords_to_box_lines(coords, box: tuple[float, float, float, float]) -> list[list[list[float]]]:
-    pairs = [(float(item[0]), float(item[1])) for item in coords]
-    if len(pairs) < 2:
-        return []
-    clipped_box = _expanded_box(box)
-    lines: list[list[list[float]]] = []
-    current: list[list[float]] = []
-    for first, second in zip(pairs, pairs[1:]):
-        if _segment_intersects_box(first, second, clipped_box):
-            if not current:
-                current.append([first[1], first[0]])
-            current.append([second[1], second[0]])
-        elif current:
-            if len(current) >= 2:
-                lines.append(current)
-            current = []
-    if len(current) >= 2:
-        lines.append(current)
-    return lines
-
-
-def _geometry_to_box_lines(geometry, box: tuple[float, float, float, float]) -> list[list[list[float]]]:
-    if getattr(geometry, "is_empty", False):
-        return []
-    bounds = getattr(geometry, "bounds", None)
-    if bounds:
-        minx, miny, maxx, maxy = bounds
-        south, north, west, east = _expanded_box(box)
-        if maxx < west or minx > east or maxy < south or miny > north:
-            return []
-    geom_type = getattr(geometry, "geom_type", "")
-    if geom_type == "LineString":
-        return _coords_to_box_lines(geometry.coords, box)
-    if geom_type == "Polygon":
-        lines = _coords_to_box_lines(geometry.exterior.coords, box)
-        for interior in geometry.interiors:
-            lines.extend(_coords_to_box_lines(interior.coords, box))
-        return lines
-    if geom_type in {"MultiLineString", "MultiPolygon", "GeometryCollection"}:
-        lines: list[list[list[float]]] = []
-        for item in geometry.geoms:
-            lines.extend(_geometry_to_box_lines(item, box))
-        return lines
-    return []
-
-
-def load_basemap_outlines(box: tuple[float, float, float, float], resolution: str | None = None) -> dict:
-    south, north, west, east = box
-    west = max(-180.0, west)
-    east = min(180.0, east)
-    normalized_box = (south, north, west, east)
-    selected_resolution = resolution or _outline_resolution_for_box(normalized_box)
-    if not BASEMAP_OUTLINES_ENABLED:
-        return _empty_basemap_outlines(selected_resolution, "disabled", bbox=normalized_box)
-    if east <= west:
-        return _empty_basemap_outlines(selected_resolution, "invalid_bbox", "bbox crosses unsupported longitude range", normalized_box)
-
-    cache_path = _basemap_outline_cache_path(normalized_box, selected_resolution)
-    if cache_path.exists() and time.time() - cache_path.stat().st_mtime < BASEMAP_OUTLINE_CACHE_TTL_SECONDS:
-        try:
-            cached = json.loads(cache_path.read_text(encoding="utf-8"))
-            meta = cached.get("_meta") or {}
-            if meta.get("cache_version") == BASEMAP_OUTLINE_CACHE_VERSION and meta.get("status") == "ok":
-                meta["cache_hit"] = True
-                cached["_meta"] = meta
-                return cached
-        except Exception as exc:
-            logger.warning("basemap outlines cache ignored bbox=%s resolution=%s error=%s: %s", normalized_box, selected_resolution, type(exc).__name__, exc)
-
-    try:
-        from cartopy import config as cartopy_config
-        from cartopy.io import shapereader
-    except Exception as exc:
-        logger.info("basemap outlines unavailable: cartopy missing: %s", exc)
-        return _empty_basemap_outlines(selected_resolution, "missing_dependency", f"cartopy: {exc}", normalized_box)
-    cartopy_data_dir = CACHE_DIR / "cartopy"
-    cartopy_data_dir.mkdir(parents=True, exist_ok=True)
-    cartopy_config["data_dir"] = str(cartopy_data_dir)
-
-    feature_specs = [
-        ("coastlines", "physical", "coastline"),
-        ("lake_outlines", "physical", "lakes"),
-        ("river_outlines", "physical", "rivers_lake_centerlines"),
-    ]
-    features: list[dict] = []
-    feature_counts: dict[str, int] = {}
-    line_count = 0
-    point_count = 0
-    try:
-        for feature_name, category, natural_earth_name in feature_specs:
-            path = shapereader.natural_earth(resolution=selected_resolution, category=category, name=natural_earth_name)
-            lines: list[list[list[float]]] = []
-            for geometry in shapereader.Reader(path).geometries():
-                lines.extend(_geometry_to_box_lines(geometry, normalized_box))
-            if lines:
-                features.append({"name": feature_name, "lines": lines})
-            feature_counts[feature_name] = len(lines)
-            line_count += len(lines)
-            point_count += sum(len(line) for line in lines)
-        payload = {
-            "features": features,
-            "_meta": {
-                "cache_version": BASEMAP_OUTLINE_CACHE_VERSION,
-                "status": "ok",
-                "resolution": selected_resolution,
-                "error": None,
-                "bbox": list(normalized_box),
-                "cache_hit": False,
-                "feature_counts": feature_counts,
-                "line_count": line_count,
-                "point_count": point_count,
-            },
-        }
-        cache_path.write_text(json.dumps(payload), encoding="utf-8")
-        logger.info(
-            "basemap outlines loaded bbox=%s resolution=%s features=%s lines=%s points=%s",
-            normalized_box,
-            selected_resolution,
-            feature_counts,
-            line_count,
-            point_count,
-        )
-        return payload
-    except Exception as exc:
-        logger.warning("basemap outlines unavailable bbox=%s resolution=%s error=%s: %s", normalized_box, selected_resolution, type(exc).__name__, exc)
-        return _empty_basemap_outlines(selected_resolution, "unavailable", f"{type(exc).__name__}: {exc}", normalized_box)
-
-
 def _xy_point(lat: float, lon: float, center_lat: float, center_lon: float) -> tuple[float, float]:
     x = float(_lon_delta(lon, center_lon)) * 111.320 * math.cos(math.radians(center_lat))
     y = (float(lat) - center_lat) * 110.574
     return x, y
-
-
-def _geometry_points(element: dict, nodes: dict[int, tuple[float, float]]) -> list[tuple[float, float]]:
-    points: list[tuple[float, float]] = []
-    for point in element.get("geometry") or []:
-        if "lat" in point and "lon" in point:
-            points.append((float(point["lat"]), float(point["lon"])))
-    if points:
-        return points
-    for node_id in element.get("nodes") or []:
-        pair = nodes.get(int(node_id))
-        if pair:
-            points.append(pair)
-    return points
-
-
-def _geometry_segments(element: dict, nodes: dict[int, tuple[float, float]]) -> list[list[tuple[float, float]]]:
-    if element.get("type") == "relation":
-        segments: list[list[tuple[float, float]]] = []
-        for member in element.get("members") or []:
-            points = _geometry_points(member, nodes)
-            if len(points) >= 2:
-                segments.append(points)
-        if segments:
-            return segments
-    points = _geometry_points(element, nodes)
-    return [points] if points else []
-
-
-def _element_center(element: dict, nodes: dict[int, tuple[float, float]]) -> tuple[float, float] | None:
-    if element.get("type") == "node" and "lat" in element and "lon" in element:
-        return float(element["lat"]), float(element["lon"])
-    center = element.get("center") or {}
-    if "lat" in center and "lon" in center:
-        return float(center["lat"]), float(center["lon"])
-    bounds = element.get("bounds") or {}
-    if {"minlat", "maxlat", "minlon", "maxlon"} <= set(bounds.keys()):
-        return (float(bounds["minlat"]) + float(bounds["maxlat"])) / 2.0, (float(bounds["minlon"]) + float(bounds["maxlon"])) / 2.0
-    points = _geometry_points(element, nodes)
-    if points:
-        return sum(point[0] for point in points) / len(points), sum(point[1] for point in points) / len(points)
-    return None
-
-
-def _extract_overlay_shapes_unbounded(overlay: dict) -> dict:
-    nodes: dict[int, tuple[float, float]] = {}
-    water: list[list[tuple[float, float]]] = []
-    rivers: list[list[tuple[float, float]]] = []
-    roads: list[list[tuple[float, float]]] = []
-    cities: list[tuple[str, float, float]] = []
-    for element in overlay.get("elements", []):
-        if element.get("type") == "node" and "lat" in element and "lon" in element:
-            nodes[int(element["id"])] = (float(element["lat"]), float(element["lon"]))
-    for element in overlay.get("elements", []):
-        tags = element.get("tags") or {}
-        if tags.get("place") in {"city", "town", "village", "hamlet"} and tags.get("name"):
-            center = _element_center(element, nodes)
-            if center:
-                cities.append((str(tags["name"]), center[0], center[1]))
-        segments = _geometry_segments(element, nodes)
-        for segment in segments:
-            if len(segment) < 2:
-                continue
-            if tags.get("natural") == "water" and len(segment) >= 3:
-                water.append(segment)
-            elif tags.get("waterway") in {"river", "canal", "stream"}:
-                rivers.append(segment)
-            elif tags.get("highway") in {"motorway", "trunk", "primary", "secondary"}:
-                roads.append(segment)
-    return {"water_polygons": water, "river_lines": rivers, "road_lines": roads, "city_points": cities}
 
 
 def _line_in_view(points: list[tuple[float, float]], radius_km: float) -> bool:
@@ -1067,151 +496,32 @@ def _line_in_view(points: list[tuple[float, float]], radius_km: float) -> bool:
     return any(math.hypot(x, y) <= limit for x, y in points)
 
 
-def _draw_basemap_outlines(ax, outlines: dict, center_lat: float, center_lon: float, radius_km: float) -> None:
-    styles = {
-        "coastlines": {"color": "#6b8794", "linewidth": 0.75, "alpha": 0.82, "zorder": 1.15},
-        "lake_outlines": {"color": "#82b9cc", "linewidth": 0.55, "alpha": 0.72, "zorder": 1.12},
-        "river_outlines": {"color": "#66aeca", "linewidth": 0.45, "alpha": 0.62, "zorder": 1.18},
-    }
-    for feature in outlines.get("features") or []:
-        style = styles.get(str(feature.get("name")), {"color": "#90a4ae", "linewidth": 0.5, "alpha": 0.6, "zorder": 1.1})
-        for line in feature.get("lines") or []:
-            pts = [_xy_point(point[0], point[1], center_lat, center_lon) for point in line if len(point) >= 2]
-            if len(pts) < 2 or not _line_in_view(pts, radius_km):
-                continue
-            ax.plot([point[0] for point in pts], [point[1] for point in pts], **style)
+def _draw_line_collection(ax, lines: list[list[tuple[float, float]]], *, color: str, linewidth: float, alpha: float, zorder: float, radius_km: float) -> None:
+    for pts in lines:
+        if len(pts) < 2 or not _line_in_view(pts, radius_km):
+            continue
+        ax.plot([point[0] for point in pts], [point[1] for point in pts], color=color, linewidth=linewidth, alpha=alpha, zorder=zorder)
 
 
-def extract_overlay_shapes(overlay: dict, center_lat: float, center_lon: float, radius_km: float = MAP_RADIUS_KM) -> dict:
-    meta = overlay.get("_meta") or {}
-    nodes: dict[int, tuple[float, float]] = {}
-    water: list[list[tuple[float, float]]] = []
-    rivers: list[list[tuple[float, float]]] = []
-    roads: list[list[tuple[float, float]]] = []
-    cities: list[tuple[str, float, float]] = []
-    objects_in_view = 0
-    objects_out_of_view = 0
-    for element in overlay.get("elements", []):
-        if element.get("type") == "node" and "lat" in element and "lon" in element:
-            nodes[int(element["id"])] = (float(element["lat"]), float(element["lon"]))
-    for element in overlay.get("elements", []):
-        tags = element.get("tags") or {}
-        if tags.get("place") in {"city", "town", "village", "hamlet"} and tags.get("name"):
-            center = _element_center(element, nodes)
-            if center:
-                x, y = _xy_point(center[0], center[1], center_lat, center_lon)
-                if math.hypot(x, y) <= radius_km * 1.2:
-                    cities.append((str(tags["name"]), x, y))
-                    objects_in_view += 1
-                else:
-                    objects_out_of_view += 1
-        segments = _geometry_segments(element, nodes)
-        for segment in segments:
-            pts = [_xy_point(lat, lon, center_lat, center_lon) for lat, lon in segment]
-            if len(pts) < 2:
-                continue
-            in_view = _line_in_view(pts, radius_km)
-            if tags.get("natural") == "water" and len(pts) >= 3:
-                if in_view:
-                    water.append(pts)
-                objects_in_view += int(in_view)
-                objects_out_of_view += int(not in_view)
-            elif tags.get("waterway") in {"river", "canal", "stream"} and len(pts) >= 2:
-                if in_view:
-                    if tags.get("waterway") == "stream" and len(rivers) > 40:
-                        continue
-                    rivers.append(pts)
-                objects_in_view += int(in_view)
-                objects_out_of_view += int(not in_view)
-            elif tags.get("highway") in {"motorway", "trunk", "primary", "secondary"} and len(pts) >= 2:
-                if in_view:
-                    roads.append(pts)
-                objects_in_view += int(in_view)
-                objects_out_of_view += int(not in_view)
-    cities.sort(key=lambda item: item[1] * item[1] + item[2] * item[2])
-    stats = {
-        "raw_elements": len(overlay.get("elements", [])),
-        "city_count": len(cities),
-        "water_count": len(water),
-        "river_count": len(rivers),
-        "road_count": len(roads),
-        "objects_in_view": objects_in_view,
-        "objects_out_of_view": objects_out_of_view,
-        "basemap_status": (overlay.get("_meta") or {}).get("status", "unknown"),
-        "basemap": meta.get("basemap"),
-        "endpoint": meta.get("endpoint"),
-        "endpoint_label": meta.get("endpoint_label") or _endpoint_label(meta.get("endpoint")),
-        "error": meta.get("error"),
-        "attempts": meta.get("attempts") or [],
-        "cache_hit": bool(meta.get("cache_hit")),
-        "response_bytes": meta.get("response_bytes"),
-        "http_status": meta.get("http_status"),
-        "elapsed_ms": meta.get("elapsed_ms"),
-        "query_hash": meta.get("query_hash"),
-        "bbox": meta.get("bbox"),
-        "element_counts": meta.get("element_counts", _overlay_element_counts(overlay.get("elements", []))),
-        "parsed_counts": meta.get("parsed_counts") or {"cities": len(cities), "water": len(water), "rivers": len(rivers), "roads": len(roads)},
-    }
-    return {"water_polygons": water, "river_lines": rivers, "road_lines": roads, "city_points": cities[:12], "stats": stats}
-
-
-def summarize_overlay(overlay: dict, center_lat: float, center_lon: float) -> dict:
-    return dict(extract_overlay_shapes(overlay, center_lat, center_lon, MAP_RADIUS_KM)["stats"])
-
-
-def _overlay_shapes(overlay: dict, center_lat: float, center_lon: float, radius_km: float = MAP_RADIUS_KM) -> tuple[list[list[tuple[float, float]]], list[list[tuple[float, float]]], list[list[tuple[float, float]]], list[tuple[str, float, float]], dict]:
-    shapes = extract_overlay_shapes(overlay, center_lat, center_lon, radius_km)
-    return shapes["water_polygons"], shapes["river_lines"], shapes["road_lines"], shapes["city_points"], shapes["stats"]
-
-
-def _overlay_status_text(stats: dict) -> str:
-    debug_enabled = os.getenv("MAP_OVERLAY_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
-    status = stats.get("basemap_status")
+def _basemap_status_text(stats: dict) -> str:
+    status = stats.get("status")
     if status == "disabled":
-        return "OSM-подложка отключена"
-    if debug_enabled:
-        return _overlay_debug_status_text(stats)
-    if status != "ok" or int(stats.get("raw_elements") or 0) == 0:
-        reason = _overlay_failure_reason(stats)
-        return "OSM-подложка не получена" + (f": {reason}" if reason else "")
-    if stats.get("basemap") in {MAP_BASEMAP_PLACES, MAP_BASEMAP_ROADS} and int(stats.get("city_count") or 0) == 0:
-        return f"OSM города не получены, вода {int(stats.get('water_count') or 0)}, реки {int(stats.get('river_count') or 0)}, дороги {int(stats.get('road_count') or 0)}"
-    return f"OSM: города {int(stats.get('city_count') or 0)}, вода {int(stats.get('water_count') or 0)}, реки {int(stats.get('river_count') or 0)}, дороги {int(stats.get('road_count') or 0)}"
-
-
-def _overlay_failure_reason(stats: dict) -> str:
-    attempts = stats.get("attempts") or []
-    if attempts:
-        last = attempts[-1]
-        endpoint = last.get("endpoint_label") or _endpoint_label(last.get("endpoint")) or "endpoint"
-        if last.get("error_type"):
-            error_type = str(last.get("error_type"))
-            if "Timeout" in error_type:
-                return f"timeout {endpoint}"
-            return f"{error_type} {endpoint}"
-        if last.get("http_status"):
-            return f"{endpoint} HTTP {last.get('http_status')}"
-        if int(last.get("elements") or 0) == 0:
-            return f"{endpoint} empty"
-    error = str(stats.get("error") or "").strip()
-    return error[:120]
-
-
-def _overlay_debug_status_text(stats: dict) -> str:
-    attempts = stats.get("attempts") or []
-    endpoint = stats.get("endpoint_label") or _endpoint_label(stats.get("endpoint"))
-    if not endpoint and attempts:
-        endpoint = attempts[-1].get("endpoint_label") or _endpoint_label(attempts[-1].get("endpoint"))
-    if stats.get("basemap_status") == "ok" and int(stats.get("raw_elements") or 0) > 0:
-        return (
-            f"OSM: endpoint={endpoint or '-'}, http={stats.get('http_status') or '-'}, "
-            f"bytes={stats.get('response_bytes') or 0}, elements={int(stats.get('raw_elements') or 0)}, "
-            f"cities={int(stats.get('city_count') or 0)}, water={int(stats.get('water_count') or 0)}, "
-            f"rivers={int(stats.get('river_count') or 0)}, roads={int(stats.get('road_count') or 0)}"
-        )
-    reason = _overlay_failure_reason(stats)
-    suffix = "fallback empty" if len(attempts) > 1 else "empty"
-    return f"OSM: {reason or 'unavailable'}; {suffix}"
+        return "Подложка: базовая"
+    if status == "missing_cache":
+        warnings = stats.get("warnings") or ["локальный кэш не найден"]
+        return "Подложка: " + str(warnings[0])
+    if status != "ok":
+        return "Подложка: локальный кэш не найден"
+    warnings = stats.get("warnings") or []
+    warning_text = f" · {warnings[0]}" if warnings else ""
+    return (
+        f"Подложка: Natural Earth {stats.get('resolution') or ''} · "
+        f"города {int(stats.get('city_count') or 0)} · "
+        f"реки {int(stats.get('river_count') or 0)} · "
+        f"водоёмы {int(stats.get('water_count') or 0)} · "
+        f"границы {int(stats.get('admin_count') or 0)}"
+        f"{warning_text}"
+    )
 
 
 def _draw_legend(fig, ax) -> None:
@@ -1223,7 +533,7 @@ def _draw_legend(fig, ax) -> None:
     fig.text(0.06, 0.018, extra_text, fontsize=9, color="#263238")
 
 
-def write_composite_map_png(data: dict, path: Path | None = None, *, pixel_size: int = 1280, overlay: dict | None = None, basemap_outlines: dict | None = None, progress_callback: ProgressCallback | None = None) -> Path:
+def write_composite_map_png(data: dict, path: Path | None = None, *, pixel_size: int = 1280, basemap_overlay: dict | None = None, progress_callback: ProgressCallback | None = None) -> Path:
     _emit(progress_callback, stage="map_plot", message="Строю композитную карту")
     point: GeoPoint = data["point"]
     radius_km = float(data["radius_km"])
@@ -1236,13 +546,16 @@ def write_composite_map_png(data: dict, path: Path | None = None, *, pixel_size:
     ax.set_facecolor("white")
 
     basemap = _validate_basemap(str(data.get("basemap", MAP_BASEMAP_DEFAULT)))
-    overlay = overlay if overlay is not None else load_overlay(data["box"], basemap)
-    basemap_outlines = basemap_outlines if basemap_outlines is not None else (load_basemap_outlines(data["box"]) if basemap != MAP_BASEMAP_BASIC else _empty_basemap_outlines(_outline_resolution_for_box(data["box"]), "disabled", bbox=data["box"]))
-    water, rivers, roads, cities, overlay_stats = _overlay_shapes(overlay, point.lat, point.lon, radius_km)
+    basemap_overlay = basemap_overlay if basemap_overlay is not None else local_basemap_overlay(point.lat, point.lon, radius_km, basemap)
+    water = basemap_overlay.get("water_polygons") or []
+    rivers = basemap_overlay.get("river_lines") or []
+    roads = basemap_overlay.get("road_lines") or []
+    admin_lines = basemap_overlay.get("admin_lines") or []
+    coastline_lines = basemap_overlay.get("coastline_lines") or []
+    cities = basemap_overlay.get("city_points") or []
+    overlay_stats = basemap_overlay.get("stats") or {}
     data["overlay_summary"] = overlay_stats
-    data["overlay_footer"] = _overlay_status_text(overlay_stats)
-    data["basemap_outline_summary"] = basemap_outlines.get("_meta") or {}
-    _draw_basemap_outlines(ax, basemap_outlines, point.lat, point.lon, radius_km)
+    data["overlay_footer"] = _basemap_status_text(overlay_stats)
     for pts in water:
         xs = [p[0] for p in pts]
         ys = [p[1] for p in pts]
@@ -1265,18 +578,11 @@ def write_composite_map_png(data: dict, path: Path | None = None, *, pixel_size:
         precip_norm = BoundaryNorm([0, 0.1, 0.5, 1, 3, 7, 15, 999], precip_cmap.N)
         ax.pcolormesh(x, y, precip, cmap=precip_cmap, norm=precip_norm, shading="auto", zorder=3)
 
-    for pts in water:
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
-        ax.plot(xs, ys, color="#78b8cf", linewidth=0.55, alpha=0.92, zorder=4.2)
-    for pts in roads:
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
-        ax.plot(xs, ys, color="#b89f78", linewidth=0.9, alpha=0.82, zorder=4.5)
-    for pts in rivers:
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
-        ax.plot(xs, ys, color="#3f9ec0", linewidth=0.95, alpha=0.94, zorder=5)
+    _draw_line_collection(ax, coastline_lines, color="#6b8794", linewidth=0.75, alpha=0.82, zorder=4.1, radius_km=radius_km)
+    _draw_line_collection(ax, water, color="#78b8cf", linewidth=0.55, alpha=0.92, zorder=4.2, radius_km=radius_km)
+    _draw_line_collection(ax, admin_lines, color="#78909c", linewidth=0.55, alpha=0.55, zorder=4.35, radius_km=radius_km)
+    _draw_line_collection(ax, roads, color="#b89f78", linewidth=0.75, alpha=0.72, zorder=4.5, radius_km=radius_km)
+    _draw_line_collection(ax, rivers, color="#3f9ec0", linewidth=0.95, alpha=0.94, zorder=5, radius_km=radius_km)
 
     for ring in np.arange(MAP_RING_STEP_KM, radius_km + 0.1, MAP_RING_STEP_KM):
         circle = plt.Circle((0, 0), ring, fill=False, linewidth=0.8, linestyle="--", edgecolor="#90a4ae", alpha=0.8, zorder=8)
@@ -1367,15 +673,15 @@ def write_composite_map_gif(frames: list[dict], path: Path | None = None, progre
     if path is None:
         first = frames[0]
         path = CACHE_DIR / f"map_{first['run'].date}_{first['run'].cycle}_anim_{int(time.time())}.gif"
-    overlay = load_overlay(frames[0]["box"], str(frames[0].get("basemap", MAP_BASEMAP_DEFAULT)))
     basemap = _validate_basemap(str(frames[0].get("basemap", MAP_BASEMAP_DEFAULT)))
-    basemap_outlines = load_basemap_outlines(frames[0]["box"]) if basemap != MAP_BASEMAP_BASIC else _empty_basemap_outlines(_outline_resolution_for_box(frames[0]["box"]), "disabled", bbox=frames[0]["box"])
+    point: GeoPoint = frames[0]["point"]
+    basemap_overlay = local_basemap_overlay(point.lat, point.lon, float(frames[0]["radius_km"]), basemap)
     images: list[Image.Image] = []
     with tempfile.TemporaryDirectory() as tmp:
         for index, frame in enumerate(frames, start=1):
             _emit(progress_callback, stage="map_animation_frame", message=f"Строю кадр {index}/{len(frames)}", index=index, total=len(frames), lead_hour=frame["lead_hour"])
             png_path = Path(tmp) / f"frame_{index:03d}.png"
-            write_composite_map_png(frame, png_path, pixel_size=960, overlay=overlay, basemap_outlines=basemap_outlines)
+            write_composite_map_png(frame, png_path, pixel_size=960, basemap_overlay=basemap_overlay)
             image = Image.open(png_path).convert("P", palette=Image.ADAPTIVE, colors=96)
             images.append(image)
         images[0].save(path, save_all=True, append_images=images[1:], duration=650, loop=0, optimize=True)

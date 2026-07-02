@@ -276,7 +276,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "<code>/map Краснодар from=0 to=24 step=3 mode=series</code> — серия PNG отдельными картами\n"
         "<code>/map Краснодар from=0 to=24 step=3 mode=gif</code> — GIF-анимация\n"
         "<code>/map Москва +24 basemap=roads</code> — подложка: basic|water|places|roads\n\n"
-        "/map объединяет осадки, облачность, грозовой риск, значки явлений, видимость и ветер AT500. Если OSM/Overpass недоступен, карта строится без подложки с пометкой в footer. GFS — модель, не наблюдения. Без параметров /aero, /skewt, /windgram, /cloudgram и /map запускают пошаговый выбор. Время — UTC.",
+        "/map объединяет осадки, облачность, грозовой риск, значки явлений, видимость и ветер AT500. Подложка читается из локального Natural Earth cache; если слой отсутствует, карта строится с fallback и пометкой в footer. GFS — модель, не наблюдения. Без параметров /aero, /skewt, /windgram, /cloudgram и /map запускают пошаговый выбор. Время — UTC.",
         parse_mode=ParseMode.HTML,
         reply_markup=_location_keyboard_for_user(_user_id_from_update(update)),
     )

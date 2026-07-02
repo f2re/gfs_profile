@@ -37,8 +37,9 @@ git pull
 3. Скопирует код в `/opt/gfs_profile` через `rsync`.
 4. Сохранит `.env`, `.install-state`, `.venv`, кэш и локальные служебные файлы.
 5. Выполнит `pip install -r /opt/gfs_profile/requirements.txt`.
-6. Выполнит `systemctl restart gfs-profile-bot.service`.
-7. Запишет лог в `.git/gfs-profile-deploy.log`.
+6. Проверит офлайн-подложку Natural Earth и скачает недостающие слои, если кэш не готов.
+7. Выполнит `systemctl restart gfs-profile-bot.service`.
+8. Запишет лог в `.git/gfs-profile-deploy.log`.
 
 ## 🛠️ Ручной deploy после pull
 
@@ -113,6 +114,13 @@ sudo journalctl -u gfs-profile-bot.service -n 80 --no-pager
 sudo -u gfsbot /opt/gfs_profile/.venv/bin/python -m gfs_core --lat 55.75 --lon 37.62 --lead 24
 ```
 
+Проверка офлайн-подложки карт:
+
+```bash
+sudo -u gfsbot /opt/gfs_profile/.venv/bin/python /opt/gfs_profile/prepare_basemap_cache.py --check
+sudo -u gfsbot /opt/gfs_profile/.venv/bin/python /opt/gfs_profile/prepare_basemap_cache.py --resolution 10m
+```
+
 Проверка в Telegram:
 
 ```text
@@ -129,9 +137,10 @@ Deploy не удаляет:
 /opt/gfs_profile/.install-state
 /opt/gfs_profile/.venv/
 /opt/gfs_profile/.cache_gfs/
+/opt/gfs_profile/data/basemap/
 ```
 
-Это важно: токен Telegram, состояние установки, виртуальное окружение и GRIB-кэш не теряются при обновлении.
+Это важно: токен Telegram, состояние установки, виртуальное окружение, GRIB-кэш и офлайн-векторная подложка не теряются при обновлении.
 
 ## 🧯 Где смотреть ошибки hook
 
