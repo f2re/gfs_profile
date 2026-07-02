@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import tempfile
@@ -32,11 +33,22 @@ MAP_BASEMAP_PLACES = "places"
 MAP_BASEMAP_ROADS = "roads"
 MAP_BASEMAP_DEFAULT = MAP_BASEMAP_PLACES
 MAP_BASEMAPS = (MAP_BASEMAP_BASIC, MAP_BASEMAP_WATER, MAP_BASEMAP_PLACES, MAP_BASEMAP_ROADS)
+OVERPASS_ENDPOINTS = (
+    "https://overpass-api.de/api/interpreter",
+    "https://overpass.kumi.systems/api/interpreter",
+    "https://overpass.openstreetmap.ru/api/interpreter",
+)
+OVERPASS_TIMEOUT_SECONDS = 8
 MAP_VARIABLES = (
     "TCDC", "APCP", "PRATE", "ACPCP", "CPRAT", "CAPE", "CIN", "VIS",
     "CRAIN", "CSNOW", "CFRZR", "CICEP", "UGRD", "VGRD",
 )
 MAP_LEVEL_TOKENS = ("lev_entire_atmosphere", "lev_surface", "lev_500_mb", "lev_180-0_mb_above_ground", "lev_convective_cloud_layer")
+WEATHER_CODE_ICONS = {"RA": "☔", "SN": "❄", "FZRA": "❄", "FG": "≋", "TSRA": "⚡"}
+
+
+def weather_code_icon(code: str) -> str:
+    return WEATHER_CODE_ICONS.get(code, "")
 
 
 def area_box_from_radius(lat: float, lon: float, radius_km: float) -> tuple[float, float, float, float]:
@@ -231,30 +243,93 @@ def _dataarray_type_of_level(da) -> str:
     return str(value or "")
 
 
+def summarize_cfgrib_datasets(datasets) -> list[dict]:
+    summary: list[dict] = []
+    for index, ds in enumerate(datasets):
+        item = {
+            "index": index,
+            "variables": list(getattr(ds, "data_vars", {}).keys()),
+            "coords": list(getattr(ds, "coords", {}).keys()),
+            "attrs": {key: ds.attrs.get(key) for key in ("GRIB_shortName", "GRIB_typeOfLevel", "GRIB_level") if key in ds.attrs},
+            "data_vars": {},
+        }
+        for name, da in getattr(ds, "data_vars", {}).items():
+            item["data_vars"][name] = {
+                "coords": list(getattr(da, "coords", {}).keys()),
+                "attrs": {key: da.attrs.get(key) for key in ("GRIB_shortName", "GRIB_typeOfLevel", "GRIB_level") if key in da.attrs},
+            }
+        summary.append(item)
+    return summary
+
+
+def _dataset_var(ds, names: tuple[str, ...]):
+    data_vars = getattr(ds, "data_vars", {})
+    lower_names = {name.lower() for name in names}
+    for name in names:
+        if name in ds:
+            return ds[name]
+    for actual in data_vars.keys():
+        if str(actual).lower() in lower_names:
+            return ds[actual]
+        short_name = str(data_vars[actual].attrs.get("GRIB_shortName", "")).lower()
+        if short_name and short_name in lower_names:
+            return ds[actual]
+    return None
+
+
+def _select_level(da, level_hpa: int | None):
+    if level_hpa is None:
+        return da
+    targets = {
+        "isobaricInhPa": float(level_hpa),
+        "isobaricInPa": float(level_hpa) * 100.0,
+        "level": float(level_hpa),
+    }
+    for coord_name, target in targets.items():
+        if coord_name not in da.coords:
+            continue
+        try:
+            coord_values = np.asarray(da[coord_name].values, dtype=float)
+            tolerance = 100.0 if coord_name == "isobaricInPa" else 1.0
+            if coord_values.ndim == 0:
+                return da if abs(float(coord_values) - target) <= tolerance else None
+            nearest = float(coord_values.flat[np.argmin(np.abs(coord_values - target))])
+            if abs(nearest - target) > tolerance:
+                return None
+            return da.sel({coord_name: target}, method="nearest")
+        except Exception:
+            continue
+    for key in ("GRIB_level", "level"):
+        if key in da.attrs:
+            try:
+                return da if int(float(da.attrs[key])) == int(level_hpa) else None
+            except Exception:
+                pass
+    return None
+
+
 def _field(datasets, names: tuple[str, ...], level_hpa: int | None = None, type_of_level: tuple[str, ...] | None = None):
     for ds in datasets:
         ds_type = _dataset_type_of_level(ds)
-        for name in names:
-            if name not in ds:
+        try:
+            da = _dataset_var(ds, names)
+            if da is None:
                 continue
-            try:
-                da = ds[name]
-                da_type = _dataarray_type_of_level(da) or ds_type
-                if type_of_level is not None and da_type not in type_of_level:
-                    continue
-                if level_hpa is not None:
-                    if "isobaricInhPa" not in da.coords:
-                        continue
-                    da = da.sel(isobaricInhPa=level_hpa, method="nearest")
-                values = np.asarray(da.values).squeeze().astype(float)
-                while values.ndim > 2:
-                    values = values[0]
-                lat2d, lon2d = _coords_from_dataarray(da)
-                if values.shape != lat2d.shape and values.T.shape == lat2d.shape:
-                    values = values.T
-                return values, lat2d, lon2d
-            except Exception:
+            da_type = _dataarray_type_of_level(da) or ds_type
+            if type_of_level is not None and da_type not in type_of_level:
                 continue
+            da = _select_level(da, level_hpa)
+            if da is None:
+                continue
+            values = np.asarray(da.values).squeeze().astype(float)
+            while values.ndim > 2:
+                values = values[0]
+            lat2d, lon2d = _coords_from_dataarray(da)
+            if values.shape != lat2d.shape and values.T.shape == lat2d.shape:
+                values = values.T
+            return values, lat2d, lon2d
+        except Exception:
+            continue
     return None
 
 
@@ -335,7 +410,7 @@ def build_composite_map(run: GfsRun, lead_hour: int, point: GeoPoint, radius_km:
             _field(datasets, ("tcc", "tcdc"), type_of_level=("atmosphere", "entireAtmosphere"))
             or _field(datasets, ("tp", "apcp"), type_of_level=("surface",))
             or _field(datasets, ("prate",), type_of_level=("surface",))
-            or _field(datasets, ("u", "ugrd"), level_hpa=500, type_of_level=("isobaricInhPa",))
+            or _field(datasets, ("u", "ugrd", "UGRD"), level_hpa=500)
         )
         if base_item is None:
             raise GfsProfileError("В GRIB2 карты не найдены пригодные 2D-поля")
@@ -351,8 +426,8 @@ def build_composite_map(run: GfsRun, lead_hour: int, point: GeoPoint, radius_km:
         cape_item = _field(datasets, ("cape",), type_of_level=("surface",))
         cin_item = _field(datasets, ("cin",), type_of_level=("surface",))
         vis_item = _field(datasets, ("vis", "visibility"), type_of_level=("surface",))
-        u_item = _field(datasets, ("u", "ugrd"), level_hpa=500, type_of_level=("isobaricInhPa",))
-        v_item = _field(datasets, ("v", "vgrd"), level_hpa=500, type_of_level=("isobaricInhPa",))
+        u_item = _field(datasets, ("u", "ugrd", "UGRD"), level_hpa=500)
+        v_item = _field(datasets, ("v", "vgrd", "VGRD"), level_hpa=500)
 
         precip = _mm_from_total(apcp_item[0]) if apcp_item is not None else None
         prate = _mmh_from_rate(prate_item[0]) if prate_item is not None else None
@@ -420,95 +495,261 @@ def _overlay_cache_path(box: tuple[float, float, float, float], basemap: str) ->
     return CACHE_DIR / ("osm_overlay_" + basemap + "_" + _box_token(box) + ".json")
 
 
+def _empty_overlay(basemap: str, status: str, error: str | None = None, endpoint: str | None = None) -> dict:
+    return {
+        "elements": [],
+        "_meta": {
+            "basemap": basemap,
+            "status": status,
+            "endpoint": endpoint,
+            "error": error,
+            "element_counts": {},
+        },
+    }
+
+
+def _overlay_element_counts(elements: list[dict]) -> dict[str, int]:
+    counts = {
+        "raw_elements": len(elements),
+        "place_nodes": 0,
+        "place_areas": 0,
+        "water_ways": 0,
+        "water_relations": 0,
+        "river_ways": 0,
+        "river_relations": 0,
+        "highway_ways": 0,
+        "with_geometry": 0,
+    }
+    for element in elements:
+        tags = element.get("tags") or {}
+        element_type = element.get("type")
+        if element.get("geometry"):
+            counts["with_geometry"] += 1
+        if element_type == "node" and tags.get("place"):
+            counts["place_nodes"] += 1
+        elif element_type in {"way", "relation"} and tags.get("place"):
+            counts["place_areas"] += 1
+        if element_type == "way" and tags.get("natural") == "water":
+            counts["water_ways"] += 1
+        elif element_type == "relation" and tags.get("natural") == "water":
+            counts["water_relations"] += 1
+        if element_type == "way" and tags.get("waterway") in {"river", "canal", "stream"}:
+            counts["river_ways"] += 1
+        elif element_type == "relation" and tags.get("waterway") in {"river", "canal"}:
+            counts["river_relations"] += 1
+        if element_type == "way" and tags.get("highway"):
+            counts["highway_ways"] += 1
+    return counts
+
+
+def _overpass_query(box: tuple[float, float, float, float], basemap: str) -> str:
+    south, north, west, east = box
+    selectors = [
+        f'way["natural"="water"]({south},{west},{north},{east});',
+        f'relation["natural"="water"]({south},{west},{north},{east});',
+        f'way["waterway"~"river|canal|stream"]({south},{west},{north},{east});',
+        f'relation["waterway"~"river|canal"]({south},{west},{north},{east});',
+    ]
+    if basemap in {MAP_BASEMAP_PLACES, MAP_BASEMAP_ROADS}:
+        selectors.insert(0, f'node["place"~"city|town|village|hamlet"]({south},{west},{north},{east});')
+        selectors.insert(1, f'way["place"~"city|town|village|hamlet"]({south},{west},{north},{east});')
+        selectors.insert(2, f'relation["place"~"city|town|village|hamlet"]({south},{west},{north},{east});')
+    if basemap == MAP_BASEMAP_ROADS:
+        selectors.append(f'way["highway"~"motorway|trunk|primary|secondary"]({south},{west},{north},{east});')
+    selector_block = "\n  ".join(selectors)
+    return f"""[out:json][timeout:12];
+(
+  {selector_block}
+);
+out tags geom qt;
+"""
+
+
 def load_overlay(box: tuple[float, float, float, float], basemap: str = MAP_BASEMAP_DEFAULT, progress_callback: ProgressCallback | None = None) -> dict:
     basemap = _validate_basemap(basemap)
     if basemap == MAP_BASEMAP_BASIC:
-        return {"elements": []}
+        return _empty_overlay(basemap, "disabled")
     cache_path = _overlay_cache_path(box, basemap)
     if cache_path.exists() and time.time() - cache_path.stat().st_mtime < 30 * 86400:
         try:
-            import json
-            return json.loads(cache_path.read_text(encoding="utf-8"))
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            cached.setdefault("_meta", {})["cached"] = True
+            return cached
         except Exception:
             pass
     south, north, west, east = box
     west = max(-180.0, west)
     east = min(180.0, east)
     if east <= west:
-        return {"elements": []}
-    selectors = [
-        f"way[natural=water]({south},{west},{north},{east});",
-        f"way[waterway=riverbank]({south},{west},{north},{east});",
-        f"way[waterway=river]({south},{west},{north},{east});",
-    ]
-    if basemap in {MAP_BASEMAP_PLACES, MAP_BASEMAP_ROADS}:
-        selectors.insert(0, f'node[place~"city|town|village"]({south},{west},{north},{east});')
-    if basemap == MAP_BASEMAP_ROADS:
-        selectors.append(f'way[highway~"motorway|trunk|primary|secondary|tertiary"]({south},{west},{north},{east});')
-    selector_block = "\n  ".join(selectors)
-    query = f"""
-[out:json][timeout:8];
-(
-  {selector_block}
-);
-out body;
->;
-out skel qt;
-"""
-    try:
-        response = requests.post("https://overpass-api.de/api/interpreter", data={"data": query}, timeout=10)
-        if response.status_code != 200:
-            return {"elements": []}
-        data = response.json()
-        cache_path.write_text(__import__("json").dumps(data), encoding="utf-8")
-        return data
-    except Exception:
-        return {"elements": []}
+        return _empty_overlay(basemap, "invalid_bbox", "bbox crosses unsupported longitude range")
+    query = _overpass_query((south, north, west, east), basemap)
+    errors: list[str] = []
+    for endpoint in OVERPASS_ENDPOINTS:
+        try:
+            _emit(progress_callback, stage="map_overlay", message="Загружаю OSM-подложку", endpoint=endpoint, basemap=basemap)
+            response = requests.post(endpoint, data={"data": query}, timeout=OVERPASS_TIMEOUT_SECONDS, headers={"User-Agent": "gfs-profile-map/1.0"})
+            if response.status_code != 200:
+                errors.append(f"{endpoint}: HTTP {response.status_code}")
+                continue
+            data = response.json()
+            elements = data.get("elements") or []
+            meta = {
+                "basemap": basemap,
+                "status": "ok" if elements else "empty",
+                "endpoint": endpoint,
+                "error": None,
+                "element_counts": _overlay_element_counts(elements),
+            }
+            data["_meta"] = meta
+            if elements:
+                cache_path.write_text(json.dumps(data), encoding="utf-8")
+                return data
+            errors.append(f"{endpoint}: empty")
+        except Exception as exc:
+            errors.append(f"{endpoint}: {type(exc).__name__}: {exc}")
+    return _empty_overlay(basemap, "unavailable", "; ".join(errors[-3:]))
 
 
-def _overlay_shapes(overlay: dict, center_lat: float, center_lon: float) -> tuple[list[list[tuple[float, float]]], list[list[tuple[float, float]]], list[list[tuple[float, float]]], list[tuple[str, float, float]]]:
+def _xy_point(lat: float, lon: float, center_lat: float, center_lon: float) -> tuple[float, float]:
+    x = float(_lon_delta(lon, center_lon)) * 111.320 * math.cos(math.radians(center_lat))
+    y = (float(lat) - center_lat) * 110.574
+    return x, y
+
+
+def _geometry_points(element: dict, nodes: dict[int, tuple[float, float]]) -> list[tuple[float, float]]:
+    points: list[tuple[float, float]] = []
+    for point in element.get("geometry") or []:
+        if "lat" in point and "lon" in point:
+            points.append((float(point["lat"]), float(point["lon"])))
+    if points:
+        return points
+    for node_id in element.get("nodes") or []:
+        pair = nodes.get(int(node_id))
+        if pair:
+            points.append(pair)
+    return points
+
+
+def _geometry_segments(element: dict, nodes: dict[int, tuple[float, float]]) -> list[list[tuple[float, float]]]:
+    if element.get("type") == "relation":
+        segments: list[list[tuple[float, float]]] = []
+        for member in element.get("members") or []:
+            points = _geometry_points(member, nodes)
+            if len(points) >= 2:
+                segments.append(points)
+        if segments:
+            return segments
+    points = _geometry_points(element, nodes)
+    return [points] if points else []
+
+
+def _element_center(element: dict, nodes: dict[int, tuple[float, float]]) -> tuple[float, float] | None:
+    if element.get("type") == "node" and "lat" in element and "lon" in element:
+        return float(element["lat"]), float(element["lon"])
+    center = element.get("center") or {}
+    if "lat" in center and "lon" in center:
+        return float(center["lat"]), float(center["lon"])
+    bounds = element.get("bounds") or {}
+    if {"minlat", "maxlat", "minlon", "maxlon"} <= set(bounds.keys()):
+        return (float(bounds["minlat"]) + float(bounds["maxlat"])) / 2.0, (float(bounds["minlon"]) + float(bounds["maxlon"])) / 2.0
+    points = _geometry_points(element, nodes)
+    if points:
+        return sum(point[0] for point in points) / len(points), sum(point[1] for point in points) / len(points)
+    return None
+
+
+def _line_in_view(points: list[tuple[float, float]], radius_km: float) -> bool:
+    limit = radius_km * 1.2
+    return any(math.hypot(x, y) <= limit for x, y in points)
+
+
+def extract_overlay_shapes(overlay: dict, center_lat: float, center_lon: float, radius_km: float = MAP_RADIUS_KM) -> dict:
     nodes: dict[int, tuple[float, float]] = {}
     water: list[list[tuple[float, float]]] = []
     rivers: list[list[tuple[float, float]]] = []
     roads: list[list[tuple[float, float]]] = []
     cities: list[tuple[str, float, float]] = []
+    objects_in_view = 0
+    objects_out_of_view = 0
     for element in overlay.get("elements", []):
         if element.get("type") == "node" and "lat" in element and "lon" in element:
             nodes[int(element["id"])] = (float(element["lat"]), float(element["lon"]))
-            tags = element.get("tags") or {}
-            if tags.get("place") in {"city", "town", "village"} and tags.get("name"):
-                lat = float(element["lat"])
-                lon = float(element["lon"])
-                x = float(_lon_delta(lon, center_lon)) * 111.320 * math.cos(math.radians(center_lat))
-                y = (lat - center_lat) * 110.574
-                cities.append((str(tags["name"]), x, y))
     for element in overlay.get("elements", []):
-        if element.get("type") != "way" or not element.get("nodes"):
-            continue
-        pts: list[tuple[float, float]] = []
-        for node_id in element.get("nodes", []):
-            pair = nodes.get(int(node_id))
-            if not pair:
-                continue
-            lat, lon = pair
-            x = float(_lon_delta(lon, center_lon)) * 111.320 * math.cos(math.radians(center_lat))
-            y = (lat - center_lat) * 110.574
-            pts.append((x, y))
         tags = element.get("tags") or {}
-        if len(pts) >= 3 and (tags.get("natural") == "water" or tags.get("waterway") == "riverbank"):
-            water.append(pts)
-        elif len(pts) >= 2 and tags.get("waterway") == "river":
-            rivers.append(pts)
-        elif len(pts) >= 2 and tags.get("highway"):
-            roads.append(pts)
+        if tags.get("place") in {"city", "town", "village", "hamlet"} and tags.get("name"):
+            center = _element_center(element, nodes)
+            if center:
+                x, y = _xy_point(center[0], center[1], center_lat, center_lon)
+                if math.hypot(x, y) <= radius_km * 1.2:
+                    cities.append((str(tags["name"]), x, y))
+                    objects_in_view += 1
+                else:
+                    objects_out_of_view += 1
+        segments = _geometry_segments(element, nodes)
+        for segment in segments:
+            pts = [_xy_point(lat, lon, center_lat, center_lon) for lat, lon in segment]
+            if len(pts) < 2:
+                continue
+            in_view = _line_in_view(pts, radius_km)
+            if tags.get("natural") == "water" and len(pts) >= 3:
+                if in_view:
+                    water.append(pts)
+                objects_in_view += int(in_view)
+                objects_out_of_view += int(not in_view)
+            elif tags.get("waterway") in {"river", "canal", "stream"} and len(pts) >= 2:
+                if in_view:
+                    if tags.get("waterway") == "stream" and len(rivers) > 40:
+                        continue
+                    rivers.append(pts)
+                objects_in_view += int(in_view)
+                objects_out_of_view += int(not in_view)
+            elif tags.get("highway") in {"motorway", "trunk", "primary", "secondary"} and len(pts) >= 2:
+                if in_view:
+                    roads.append(pts)
+                objects_in_view += int(in_view)
+                objects_out_of_view += int(not in_view)
     cities.sort(key=lambda item: item[1] * item[1] + item[2] * item[2])
-    return water, rivers, roads, cities[:12]
+    stats = {
+        "raw_elements": len(overlay.get("elements", [])),
+        "city_count": len(cities),
+        "water_count": len(water),
+        "river_count": len(rivers),
+        "road_count": len(roads),
+        "objects_in_view": objects_in_view,
+        "objects_out_of_view": objects_out_of_view,
+        "basemap_status": (overlay.get("_meta") or {}).get("status", "unknown"),
+        "basemap": (overlay.get("_meta") or {}).get("basemap"),
+        "endpoint": (overlay.get("_meta") or {}).get("endpoint"),
+        "error": (overlay.get("_meta") or {}).get("error"),
+        "element_counts": (overlay.get("_meta") or {}).get("element_counts", _overlay_element_counts(overlay.get("elements", []))),
+    }
+    return {"water_polygons": water, "river_lines": rivers, "road_lines": roads, "city_points": cities[:12], "stats": stats}
+
+
+def summarize_overlay(overlay: dict, center_lat: float, center_lon: float) -> dict:
+    return dict(extract_overlay_shapes(overlay, center_lat, center_lon, MAP_RADIUS_KM)["stats"])
+
+
+def _overlay_shapes(overlay: dict, center_lat: float, center_lon: float, radius_km: float = MAP_RADIUS_KM) -> tuple[list[list[tuple[float, float]]], list[list[tuple[float, float]]], list[list[tuple[float, float]]], list[tuple[str, float, float]], dict]:
+    shapes = extract_overlay_shapes(overlay, center_lat, center_lon, radius_km)
+    return shapes["water_polygons"], shapes["river_lines"], shapes["road_lines"], shapes["city_points"], shapes["stats"]
+
+
+def _overlay_status_text(stats: dict) -> str:
+    status = stats.get("basemap_status")
+    if status == "disabled":
+        return "OSM-подложка отключена"
+    if status != "ok" or int(stats.get("raw_elements") or 0) == 0:
+        return "OSM-подложка не получена"
+    if stats.get("basemap") in {MAP_BASEMAP_PLACES, MAP_BASEMAP_ROADS} and int(stats.get("city_count") or 0) == 0:
+        return f"OSM города не получены, вода {int(stats.get('water_count') or 0)}, реки {int(stats.get('river_count') or 0)}"
+    return f"OSM: города {int(stats.get('city_count') or 0)}, вода {int(stats.get('water_count') or 0)}, реки {int(stats.get('river_count') or 0)}"
 
 
 def _draw_legend(fig, ax) -> None:
     precip_text = "Осадки: APCP мм, если нет APCP — PRATE мм/ч · шкала 0.1 0.5 1 3 7 15+"
     cloud_text = "Облачность TCDC/TCC, %: 20 40 60 80 100 · серый прозрачный слой"
-    extra_text = "⚡ модельный риск грозы · стрелки: ветер AT500, м/с · RA/SN/FZRA/FG/TSRA · VIS<10 км"
+    extra_text = "⚡ гроза · ☔ дождь · ❄ снег/переохл. дождь · ≋ туман · стрелки: ветер AT500, м/с · VIS<10 км"
     fig.text(0.06, 0.065, precip_text, fontsize=9, color="#263238")
     fig.text(0.06, 0.04, cloud_text, fontsize=9, color="#263238")
     fig.text(0.06, 0.018, extra_text, fontsize=9, color="#263238")
@@ -528,19 +769,13 @@ def write_composite_map_png(data: dict, path: Path | None = None, *, pixel_size:
 
     basemap = _validate_basemap(str(data.get("basemap", MAP_BASEMAP_DEFAULT)))
     overlay = overlay if overlay is not None else load_overlay(data["box"], basemap)
-    water, rivers, roads, cities = _overlay_shapes(overlay, point.lat, point.lon)
-    for pts in roads:
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
-        ax.plot(xs, ys, color="#d6cfc2", linewidth=0.75, alpha=0.82, zorder=0.6)
+    water, rivers, roads, cities, overlay_stats = _overlay_shapes(overlay, point.lat, point.lon, radius_km)
+    data["overlay_summary"] = overlay_stats
+    data["overlay_footer"] = _overlay_status_text(overlay_stats)
     for pts in water:
         xs = [p[0] for p in pts]
         ys = [p[1] for p in pts]
-        ax.fill(xs, ys, facecolor="#dff3fb", edgecolor="#9cc8d8", linewidth=0.6, alpha=0.95, zorder=1)
-    for pts in rivers:
-        xs = [p[0] for p in pts]
-        ys = [p[1] for p in pts]
-        ax.plot(xs, ys, color="#9fd3e6", linewidth=0.85, alpha=0.9, zorder=1.1)
+        ax.fill(xs, ys, facecolor="#dff3fb", edgecolor="#9cc8d8", linewidth=0.5, alpha=0.9, zorder=1)
 
     x = data["x"]
     y = data["y"]
@@ -551,13 +786,26 @@ def write_composite_map_png(data: dict, path: Path | None = None, *, pixel_size:
     visibility = _masked(data["visibility"], mask)
 
     if cloud is not None:
-        cloud_cmap = ListedColormap(["#ffffff00", "#e9ecef80", "#d0d5da8f", "#aeb6bd99", "#858f98a6"])
+        cloud_cmap = ListedColormap(["#ffffff00", "#e9ecef52", "#d0d5da66", "#aeb6bd75", "#858f988a"])
         cloud_norm = BoundaryNorm([0, 20, 40, 60, 80, 101], cloud_cmap.N)
         ax.pcolormesh(x, y, cloud, cmap=cloud_cmap, norm=cloud_norm, shading="auto", zorder=2)
     if precip is not None:
-        precip_cmap = ListedColormap(["#ffffff00", "#dff6ddaa", "#bceabbc0", "#83d184d0", "#48b85add", "#189643e8", "#086b32f0"])
+        precip_cmap = ListedColormap(["#ffffff00", "#dff6dd80", "#bceabb99", "#83d184ad", "#48b85ac2", "#189643d6", "#086b32e3"])
         precip_norm = BoundaryNorm([0, 0.1, 0.5, 1, 3, 7, 15, 999], precip_cmap.N)
         ax.pcolormesh(x, y, precip, cmap=precip_cmap, norm=precip_norm, shading="auto", zorder=3)
+
+    for pts in water:
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        ax.plot(xs, ys, color="#78b8cf", linewidth=0.55, alpha=0.92, zorder=4.2)
+    for pts in roads:
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        ax.plot(xs, ys, color="#b89f78", linewidth=0.9, alpha=0.82, zorder=4.5)
+    for pts in rivers:
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        ax.plot(xs, ys, color="#3f9ec0", linewidth=0.95, alpha=0.94, zorder=5)
 
     for ring in np.arange(MAP_RING_STEP_KM, radius_km + 0.1, MAP_RING_STEP_KM):
         circle = plt.Circle((0, 0), ring, fill=False, linewidth=0.8, linestyle="--", edgecolor="#90a4ae", alpha=0.8, zorder=8)
@@ -572,8 +820,8 @@ def write_composite_map_png(data: dict, path: Path | None = None, *, pixel_size:
 
     if storm is not None:
         candidates = np.argwhere((np.asarray(storm.filled(0)) >= 2.0) & mask)
-        for row, col in candidates[:: max(1, len(candidates) // 24 or 1)]:
-            ax.text(float(x[row, col]), float(y[row, col]), "⚡", fontsize=18, color="#f9a825", ha="center", va="center", zorder=10)
+        for row, col in candidates[:: max(1, len(candidates) // 6 or 1)]:
+            ax.text(float(x[row, col]), float(y[row, col]), "⚡", fontsize=16, color="#f9a825", ha="center", va="center", zorder=10)
 
     if visibility is not None or precip is not None:
         rows, cols = x.shape
@@ -589,7 +837,7 @@ def write_composite_map_png(data: dict, path: Path | None = None, *, pixel_size:
                 vis = float(data["visibility"][row, col]) if data["visibility"] is not None else None
                 code = weather_code(pr, precipitation_code(bool(data["rain"][row, col]), bool(data["snow"][row, col]), bool(data["cold"][row, col]), bool(data["ice"][row, col])), st, vis)
                 if code != DASH:
-                    text_parts.append(code)
+                    text_parts.append(weather_code_icon(code))
                 if vis is not None and vis < 10.0:
                     text_parts.append(f"{vis:.1f} км" if vis < 2 else f"{vis:.0f} км")
                 if not text_parts:
@@ -602,10 +850,11 @@ def write_composite_map_png(data: dict, path: Path | None = None, *, pixel_size:
                 break
 
     ax.scatter([0], [0], marker="+", s=110, color="#d32f2f", linewidths=2.0, zorder=12)
+    ax.text(2.5, -4.5, point.label, fontsize=8.5, color="#b71c1c", fontweight="bold", ha="left", va="top", bbox={"boxstyle": "round,pad=0.18", "facecolor": "white", "edgecolor": "#ffcdd2", "alpha": 0.9}, zorder=13)
     for name, cx, cy in cities:
         if abs(cx) <= radius_km * 1.05 and abs(cy) <= radius_km * 1.05:
-            ax.scatter([cx], [cy], s=9, color="#546e7a", zorder=7)
-            ax.text(cx + 2.0, cy + 1.2, name, fontsize=7.5, color="#455a64", zorder=7)
+            ax.scatter([cx], [cy], s=11, color="#37474f", zorder=7.5)
+            ax.text(cx + 2.0, cy + 1.2, name, fontsize=7.5, color="#263238", bbox={"boxstyle": "round,pad=0.08", "facecolor": "white", "edgecolor": "none", "alpha": 0.72}, zorder=7.5)
 
     ax.set_xlim(-radius_km * 1.08, radius_km * 1.08)
     ax.set_ylim(-radius_km * 1.08, radius_km * 1.08)
@@ -621,6 +870,9 @@ def write_composite_map_png(data: dict, path: Path | None = None, *, pixel_size:
     ax.set_title(title + "\n" + subtitle, fontsize=12, color="#263238", pad=12)
     _draw_legend(fig, ax)
     footer = "GFS 0.25 — модель, не радар и не наблюдения."
+    overlay_footer = data.get("overlay_footer")
+    if overlay_footer:
+        footer += " " + str(overlay_footer) + "."
     if data["missing"]:
         footer += " Нет полей: " + ", ".join(sorted(data["missing"]))
     fig.text(0.06, 0.092, footer, fontsize=8, color="#78909c")

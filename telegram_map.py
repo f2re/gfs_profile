@@ -202,6 +202,8 @@ def format_map_file_caption(data: dict, *, animated: bool = False, series: bool 
     ]
     if missing:
         lines.append("Нет полей: " + ", ".join(sorted(missing)))
+    if data.get("overlay_footer"):
+        lines.append(str(data["overlay_footer"]))
     return "\n".join(lines)
 
 
@@ -238,6 +240,41 @@ def _repeat_command(point: GeoPoint, parsed: ParsedMapRequest, run: GfsRun) -> s
 def format_repeat_map_message(point: GeoPoint, parsed: ParsedMapRequest, run: GfsRun) -> str:
     command = html.escape(_repeat_command(point, parsed, run))
     return "📋 Повторить карту:\n" f"<code>{command}</code>\n\n" "Нажмите на строку команды и скопируйте её целиком."
+
+
+def _series_frame_caption(path: Path) -> str:
+    match = re.search(r"_f(?P<lead>\d{3})_", path.name)
+    if match:
+        return f"MAP +{int(match.group('lead')):03d} ч"
+    return f"MAP · {path.stem}"
+
+
+async def send_png_series(message, paths: list[Path], caption: str) -> None:
+    for start in range(0, len(paths), 10):
+        batch = paths[start : start + 10]
+        batch_caption = caption if start == 0 else None
+        if len(batch) == 1:
+            with batch[0].open("rb") as file_obj:
+                await message.reply_photo(photo=InputFile(file_obj, filename=batch[0].name), caption=batch_caption)
+            continue
+        files = [path.open("rb") for path in batch]
+        try:
+            media = []
+            for index, (path, file_obj) in enumerate(zip(batch, files)):
+                item_caption = batch_caption if index == 0 else None
+                media.append(InputMediaPhoto(media=InputFile(file_obj, filename=path.name), caption=item_caption))
+            await message.reply_media_group(media=media)
+        except Exception:
+            for file_obj in files:
+                file_obj.close()
+            files = []
+            for index, path in enumerate(batch):
+                item_caption = batch_caption if index == 0 else _series_frame_caption(path)
+                with path.open("rb") as file_obj:
+                    await message.reply_photo(photo=InputFile(file_obj, filename=path.name), caption=item_caption)
+        finally:
+            for file_obj in files:
+                file_obj.close()
 
 
 async def run_map_product(message, point: GeoPoint, parsed: ParsedMapRequest, gfs_semaphore) -> None:
@@ -287,22 +324,7 @@ async def run_map_product(message, point: GeoPoint, parsed: ParsedMapRequest, gf
                 with out_path.open("rb") as file_obj:
                     await message.reply_animation(animation=InputFile(file_obj, filename=out_path.name), caption=caption)
             elif series:
-                for start in range(0, len(out_paths), 10):
-                    batch = out_paths[start : start + 10]
-                    if len(batch) == 1:
-                        with batch[0].open("rb") as file_obj:
-                            await message.reply_photo(photo=InputFile(file_obj, filename=batch[0].name), caption=caption if start == 0 else None)
-                        continue
-                    files = [path.open("rb") for path in batch]
-                    try:
-                        media = []
-                        for index, (path, file_obj) in enumerate(zip(batch, files), start=start + 1):
-                            item_caption = caption if start == 0 and index == 1 else None
-                            media.append(InputMediaPhoto(media=InputFile(file_obj, filename=path.name), caption=item_caption))
-                        await message.reply_media_group(media=media)
-                    finally:
-                        for file_obj in files:
-                            file_obj.close()
+                await send_png_series(message, out_paths, caption)
             else:
                 out_path = out_paths[0]
                 with out_path.open("rb") as file_obj:

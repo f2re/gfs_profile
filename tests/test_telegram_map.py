@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import tempfile
 import unittest
+from pathlib import Path
 
 from geocode import GeoPoint
 from gfs_core import GfsRun
-from telegram_map import format_repeat_map_message, parse_map_request
+from telegram_map import format_repeat_map_message, parse_map_request, send_png_series
 
 
 class TelegramMapTests(unittest.TestCase):
@@ -60,6 +62,34 @@ class TelegramMapTests(unittest.TestCase):
         parsed = parse_map_request("Краснодар from=0 to=24 step=3 basemap=water")
         text = format_repeat_map_message(point, parsed, GfsRun("20260702", "00"))
         self.assertIn("from=0 to=24 step=3 mode=series basemap=water", text)
+
+
+class TelegramMapSeriesSendTests(unittest.IsolatedAsyncioTestCase):
+    async def test_png_series_falls_back_to_single_photos_when_media_group_fails(self) -> None:
+        class FakeMessage:
+            def __init__(self) -> None:
+                self.media_group_calls = 0
+                self.photos: list[str | None] = []
+
+            async def reply_media_group(self, media):
+                self.media_group_calls += 1
+                raise RuntimeError("media not found")
+
+            async def reply_photo(self, photo, caption=None):
+                self.photos.append(caption)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            paths = []
+            for lead in (0, 3, 6):
+                path = Path(tmp) / f"map_20260702_00_f{lead:03d}_test.png"
+                path.write_bytes(b"png")
+                paths.append(path)
+            message = FakeMessage()
+            await send_png_series(message, paths, "first caption")
+            self.assertEqual(message.media_group_calls, 1)
+            self.assertEqual(len(message.photos), 3)
+            self.assertEqual(message.photos[0], "first caption")
+            self.assertEqual(message.photos[1], "MAP +003 ч")
 
 
 if __name__ == "__main__":
