@@ -1,2 +1,2 @@
-class A:
-    pass
+def f(radius_km):
+    return radius_km
