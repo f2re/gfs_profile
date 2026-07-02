@@ -172,7 +172,17 @@ basemap=places  города/населённые пункты + вода, ре�
 basemap=roads   города, вода и основные дороги
 ```
 
-Запрос к Overpass использует `out geom`: water/rivers для `water`, water/rivers/places для `places`, water/rivers/places/major roads для `roads`. Если основной endpoint недоступен или пустой, бот пробует fallback endpoints и использует кэш успешного ответа. Если OSM всё равно недоступен, карта строится на простой белой подложке, центральная точка всё равно подписана, а footer/caption сообщает `OSM-подложка не получена` или `OSM города не получены`.
+Запрос к Overpass использует `out tags geom qt`: water/rivers для `water`, water/rivers/places для `places`, water/rivers/places/major roads для `roads`. Если основной endpoint недоступен или пустой, бот пробует fallback endpoints и использует только v2-кэш успешного непустого ответа. Пустые/error responses не продлевают кэш. Дополнительно карта грузит Natural Earth basemap outlines через Cartopy: coastlines, lake outlines и river centerlines с разрешением `10m` для локальных bbox. Этот слой кэшируется отдельно и рисуется под OSM/метеослоями. Если OSM всё равно недоступен, карта строится на простой белой подложке с доступными outlines, центральная точка всё равно подписана, а footer/caption сообщает краткую причину. Для расширенной подписи включите `MAP_OVERLAY_DEBUG=1`.
+
+Диагностика overlay:
+
+```bash
+python debug_map_overlay.py Москва --basemap places
+python debug_map_overlay.py Краснодар --basemap roads
+python debug_map_overlay.py --lat 44.0393 --lon 43.0708 --basemap places
+```
+
+CLI показывает bbox, режим подложки, путь к кэшу, cache hit/miss, попытки endpoint, HTTP status, размер ответа, raw elements, parsed city/water/river/road counts, статус Natural Earth outlines и итоговый статус.
 
 ## Cloudgram
 
