@@ -12,6 +12,7 @@ REQUIRED_MODULES = (
     "eccodes",
     "telegram",
     "matplotlib",
+    "PIL",
     "metpy",
     "scipy",
     "pint",
@@ -27,11 +28,14 @@ OPTIONAL_RUNTIME_MODULES = (
     "windgram_plot",
     "cloudgram_product",
     "cloudgram_plot",
+    "weather_diagnostics",
+    "composite_map",
     "telegram_commands",
     "telegram_product_wizard",
     "telegram_aero",
     "telegram_windgram",
     "telegram_cloudgram",
+    "telegram_map",
     "telegram_bot",
 )
 
@@ -57,7 +61,7 @@ def main() -> int:
     import matplotlib
 
     matplotlib.use("Agg", force=True)
-    print("Runtime check OK: dependencies, command definitions, cloudgram, wizard and bot modules import successfully")
+    print("Runtime check OK: dependencies, command definitions, map/cloudgram, wizard and bot modules import successfully")
     return 0
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import os
 import tempfile
 import time
 from datetime import timedelta
@@ -24,6 +25,13 @@ from weather_diagnostics import DASH, precipitation_code, thunder_score, visibil
 MAP_RADIUS_KM = 100.0
 MAP_RING_STEP_KM = 25.0
 MAP_MAX_ANIMATION_FRAMES = 18
+MAP_MAX_PNG_SERIES_FRAMES = 18
+MAP_BASEMAP_BASIC = "basic"
+MAP_BASEMAP_WATER = "water"
+MAP_BASEMAP_PLACES = "places"
+MAP_BASEMAP_ROADS = "roads"
+MAP_BASEMAP_DEFAULT = MAP_BASEMAP_PLACES
+MAP_BASEMAPS = (MAP_BASEMAP_BASIC, MAP_BASEMAP_WATER, MAP_BASEMAP_PLACES, MAP_BASEMAP_ROADS)
 MAP_VARIABLES = (
     "TCDC", "APCP", "PRATE", "ACPCP", "CPRAT", "CAPE", "CIN", "VIS",
     "CRAIN", "CSNOW", "CFRZR", "CICEP", "UGRD", "VGRD",
@@ -34,13 +42,14 @@ MAP_LEVEL_TOKENS = ("lev_entire_atmosphere", "lev_surface", "lev_500_mb", "lev_1
 def area_box_from_radius(lat: float, lon: float, radius_km: float) -> tuple[float, float, float, float]:
     if radius_km <= 0 or radius_km > 300:
         raise GfsProfileError("Радиус карты должен быть в диапазоне 1..300 км")
+    lon = float(_lon180(lon))
     dlat = radius_km / 110.574
     cos_lat = max(0.08, abs(math.cos(math.radians(lat))))
     dlon = radius_km / (111.320 * cos_lat)
     south = round(max(-90.0, lat - dlat), 3)
     north = round(min(90.0, lat + dlat), 3)
-    west = round(max(-180.0, lon - dlon), 3)
-    east = round(min(180.0, lon + dlon), 3)
+    west = round(lon - dlon, 3)
+    east = round(lon + dlon, 3)
     return south, north, west, east
 
 
@@ -56,10 +65,14 @@ def _emit(progress_callback: ProgressCallback | None, **payload) -> None:
 
 def _area_subset_url(date: str, cycle: str, lead_hour: int, box: tuple[float, float, float, float]) -> str:
     south, north, west, east = box
-    leftlon = west % 360
-    rightlon = east % 360
-    if rightlon <= leftlon:
-        rightlon = min(360.0, leftlon + 0.25)
+    if west < -180.0 or east > 180.0:
+        leftlon = west % 360.0
+        rightlon = east % 360.0
+        if rightlon <= leftlon:
+            rightlon += 360.0
+    else:
+        leftlon = west
+        rightlon = east
     query = {
         "file": run_file_name(cycle, lead_hour),
         "subregion": "",
@@ -103,10 +116,32 @@ def download_area_subset(date: str, cycle: str, lead_hour: int, lat: float, lon:
         raise GfsProfileError(f"Файл GFS для {date} {cycle}Z +{lead_hour} ч ещё не опубликован")
 
     url = _area_subset_url(date, cycle, lead_hour, box)
-    part_path = CACHE_DIR / f"{key}.part"
-    part_path.unlink(missing_ok=True)
+    lock_path = CACHE_DIR / f"{key}.lock"
+    lock_fd: int | None = None
+    wait_started = time.monotonic()
+    while lock_fd is None:
+        try:
+            lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            os.write(lock_fd, str(os.getpid()).encode("ascii", errors="ignore"))
+        except FileExistsError:
+            if out_path.exists():
+                _validate_grib_magic(out_path)
+                _emit(progress_callback, stage="map_cache", message="GRIB2 карты найден в кэше", radius_km=radius_km)
+                return out_path, box
+            if time.monotonic() - wait_started > 600:
+                lock_path.unlink(missing_ok=True)
+                wait_started = time.monotonic()
+                continue
+            _emit(progress_callback, stage="map_cache", message="Жду параллельную загрузку spatial GRIB2", radius_km=radius_km)
+            time.sleep(1.0)
+
+    part_path = CACHE_DIR / f"{key}.{os.getpid()}.{int(time.time() * 1000)}.part"
     _emit(progress_callback, stage="map_download_start", message="Скачиваю пространственный GRIB2", downloaded=0, total=None, radius_km=radius_km)
     try:
+        if out_path.exists():
+            _validate_grib_magic(out_path)
+            _emit(progress_callback, stage="map_cache", message="GRIB2 карты найден в кэше", radius_km=radius_km)
+            return out_path, box
         with requests.get(url, timeout=REQUEST_TIMEOUT, stream=True) as response:
             if response.status_code != 200:
                 raise GfsProfileError(f"Ошибка загрузки GFS-карты: HTTP {response.status_code}")
@@ -126,18 +161,25 @@ def download_area_subset(date: str, cycle: str, lead_hour: int, lat: float, lon:
                         last_emit = now
                         _emit(progress_callback, stage="map_download", message="Скачиваю пространственный GRIB2", downloaded=downloaded, total=total, radius_km=radius_km)
             _emit(progress_callback, stage="map_download_done", message="GRIB2 карты загружен", downloaded=downloaded, total=total, radius_km=radius_km)
+        if not part_path.exists() or part_path.stat().st_size < 256:
+            part_path.unlink(missing_ok=True)
+            raise GfsProfileError("Получен слишком маленький ответ от GFS Filter для карты")
+        _validate_grib_magic(part_path)
+        part_path.replace(out_path)
+        return out_path, box
     except RequestException as exc:
         part_path.unlink(missing_ok=True)
         raise GfsProfileError(f"Ошибка подключения к NOMADS: {exc}") from exc
     except Exception:
         part_path.unlink(missing_ok=True)
         raise
-    if not part_path.exists() or part_path.stat().st_size < 256:
-        part_path.unlink(missing_ok=True)
-        raise GfsProfileError("Получен слишком маленький ответ от GFS Filter для карты")
-    _validate_grib_magic(part_path)
-    part_path.replace(out_path)
-    return out_path, box
+    finally:
+        if lock_fd is not None:
+            try:
+                os.close(lock_fd)
+            except OSError:
+                pass
+        lock_path.unlink(missing_ok=True)
 
 
 def _safe_token(value: str) -> str:
@@ -160,6 +202,10 @@ def _lon180(values):
     return ((arr + 180.0) % 360.0) - 180.0
 
 
+def _lon_delta(lon_values, center_lon: float):
+    return ((np.asarray(lon_values, dtype=float) - float(_lon180(center_lon)) + 180.0) % 360.0) - 180.0
+
+
 def _coords_from_dataarray(da):
     lat_name = "latitude" if "latitude" in da.coords else "lat" if "lat" in da.coords else None
     lon_name = "longitude" if "longitude" in da.coords else "lon" if "lon" in da.coords else None
@@ -175,14 +221,30 @@ def _coords_from_dataarray(da):
     return lat2d, lon2d
 
 
-def _field(datasets, names: tuple[str, ...], level_hpa: int | None = None):
+def _dataset_type_of_level(ds) -> str:
+    value = ds.attrs.get("GRIB_typeOfLevel", "")
+    return str(value or "")
+
+
+def _dataarray_type_of_level(da) -> str:
+    value = da.attrs.get("GRIB_typeOfLevel", "")
+    return str(value or "")
+
+
+def _field(datasets, names: tuple[str, ...], level_hpa: int | None = None, type_of_level: tuple[str, ...] | None = None):
     for ds in datasets:
+        ds_type = _dataset_type_of_level(ds)
         for name in names:
             if name not in ds:
                 continue
             try:
                 da = ds[name]
-                if level_hpa is not None and "isobaricInhPa" in da.coords:
+                da_type = _dataarray_type_of_level(da) or ds_type
+                if type_of_level is not None and da_type not in type_of_level:
+                    continue
+                if level_hpa is not None:
+                    if "isobaricInhPa" not in da.coords:
+                        continue
                     da = da.sel(isobaricInhPa=level_hpa, method="nearest")
                 values = np.asarray(da.values).squeeze().astype(float)
                 while values.ndim > 2:
@@ -196,8 +258,8 @@ def _field(datasets, names: tuple[str, ...], level_hpa: int | None = None):
     return None
 
 
-def _bool_field(datasets, names: tuple[str, ...]):
-    item = _field(datasets, names)
+def _bool_field(datasets, names: tuple[str, ...], type_of_level: tuple[str, ...] | None = None):
+    item = _field(datasets, names, type_of_level=type_of_level)
     if item is None:
         return None
     values, lat2d, lon2d = item
@@ -223,7 +285,7 @@ def _clip_pct(values):
 
 
 def _xy_km(lat2d, lon2d, center_lat: float, center_lon: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    x = (lon2d - center_lon) * 111.320 * math.cos(math.radians(center_lat))
+    x = _lon_delta(lon2d, center_lon) * 111.320 * math.cos(math.radians(center_lat))
     y = (lat2d - center_lat) * 110.574
     dist = np.sqrt(x * x + y * y)
     return x, y, dist
@@ -237,44 +299,60 @@ def _storm_grid(cape, cin, conv_precip, conv_cloud, precip_rate):
             break
     if ref is None:
         return None
-    result = np.zeros_like(ref, dtype=float)
-    if cape is not None:
-        result += np.where(cape >= 1000.0, 2.0, np.where(cape >= 250.0, 1.0, 0.0))
-    if cin is not None:
-        result += np.where(cin > -150.0, 1.0, 0.0)
-    if conv_precip is not None:
-        result += np.where(conv_precip >= 0.2, 1.0, 0.0)
-    if conv_cloud is not None:
-        result += np.where(conv_cloud >= 30.0, 1.0, 0.0)
-    if precip_rate is not None:
-        result += np.where(precip_rate >= 3.0, 1.0, 0.0)
-    return np.clip(result, 0.0, 3.0)
+    missing = np.full_like(ref, np.nan, dtype=float)
+
+    def score(ca, ci, cp, cc, pr):
+        def optional(value):
+            return None if np.isnan(value) else float(value)
+
+        return float(thunder_score(optional(ca), optional(ci), optional(cp), optional(cc), optional(pr)))
+
+    return np.vectorize(score, otypes=[float])(
+        cape if cape is not None else missing,
+        cin if cin is not None else missing,
+        conv_precip if conv_precip is not None else missing,
+        conv_cloud if conv_cloud is not None else missing,
+        precip_rate if precip_rate is not None else missing,
+    )
 
 
-def build_composite_map(run: GfsRun, lead_hour: int, point: GeoPoint, radius_km: float = MAP_RADIUS_KM, progress_callback: ProgressCallback | None = None) -> dict:
+def _validate_basemap(basemap: str) -> str:
+    value = str(basemap or MAP_BASEMAP_DEFAULT).lower()
+    if value not in MAP_BASEMAPS:
+        raise GfsProfileError(f"Неизвестная подложка карты: {basemap}")
+    return value
+
+
+def build_composite_map(run: GfsRun, lead_hour: int, point: GeoPoint, radius_km: float = MAP_RADIUS_KM, basemap: str = MAP_BASEMAP_DEFAULT, progress_callback: ProgressCallback | None = None) -> dict:
+    basemap = _validate_basemap(basemap)
     _emit(progress_callback, stage="map_cycle", message="Выбираю опубликованный цикл GFS")
     path, box = download_area_subset(run.date, run.cycle, lead_hour, point.lat, point.lon, radius_km, progress_callback)
     _emit(progress_callback, stage="map_parse", message="Читаю GRIB2 через cfgrib/eccodes")
     missing: set[str] = set()
     with tempfile.TemporaryDirectory() as tmp:
         datasets = _open_datasets(path, Path(tmp))
-        base_item = _field(datasets, ("tp", "apcp")) or _field(datasets, ("tcc", "tcdc")) or _field(datasets, ("prate",)) or _field(datasets, ("u", "ugrd"), 500)
+        base_item = (
+            _field(datasets, ("tcc", "tcdc"), type_of_level=("atmosphere", "entireAtmosphere"))
+            or _field(datasets, ("tp", "apcp"), type_of_level=("surface",))
+            or _field(datasets, ("prate",), type_of_level=("surface",))
+            or _field(datasets, ("u", "ugrd"), level_hpa=500, type_of_level=("isobaricInhPa",))
+        )
         if base_item is None:
             raise GfsProfileError("В GRIB2 карты не найдены пригодные 2D-поля")
         _, lat2d, lon2d = base_item
         x, y, dist = _xy_km(lat2d, lon2d, point.lat, point.lon)
         radius_mask = dist <= radius_km
 
-        apcp_item = _field(datasets, ("tp", "apcp"))
-        prate_item = _field(datasets, ("prate",))
-        cloud_item = _field(datasets, ("tcc", "tcdc"))
-        acpcp_item = _field(datasets, ("acpcp",))
-        cprat_item = _field(datasets, ("cprat",))
-        cape_item = _field(datasets, ("cape",))
-        cin_item = _field(datasets, ("cin",))
-        vis_item = _field(datasets, ("vis", "visibility"))
-        u_item = _field(datasets, ("u", "ugrd"), 500)
-        v_item = _field(datasets, ("v", "vgrd"), 500)
+        apcp_item = _field(datasets, ("tp", "apcp"), type_of_level=("surface",))
+        prate_item = _field(datasets, ("prate",), type_of_level=("surface",))
+        cloud_item = _field(datasets, ("tcc", "tcdc"), type_of_level=("atmosphere", "entireAtmosphere"))
+        acpcp_item = _field(datasets, ("acpcp",), type_of_level=("surface",))
+        cprat_item = _field(datasets, ("cprat",), type_of_level=("surface", "convectiveCloudLayer"))
+        cape_item = _field(datasets, ("cape",), type_of_level=("surface",))
+        cin_item = _field(datasets, ("cin",), type_of_level=("surface",))
+        vis_item = _field(datasets, ("vis", "visibility"), type_of_level=("surface",))
+        u_item = _field(datasets, ("u", "ugrd"), level_hpa=500, type_of_level=("isobaricInhPa",))
+        v_item = _field(datasets, ("v", "vgrd"), level_hpa=500, type_of_level=("isobaricInhPa",))
 
         precip = _mm_from_total(apcp_item[0]) if apcp_item is not None else None
         prate = _mmh_from_rate(prate_item[0]) if prate_item is not None else None
@@ -290,10 +368,10 @@ def build_composite_map(run: GfsRun, lead_hour: int, point: GeoPoint, radius_km:
         v500 = v_item[0] if v_item is not None else None
 
         storm = _storm_grid(cape, cin, conv_precip, cloud, conv_rate if conv_rate is not None else prate)
-        rain = _bool_field(datasets, ("crain",))
-        snow = _bool_field(datasets, ("csnow",))
-        cold = _bool_field(datasets, ("cfrzr",))
-        ice = _bool_field(datasets, ("cicep",))
+        rain = _bool_field(datasets, ("crain",), type_of_level=("surface",))
+        snow = _bool_field(datasets, ("csnow",), type_of_level=("surface",))
+        cold = _bool_field(datasets, ("cfrzr",), type_of_level=("surface",))
+        ice = _bool_field(datasets, ("cicep",), type_of_level=("surface",))
         rain_grid = rain[0] if rain is not None else np.zeros_like(lat2d, dtype=bool)
         snow_grid = snow[0] if snow is not None else np.zeros_like(lat2d, dtype=bool)
         cold_grid = cold[0] if cold is not None else np.zeros_like(lat2d, dtype=bool)
@@ -311,6 +389,7 @@ def build_composite_map(run: GfsRun, lead_hour: int, point: GeoPoint, radius_km:
         "point": point,
         "radius_km": radius_km,
         "box": box,
+        "basemap": basemap,
         "x": x,
         "y": y,
         "dist": dist,
@@ -337,12 +416,15 @@ def _masked(values, mask):
     return np.ma.masked_where(~mask, values)
 
 
-def _overlay_cache_path(box: tuple[float, float, float, float]) -> Path:
-    return CACHE_DIR / ("osm_overlay_" + _box_token(box) + ".json")
+def _overlay_cache_path(box: tuple[float, float, float, float], basemap: str) -> Path:
+    return CACHE_DIR / ("osm_overlay_" + basemap + "_" + _box_token(box) + ".json")
 
 
-def load_overlay(box: tuple[float, float, float, float], progress_callback: ProgressCallback | None = None) -> dict:
-    cache_path = _overlay_cache_path(box)
+def load_overlay(box: tuple[float, float, float, float], basemap: str = MAP_BASEMAP_DEFAULT, progress_callback: ProgressCallback | None = None) -> dict:
+    basemap = _validate_basemap(basemap)
+    if basemap == MAP_BASEMAP_BASIC:
+        return {"elements": []}
+    cache_path = _overlay_cache_path(box, basemap)
     if cache_path.exists() and time.time() - cache_path.stat().st_mtime < 30 * 86400:
         try:
             import json
@@ -350,12 +432,24 @@ def load_overlay(box: tuple[float, float, float, float], progress_callback: Prog
         except Exception:
             pass
     south, north, west, east = box
+    west = max(-180.0, west)
+    east = min(180.0, east)
+    if east <= west:
+        return {"elements": []}
+    selectors = [
+        f"way[natural=water]({south},{west},{north},{east});",
+        f"way[waterway=riverbank]({south},{west},{north},{east});",
+        f"way[waterway=river]({south},{west},{north},{east});",
+    ]
+    if basemap in {MAP_BASEMAP_PLACES, MAP_BASEMAP_ROADS}:
+        selectors.insert(0, f'node[place~"city|town|village"]({south},{west},{north},{east});')
+    if basemap == MAP_BASEMAP_ROADS:
+        selectors.append(f'way[highway~"motorway|trunk|primary|secondary|tertiary"]({south},{west},{north},{east});')
+    selector_block = "\n  ".join(selectors)
     query = f"""
 [out:json][timeout:8];
 (
-  node[place~"city|town|village"]({south},{west},{north},{east});
-  way[natural=water]({south},{west},{north},{east});
-  way[waterway=riverbank]({south},{west},{north},{east});
+  {selector_block}
 );
 out body;
 >;
@@ -372,9 +466,11 @@ out skel qt;
         return {"elements": []}
 
 
-def _overlay_shapes(overlay: dict, center_lat: float, center_lon: float) -> tuple[list[list[tuple[float, float]]], list[tuple[str, float, float]]]:
+def _overlay_shapes(overlay: dict, center_lat: float, center_lon: float) -> tuple[list[list[tuple[float, float]]], list[list[tuple[float, float]]], list[list[tuple[float, float]]], list[tuple[str, float, float]]]:
     nodes: dict[int, tuple[float, float]] = {}
     water: list[list[tuple[float, float]]] = []
+    rivers: list[list[tuple[float, float]]] = []
+    roads: list[list[tuple[float, float]]] = []
     cities: list[tuple[str, float, float]] = []
     for element in overlay.get("elements", []):
         if element.get("type") == "node" and "lat" in element and "lon" in element:
@@ -383,7 +479,7 @@ def _overlay_shapes(overlay: dict, center_lat: float, center_lon: float) -> tupl
             if tags.get("place") in {"city", "town", "village"} and tags.get("name"):
                 lat = float(element["lat"])
                 lon = float(element["lon"])
-                x = (lon - center_lon) * 111.320 * math.cos(math.radians(center_lat))
+                x = float(_lon_delta(lon, center_lon)) * 111.320 * math.cos(math.radians(center_lat))
                 y = (lat - center_lat) * 110.574
                 cities.append((str(tags["name"]), x, y))
     for element in overlay.get("elements", []):
@@ -395,13 +491,18 @@ def _overlay_shapes(overlay: dict, center_lat: float, center_lon: float) -> tupl
             if not pair:
                 continue
             lat, lon = pair
-            x = (lon - center_lon) * 111.320 * math.cos(math.radians(center_lat))
+            x = float(_lon_delta(lon, center_lon)) * 111.320 * math.cos(math.radians(center_lat))
             y = (lat - center_lat) * 110.574
             pts.append((x, y))
-        if len(pts) >= 3:
+        tags = element.get("tags") or {}
+        if len(pts) >= 3 and (tags.get("natural") == "water" or tags.get("waterway") == "riverbank"):
             water.append(pts)
+        elif len(pts) >= 2 and tags.get("waterway") == "river":
+            rivers.append(pts)
+        elif len(pts) >= 2 and tags.get("highway"):
+            roads.append(pts)
     cities.sort(key=lambda item: item[1] * item[1] + item[2] * item[2])
-    return water, cities[:12]
+    return water, rivers, roads, cities[:12]
 
 
 def _draw_legend(fig, ax) -> None:
@@ -425,12 +526,21 @@ def write_composite_map_png(data: dict, path: Path | None = None, *, pixel_size:
     fig.patch.set_facecolor("white")
     ax.set_facecolor("white")
 
-    overlay = overlay if overlay is not None else load_overlay(data["box"])
-    water, cities = _overlay_shapes(overlay, point.lat, point.lon)
+    basemap = _validate_basemap(str(data.get("basemap", MAP_BASEMAP_DEFAULT)))
+    overlay = overlay if overlay is not None else load_overlay(data["box"], basemap)
+    water, rivers, roads, cities = _overlay_shapes(overlay, point.lat, point.lon)
+    for pts in roads:
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        ax.plot(xs, ys, color="#d6cfc2", linewidth=0.75, alpha=0.82, zorder=0.6)
     for pts in water:
         xs = [p[0] for p in pts]
         ys = [p[1] for p in pts]
         ax.fill(xs, ys, facecolor="#dff3fb", edgecolor="#9cc8d8", linewidth=0.6, alpha=0.95, zorder=1)
+    for pts in rivers:
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        ax.plot(xs, ys, color="#9fd3e6", linewidth=0.85, alpha=0.9, zorder=1.1)
 
     x = data["x"]
     y = data["y"]
@@ -534,7 +644,7 @@ def write_composite_map_gif(frames: list[dict], path: Path | None = None, progre
     if path is None:
         first = frames[0]
         path = CACHE_DIR / f"map_{first['run'].date}_{first['run'].cycle}_anim_{int(time.time())}.gif"
-    overlay = load_overlay(frames[0]["box"])
+    overlay = load_overlay(frames[0]["box"], str(frames[0].get("basemap", MAP_BASEMAP_DEFAULT)))
     images: list[Image.Image] = []
     with tempfile.TemporaryDirectory() as tmp:
         for index, frame in enumerate(frames, start=1):
@@ -548,10 +658,10 @@ def write_composite_map_gif(frames: list[dict], path: Path | None = None, progre
     return path
 
 
-def build_composite_map_frames(run: GfsRun, leads: list[int], point: GeoPoint, radius_km: float = MAP_RADIUS_KM, progress_callback: ProgressCallback | None = None) -> list[dict]:
+def build_composite_map_frames(run: GfsRun, leads: list[int], point: GeoPoint, radius_km: float = MAP_RADIUS_KM, basemap: str = MAP_BASEMAP_DEFAULT, progress_callback: ProgressCallback | None = None) -> list[dict]:
     frames: list[dict] = []
     total = len(leads)
     for index, lead in enumerate(leads, start=1):
         _emit(progress_callback, stage="map_step", message=f"Готовлю срок +{lead} ч", index=index, total=total, lead_hour=lead)
-        frames.append(build_composite_map(run, lead, point, radius_km=radius_km, progress_callback=progress_callback))
+        frames.append(build_composite_map(run, lead, point, radius_km=radius_km, basemap=basemap, progress_callback=progress_callback))
     return frames

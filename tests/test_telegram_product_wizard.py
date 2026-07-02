@@ -37,13 +37,27 @@ class ProductWizardTests(unittest.TestCase):
         state = set_point(state, {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
         self.assertEqual(copy_command(state), "/map 45.0000 39.0000 +24")
 
+    def test_map_copy_command_can_use_png_series(self) -> None:
+        state = start_map_wizard_state(24)
+        state = set_point(state, {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
+        state["mode"] = "series"
+        state["to"] = 48
+        state["time_step"] = 6
+        self.assertEqual(copy_command(state), "/map 45.0000 39.0000 from=0 to=48 step=6 mode=series")
+
     def test_map_copy_command_can_use_animation(self) -> None:
         state = start_map_wizard_state(24)
         state = set_point(state, {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
-        state["anim"] = True
+        state["mode"] = "gif"
         state["to"] = 48
         state["time_step"] = 6
-        self.assertEqual(copy_command(state), "/map 45.0000 39.0000 from=0 to=48 step=6 anim=1")
+        self.assertEqual(copy_command(state), "/map 45.0000 39.0000 from=0 to=48 step=6 mode=gif")
+
+    def test_map_copy_command_can_set_basemap(self) -> None:
+        state = start_map_wizard_state(24)
+        state = set_point(state, {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
+        state["basemap"] = "roads"
+        self.assertEqual(copy_command(state), "/map 45.0000 39.0000 +24 basemap=roads")
 
 
 if __name__ == "__main__":

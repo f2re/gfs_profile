@@ -6,7 +6,7 @@ from pathlib import Path
 
 import numpy as np
 
-from composite_map import area_box_from_radius, write_composite_map_png
+from composite_map import _area_subset_url, _storm_grid, _xy_km, area_box_from_radius, write_composite_map_png
 from geocode import GeoPoint
 from gfs_core import GfsRun
 
@@ -18,6 +18,30 @@ class CompositeMapTests(unittest.TestCase):
         self.assertGreater(north, 45.0)
         self.assertLess(west, 39.0)
         self.assertGreater(east, 39.0)
+
+    def test_area_box_keeps_negative_longitudes_around_greenwich(self) -> None:
+        box = area_box_from_radius(51.5, -0.1, 100.0)
+        self.assertLess(box[2], 0.0)
+        self.assertGreater(box[3], 0.0)
+        url = _area_subset_url("20260702", "00", 24, box)
+        self.assertIn("leftlon=-", url)
+        self.assertIn("rightlon=", url)
+
+    def test_xy_uses_shortest_longitude_delta_across_antimeridian(self) -> None:
+        lat = np.array([[0.0, 0.0]])
+        lon = np.array([[179.5, -179.5]])
+        x, _, _ = _xy_km(lat, lon, 0.0, 179.8)
+        self.assertLess(abs(float(x[0, 1])), 100.0)
+
+    def test_storm_grid_uses_shared_diagnostic_thresholds(self) -> None:
+        cape = np.array([[1200.0, 100.0]])
+        cin = np.array([[-50.0, -300.0]])
+        conv = np.array([[0.5, 0.0]])
+        cloud = np.array([[40.0, 10.0]])
+        rate = np.array([[4.0, 0.0]])
+        storm = _storm_grid(cape, cin, conv, cloud, rate)
+        self.assertEqual(float(storm[0, 0]), 3.0)
+        self.assertEqual(float(storm[0, 1]), 0.0)
 
     def test_renderer_smoke_with_synthetic_grid(self) -> None:
         run = GfsRun("20260702", "00")
@@ -34,6 +58,7 @@ class CompositeMapTests(unittest.TestCase):
             "point": point,
             "radius_km": 100.0,
             "box": (44.0, 46.0, 38.0, 40.0),
+            "basemap": "places",
             "x": x,
             "y": y,
             "dist": np.sqrt(x * x + y * y),

@@ -73,6 +73,8 @@ def _progress_text(header: str, event: dict[str, Any]) -> str:
         body = f"анимация: кадр {event.get('index')}/{event.get('total')} · +{event.get('lead_hour')} ч"
     elif stage == "map_animation_done":
         body = "анимация оптимизирована для Telegram. Отправляю…"
+    elif stage == "map_series_frame":
+        body = f"PNG-серия: карта {event.get('index')}/{event.get('total')} · +{event.get('lead_hour')} ч"
     else:
         body = message
 

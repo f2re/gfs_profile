@@ -10,7 +10,7 @@ BOT_COMMANDS: tuple[BotCommand, ...] = (
     BotCommand("skewt", "📉 Быстрая Skew-T"),
     BotCommand("windgram", "🟦 Срок×уровень V/T/RH"),
     BotCommand("cloudgram", "☁️ Облака, осадки, грозы"),
-    BotCommand("map", "🗺️ Композитная карта GFS"),
+    BotCommand("map", "🗺️ Карта: PNG-серия/GIF"),
     BotCommand("cycle", "🕒 Последний цикл GFS"),
     BotCommand("status", "⚙️ Статус и кэш"),
     BotCommand("cancel", "✖️ Сброс выбора"),

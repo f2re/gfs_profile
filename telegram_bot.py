@@ -200,14 +200,17 @@ async def _run_wizard_product(message, context: ContextTypes.DEFAULT_TYPE, state
         return
 
     if product == "map":
+        map_mode = str(state.get("mode", "single"))
         parsed = ParsedMapRequest(
             location_query=f"{point.lat:.4f} {point.lon:.4f}",
             run=None,
-            lead_from=int(state.get("from", 0)) if bool(state.get("anim", False)) else int(state.get("lead", DEFAULT_LEAD)),
-            lead_to=int(state.get("to", 24)) if bool(state.get("anim", False)) else int(state.get("lead", DEFAULT_LEAD)),
+            lead_from=int(state.get("from", 0)) if map_mode in {"series", "gif"} else int(state.get("lead", DEFAULT_LEAD)),
+            lead_to=int(state.get("to", 24)) if map_mode in {"series", "gif"} else int(state.get("lead", DEFAULT_LEAD)),
             step=int(state.get("time_step", 3)),
-            animate=bool(state.get("anim", False)),
+            animate=map_mode == "gif",
             radius_km=float(state.get("radius", 100)),
+            mode=map_mode,
+            basemap=str(state.get("basemap", "places")),
         )
         await run_map_product(message, point, parsed, GFS_SEMAPHORE)
         return
@@ -221,14 +224,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await message.reply_text(
         "🌦️ GFS 0.25 по точке\n"
-        "Бот строит модельные продукты ближайшего узла GFS: профиль, аэродиаграммы, windgram и cloudgram.\n\n"
+        "Бот строит модельные продукты ближайшего узла GFS: профиль, аэродиаграммы, windgram, cloudgram и карту.\n\n"
         "Быстро:\n"
         "• отправьте геолокацию или город — для профиля;\n"
         "• /cloudgram — облака, осадки, гроза, видимость;\n"
-        "• /map — композитная карта вокруг точки;\n"
+        "• /map — композитная карта вокруг точки: одна PNG, серия PNG или GIF;\n"
         "• /windgram — срок × уровень;\n"
         "• /aero или /skewt — аэрологическая диаграмма.\n\n"
-        "После расчёта бот отдаёт PNG/CSV и команду для повтора.",
+        "После расчёта бот отдаёт PNG/GIF/CSV и команду для повтора.",
         reply_markup=location_keyboard(),
     )
 
@@ -243,9 +246,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "<code>/aero Москва +24 type=skewt</code> — аэродиаграмма\n"
         "<code>/windgram Москва to=120 step=6 param=temp</code> — срок × уровень\n"
         "<code>/cloudgram Москва to=72 step=3 mode=simple</code> — облака и явления\n\n"
-        "<code>/map Москва +24</code> — композитная карта\n"
-        "<code>/map Краснодар from=0 to=24 step=3 anim=1</code> — анимация карты\n\n"
-        "Без параметров /aero, /skewt, /windgram, /cloudgram и /map запускают пошаговый выбор. Время на графиках — UTC.",
+        "<code>/map Москва +24</code> — одна композитная карта\n"
+        "<code>/map Краснодар from=0 to=24 step=3 mode=series</code> — серия PNG отдельными картами\n"
+        "<code>/map Краснодар from=0 to=24 step=3 mode=gif</code> — GIF-анимация\n"
+        "<code>/map Москва +24 basemap=roads</code> — подробная подложка\n\n"
+        "/map объединяет осадки, облачность, грозовой риск, явления, видимость и ветер AT500. GFS — модель, не наблюдения. Без параметров /aero, /skewt, /windgram, /cloudgram и /map запускают пошаговый выбор. Время — UTC.",
         parse_mode=ParseMode.HTML,
         reply_markup=location_keyboard(),
     )
@@ -508,16 +513,24 @@ async def product_wizard_callback(update: Update, context: ContextTypes.DEFAULT_
         state["to"] = int(data.rsplit(":", 1)[1])
     elif data.startswith("wiz:cloud:step:"):
         state["time_step"] = int(data.rsplit(":", 1)[1])
-    elif data.startswith("wiz:map:anim:"):
-        state["anim"] = data.rsplit(":", 1)[1] == "1"
+    elif data.startswith("wiz:map:mode:"):
+        state["mode"] = data.rsplit(":", 1)[1]
     elif data.startswith("wiz:map:lead:"):
         lead = int(data.rsplit(":", 1)[1])
         state["lead"] = lead
         state["to"] = max(int(state.get("to", 24)), lead)
+    elif data.startswith("wiz:map:from:"):
+        value = int(data.rsplit(":", 1)[1])
+        state["from"] = value
+        state["to"] = max(int(state.get("to", 24)), value)
     elif data.startswith("wiz:map:to:"):
-        state["to"] = int(data.rsplit(":", 1)[1])
+        value = int(data.rsplit(":", 1)[1])
+        state["to"] = value
+        state["from"] = min(int(state.get("from", 0)), value)
     elif data.startswith("wiz:map:step:"):
         state["time_step"] = int(data.rsplit(":", 1)[1])
+    elif data.startswith("wiz:map:basemap:"):
+        state["basemap"] = data.rsplit(":", 1)[1]
     elif data == "wiz:run":
         if query.message:
             await query.edit_message_text("Параметры выбраны. Запускаю расчёт…")
