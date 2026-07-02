@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from telegram_product_wizard import copy_command, set_point, start_aero_wizard_state, start_cloudgram_wizard_state, start_windgram_wizard_state
+from telegram_product_wizard import copy_command, set_point, start_aero_wizard_state, start_cloudgram_wizard_state, start_map_wizard_state, start_windgram_wizard_state
 
 
 class ProductWizardTests(unittest.TestCase):
@@ -31,6 +31,19 @@ class ProductWizardTests(unittest.TestCase):
         state = set_point(state, {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
         state["mode"] = "simple"
         self.assertEqual(copy_command(state), "/cloudgram 45.0000 39.0000 from=0 to=72 step=3 mode=simple")
+
+    def test_map_copy_command_defaults_to_static_lead(self) -> None:
+        state = start_map_wizard_state(24)
+        state = set_point(state, {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
+        self.assertEqual(copy_command(state), "/map 45.0000 39.0000 +24")
+
+    def test_map_copy_command_can_use_animation(self) -> None:
+        state = start_map_wizard_state(24)
+        state = set_point(state, {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
+        state["anim"] = True
+        state["to"] = 48
+        state["time_step"] = 6
+        self.assertEqual(copy_command(state), "/map 45.0000 39.0000 from=0 to=48 step=6 anim=1")
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from gfs_core import GfsProfileError, GfsRun, ProgressCallback, canonical_leads
 from gfs_subset import bool_from_datasets, download_gfs_subset_to_disk, open_grib_datasets, scalar_from_datasets
+from weather_diagnostics import precipitation_code, thunder_score, visibility_km as diagnostic_visibility_km, weather_code
 
 CLOUDGRAM_DEFAULT_TO = 72
 CLOUDGRAM_DEFAULT_STEP = 3
@@ -120,57 +121,19 @@ def _precip_from_total_or_rate(total_mm: float | None, rate_mmh: float | None, d
 
 
 def _visibility_km(value: float | None) -> float | None:
-    if value is None:
-        return None
-    raw = max(0.0, float(value))
-    if raw > 200.0:
-        return raw / 1000.0
-    return raw
+    return diagnostic_visibility_km(value)
 
 
 def _precip_type_from_flags(rain: bool, snow: bool, freezing: bool, ice_pellets: bool) -> str:
-    parts: list[str] = []
-    if rain:
-        parts.append("R")
-    if snow:
-        parts.append("S")
-    if freezing:
-        parts.append("FZ")
-    if ice_pellets:
-        parts.append("IP")
-    return "/".join(parts) if parts else "—"
+    return precipitation_code(rain, snow, freezing, ice_pellets)
 
 
 def _cb_score(cape: float | None, cin: float | None, conv_precip_mm: float | None, conv_cloud_pct: float | None, precip_rate_mmh: float | None) -> int:
-    score = 0
-    if cape is not None:
-        if cape >= 1000:
-            score += 2
-        elif cape >= 250:
-            score += 1
-    if cin is not None and cin > -150:
-        score += 1
-    if conv_precip_mm is not None and conv_precip_mm >= 0.2:
-        score += 1
-    if conv_cloud_pct is not None and conv_cloud_pct >= 30:
-        score += 1
-    if precip_rate_mmh is not None and precip_rate_mmh >= 3.0:
-        score += 1
-    return max(0, min(3, score))
+    return thunder_score(cape, cin, conv_precip_mm, conv_cloud_pct, precip_rate_mmh)
 
 
 def _phenomena(precip_mm: float | None, precip_type: str, cb_score: int, visibility_km: float | None) -> str:
-    if cb_score >= 2 and precip_mm is not None and precip_mm > 0.2:
-        return "TSRA"
-    if visibility_km is not None and visibility_km < 1.0:
-        return "FG"
-    if precip_mm is None or precip_mm <= 0.05:
-        return "—"
-    if "FZ" in precip_type:
-        return "FZRA"
-    if "S" in precip_type and "R" not in precip_type:
-        return "SN"
-    return "RA"
+    return weather_code(precip_mm, precip_type, cb_score, visibility_km)
 
 
 def _hazard_score(cb_score: int, precip_mm: float | None, ceiling_m: float | None, visibility_km: float | None, phenomena: str) -> tuple[int, str]:

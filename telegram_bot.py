@@ -18,6 +18,7 @@ from gfs_core import CACHE_DIR, GfsProfileError, GfsRun, latest_available_run, l
 from profile_plot import write_profile_png
 from telegram_aero import ParsedAeroRequest, resolve_aero_request, run_aero_product
 from telegram_cloudgram import ParsedCloudgramRequest, resolve_cloudgram_request, run_cloudgram_product
+from telegram_map import ParsedMapRequest, resolve_map_request, run_map_product
 from telegram_product_wizard import (
     PRODUCT_WIZARD_KEY,
     params_keyboard,
@@ -27,6 +28,7 @@ from telegram_product_wizard import (
     set_point as wizard_set_point,
     start_aero_wizard_state,
     start_cloudgram_wizard_state,
+    start_map_wizard_state,
     start_windgram_wizard_state,
 )
 from telegram_progress import build_profile_with_progress
@@ -197,7 +199,20 @@ async def _run_wizard_product(message, context: ContextTypes.DEFAULT_TYPE, state
         await run_cloudgram_product(message, point, parsed, GFS_SEMAPHORE)
         return
 
-    await message.reply_text("Неизвестный продукт. Начните заново: /aero, /skewt, /windgram или /cloudgram.")
+    if product == "map":
+        parsed = ParsedMapRequest(
+            location_query=f"{point.lat:.4f} {point.lon:.4f}",
+            run=None,
+            lead_from=int(state.get("from", 0)) if bool(state.get("anim", False)) else int(state.get("lead", DEFAULT_LEAD)),
+            lead_to=int(state.get("to", 24)) if bool(state.get("anim", False)) else int(state.get("lead", DEFAULT_LEAD)),
+            step=int(state.get("time_step", 3)),
+            animate=bool(state.get("anim", False)),
+            radius_km=float(state.get("radius", 100)),
+        )
+        await run_map_product(message, point, parsed, GFS_SEMAPHORE)
+        return
+
+    await message.reply_text("Неизвестный продукт. Начните заново: /aero, /skewt, /windgram, /cloudgram или /map.")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -210,6 +225,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Быстро:\n"
         "• отправьте геолокацию или город — для профиля;\n"
         "• /cloudgram — облака, осадки, гроза, видимость;\n"
+        "• /map — композитная карта вокруг точки;\n"
         "• /windgram — срок × уровень;\n"
         "• /aero или /skewt — аэрологическая диаграмма.\n\n"
         "После расчёта бот отдаёт PNG/CSV и команду для повтора.",
@@ -227,7 +243,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "<code>/aero Москва +24 type=skewt</code> — аэродиаграмма\n"
         "<code>/windgram Москва to=120 step=6 param=temp</code> — срок × уровень\n"
         "<code>/cloudgram Москва to=72 step=3 mode=simple</code> — облака и явления\n\n"
-        "Без параметров /aero, /skewt, /windgram и /cloudgram запускают пошаговый выбор. Время на графиках — UTC.",
+        "<code>/map Москва +24</code> — композитная карта\n"
+        "<code>/map Краснодар from=0 to=24 step=3 anim=1</code> — анимация карты\n\n"
+        "Без параметров /aero, /skewt, /windgram, /cloudgram и /map запускают пошаговый выбор. Время на графиках — UTC.",
         parse_mode=ParseMode.HTML,
         reply_markup=location_keyboard(),
     )
@@ -394,6 +412,17 @@ async def cloudgram_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     await resolve_cloudgram_request(message, raw, GFS_SEMAPHORE, GEOCODE_SEMAPHORE)
 
 
+async def map_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    message = update.effective_message
+    if not message:
+        return
+    raw = " ".join(context.args).strip()
+    if not raw:
+        await _start_product_wizard(message, context, start_map_wizard_state(DEFAULT_LEAD))
+        return
+    await resolve_map_request(message, raw, GFS_SEMAPHORE, GEOCODE_SEMAPHORE, DEFAULT_LEAD)
+
+
 async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = update.effective_message
     if not message or not message.text:
@@ -430,10 +459,10 @@ async def product_wizard_callback(update: Update, context: ContextTypes.DEFAULT_
     data = query.data or ""
     if data == "wiz:cancel":
         context.user_data.pop(PRODUCT_WIZARD_KEY, None)
-        await query.edit_message_text("Выбор отменён. Начните заново: /aero, /skewt, /windgram или /cloudgram.")
+        await query.edit_message_text("Выбор отменён. Начните заново: /aero, /skewt, /windgram, /cloudgram или /map.")
         return
     if not state:
-        await query.edit_message_text("Сценарий устарел. Начните заново: /aero, /skewt, /windgram или /cloudgram.")
+        await query.edit_message_text("Сценарий устарел. Начните заново: /aero, /skewt, /windgram, /cloudgram или /map.")
         return
 
     if data == "wiz:point":
@@ -478,6 +507,16 @@ async def product_wizard_callback(update: Update, context: ContextTypes.DEFAULT_
     elif data.startswith("wiz:cloud:to:"):
         state["to"] = int(data.rsplit(":", 1)[1])
     elif data.startswith("wiz:cloud:step:"):
+        state["time_step"] = int(data.rsplit(":", 1)[1])
+    elif data.startswith("wiz:map:anim:"):
+        state["anim"] = data.rsplit(":", 1)[1] == "1"
+    elif data.startswith("wiz:map:lead:"):
+        lead = int(data.rsplit(":", 1)[1])
+        state["lead"] = lead
+        state["to"] = max(int(state.get("to", 24)), lead)
+    elif data.startswith("wiz:map:to:"):
+        state["to"] = int(data.rsplit(":", 1)[1])
+    elif data.startswith("wiz:map:step:"):
         state["time_step"] = int(data.rsplit(":", 1)[1])
     elif data == "wiz:run":
         if query.message:
@@ -584,6 +623,7 @@ def build_application() -> Application:
     application.add_handler(CommandHandler("windgram", windgram_command))
     application.add_handler(CommandHandler("cloudgram", cloudgram_command))
     application.add_handler(CommandHandler("clouds", cloudgram_command))
+    application.add_handler(CommandHandler("map", map_command))
     application.add_handler(MessageHandler(filters.LOCATION, location_message))
     application.add_handler(CallbackQueryHandler(product_wizard_callback, pattern=r"^wiz:"))
     application.add_handler(CallbackQueryHandler(lead_callback, pattern=r"^lead:\d+$"))

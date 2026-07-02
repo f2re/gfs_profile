@@ -42,35 +42,37 @@ def _progress_text(header: str, event: dict[str, Any]) -> str:
     elif stage == "windgram_step":
         body = f"{event.get('index')}/{event.get('total')} срок +{event.get('lead_hour')} ч: {message}"
     elif stage == "map_cycle":
-        body = "1/7 Выбираю опубликованный цикл GFS…"
+        body = "1/7 выбираю опубликованный цикл GFS…"
     elif stage == "map_cache":
-        body = "2/7 Пространственный GRIB2 найден в кэше…"
+        radius = int(float(event.get("radius_km") or 100))
+        body = f"2/7 формирую область {radius} км и скачиваю spatial GRIB2… найдено в кэше"
     elif stage in {"map_download_start", "map_download"}:
+        radius = int(float(event.get("radius_km") or 100))
         downloaded = int(event.get("downloaded") or 0)
         total = event.get("total")
         if total:
             pct = min(100, downloaded * 100 / int(total))
-            body = f"2/7 Скачиваю spatial GRIB2: {pct:.0f}%"
+            body = f"2/7 формирую область {radius} км и скачиваю spatial GRIB2… {pct:.0f}%"
         else:
-            body = "2/7 Скачиваю spatial GRIB2…"
+            body = f"2/7 формирую область {radius} км и скачиваю spatial GRIB2…"
     elif stage == "map_download_done":
         body = "3/7 GRIB2 карты загружен. Читаю cfgrib/eccodes…"
     elif stage == "map_parse":
-        body = "4/7 Читаю поля: осадки, облачность, гроза, видимость, AT500…"
+        body = "4/7 читаю поля: осадки, облачность, гроза, видимость, AT500…"
     elif stage == "map_done":
-        body = "5/7 Поля карты рассчитаны. Готовлю визуализацию…"
+        body = "5/7 рассчитываю явления и подписи…"
     elif stage == "map_plot":
-        body = "6/7 Рисую карту, подложку, кольца, легенду и подписи…"
+        body = "6/7 рисую карту, подложку, кольца и легенду…"
     elif stage == "map_plot_done":
-        body = "7/7 PNG оптимизирован для Telegram. Отправляю…"
+        body = "7/7 оптимизирую изображение для Telegram и отправляю…"
     elif stage == "map_step":
-        body = f"Кадр {event.get('index')}/{event.get('total')} · срок +{event.get('lead_hour')} ч: {message}"
+        body = f"кадр {event.get('index')}/{event.get('total')} · срок +{event.get('lead_hour')} ч: {message}"
     elif stage == "map_animation_start":
-        body = "Собираю GIF-анимацию для Telegram…"
+        body = "собираю анимацию для Telegram…"
     elif stage == "map_animation_frame":
-        body = f"GIF: кадр {event.get('index')}/{event.get('total')} · +{event.get('lead_hour')} ч"
+        body = f"анимация: кадр {event.get('index')}/{event.get('total')} · +{event.get('lead_hour')} ч"
     elif stage == "map_animation_done":
-        body = "GIF-анимация оптимизирована для Telegram. Отправляю…"
+        body = "анимация оптимизирована для Telegram. Отправляю…"
     else:
         body = message
 

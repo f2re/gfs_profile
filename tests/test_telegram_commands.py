@@ -10,7 +10,7 @@ class TelegramCommandTests(unittest.TestCase):
         names = [command.command for command in BOT_COMMANDS]
         self.assertEqual(
             names,
-            ["start", "help", "profile", "aero", "skewt", "windgram", "cloudgram", "cycle", "status", "cancel"],
+            ["start", "help", "profile", "aero", "skewt", "windgram", "cloudgram", "map", "cycle", "status", "cancel"],
         )
 
     def test_command_descriptions_are_present(self) -> None:

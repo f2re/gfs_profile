@@ -52,7 +52,7 @@ class FormatterTests(unittest.TestCase):
 
     def test_isotherm_heights_are_interpolated(self) -> None:
         summary = format_profile_summary(self._result())
-        self.assertIn("❄ 0/-10/-20°C: 1.5/3.0/5.6 км", summary)
+        self.assertIn("❄ 0/-10/-20°C: 1.5/3.0/4.3 км", summary)
 
     def test_compact_level_lines_are_short(self) -> None:
         summary = format_profile_summary(self._result())

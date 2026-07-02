@@ -97,7 +97,7 @@ def download_area_subset(date: str, cycle: str, lead_hour: int, lat: float, lon:
     out_path = CACHE_DIR / f"{key}.grib2"
     if out_path.exists():
         _validate_grib_magic(out_path)
-        _emit(progress_callback, stage="map_cache", message="GRIB2 карты найден в кэше")
+        _emit(progress_callback, stage="map_cache", message="GRIB2 карты найден в кэше", radius_km=radius_km)
         return out_path, box
     if not forecast_file_exists(date, cycle, lead_hour):
         raise GfsProfileError(f"Файл GFS для {date} {cycle}Z +{lead_hour} ч ещё не опубликован")
@@ -105,7 +105,7 @@ def download_area_subset(date: str, cycle: str, lead_hour: int, lat: float, lon:
     url = _area_subset_url(date, cycle, lead_hour, box)
     part_path = CACHE_DIR / f"{key}.part"
     part_path.unlink(missing_ok=True)
-    _emit(progress_callback, stage="map_download_start", message="Скачиваю пространственный GRIB2", downloaded=0, total=None)
+    _emit(progress_callback, stage="map_download_start", message="Скачиваю пространственный GRIB2", downloaded=0, total=None, radius_km=radius_km)
     try:
         with requests.get(url, timeout=REQUEST_TIMEOUT, stream=True) as response:
             if response.status_code != 200:
@@ -124,8 +124,8 @@ def download_area_subset(date: str, cycle: str, lead_hour: int, lat: float, lon:
                     now = time.monotonic()
                     if now - last_emit >= 1.0:
                         last_emit = now
-                        _emit(progress_callback, stage="map_download", message="Скачиваю пространственный GRIB2", downloaded=downloaded, total=total)
-            _emit(progress_callback, stage="map_download_done", message="GRIB2 карты загружен", downloaded=downloaded, total=total)
+                        _emit(progress_callback, stage="map_download", message="Скачиваю пространственный GRIB2", downloaded=downloaded, total=total, radius_km=radius_km)
+            _emit(progress_callback, stage="map_download_done", message="GRIB2 карты загружен", downloaded=downloaded, total=total, radius_km=radius_km)
     except RequestException as exc:
         part_path.unlink(missing_ok=True)
         raise GfsProfileError(f"Ошибка подключения к NOMADS: {exc}") from exc
@@ -405,12 +405,12 @@ def _overlay_shapes(overlay: dict, center_lat: float, center_lon: float) -> tupl
 
 
 def _draw_legend(fig, ax) -> None:
-    precip_text = "Осадки, мм: 0.1 0.5 1 3 7 15+"
-    cloud_text = "Облачность, %: 20 40 60 80 100"
-    extra_text = "⚡ гроза · стрелки: ветер AT500, м/с · RA/SN/FG/TS — явления · VIS<10 км"
+    precip_text = "Осадки: APCP мм, если нет APCP — PRATE мм/ч · шкала 0.1 0.5 1 3 7 15+"
+    cloud_text = "Облачность TCDC/TCC, %: 20 40 60 80 100 · серый прозрачный слой"
+    extra_text = "⚡ модельный риск грозы · стрелки: ветер AT500, м/с · RA/SN/FZRA/FG/TSRA · VIS<10 км"
     fig.text(0.06, 0.065, precip_text, fontsize=9, color="#263238")
     fig.text(0.06, 0.04, cloud_text, fontsize=9, color="#263238")
-    fig.text(0.44, 0.04, extra_text, fontsize=9, color="#263238")
+    fig.text(0.06, 0.018, extra_text, fontsize=9, color="#263238")
 
 
 def write_composite_map_png(data: dict, path: Path | None = None, *, pixel_size: int = 1280, overlay: dict | None = None, progress_callback: ProgressCallback | None = None) -> Path:
@@ -510,11 +510,11 @@ def write_composite_map_png(data: dict, path: Path | None = None, *, pixel_size:
     subtitle = f"{data['run'].date} {data['run'].cycle}Z · срок {data['valid_time']:%Y-%m-%d %H:%M} UTC · радиус {int(radius_km)} км"
     ax.set_title(title + "\n" + subtitle, fontsize=12, color="#263238", pad=12)
     _draw_legend(fig, ax)
+    footer = "GFS 0.25 — модель, не радар и не наблюдения."
     if data["missing"]:
-        fig.text(0.06, 0.018, "Нет полей: " + ", ".join(sorted(data["missing"])), fontsize=8, color="#78909c")
-    else:
-        fig.text(0.06, 0.018, "Модельная карта GFS 0.25: не радар и не наблюдения.", fontsize=8, color="#78909c")
-    fig.subplots_adjust(left=0.08, right=0.985, top=0.9, bottom=0.11)
+        footer += " Нет полей: " + ", ".join(sorted(data["missing"]))
+    fig.text(0.06, 0.092, footer, fontsize=8, color="#78909c")
+    fig.subplots_adjust(left=0.08, right=0.985, top=0.9, bottom=0.14)
     fig.savefig(path, dpi=dpi, facecolor="white")
     plt.close(fig)
     try:

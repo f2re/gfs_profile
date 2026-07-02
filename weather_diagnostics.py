@@ -36,21 +36,21 @@ def precipitation_code(rain: bool, snow: bool, cold_rain: bool, ice_pellets: boo
     if snow:
         parts.append("S")
     if cold_rain:
-        parts.append("F" + "Z")
+        parts.append("FZ")
     if ice_pellets:
-        parts.append("I" + "P")
+        parts.append("IP")
     return "/".join(parts) if parts else DASH
 
 
 def weather_code(precip_mm: float | None, precip_code: str, storm_score: int, vis_km: float | None) -> str:
     if storm_score >= 2 and precip_mm is not None and precip_mm > 0.2:
-        return "TS" + "RA"
+        return "TSRA"
     if vis_km is not None and vis_km < 1.0:
-        return "F" + "G"
+        return "FG"
     if precip_mm is None or precip_mm <= 0.05:
         return DASH
-    if ("F" + "Z") in precip_code:
-        return "F" + "Z" + "RA"
+    if "FZ" in precip_code:
+        return "FZRA"
     if "S" in precip_code and "R" not in precip_code:
-        return "S" + "N"
-    return "R" + "A"
+        return "SN"
+    return "RA"

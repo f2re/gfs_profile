@@ -67,11 +67,12 @@ def parse_map_request(raw_text: str, default_lead: int = 24) -> ParsedMapRequest
         run = GfsRun(date=run_match.group("date"), cycle=run_match.group("cycle"))
         text = _strip_match(text, run_match)
 
-    lead_from = 0
+    lead_from = default_lead
     lead_to = default_lead
     step = 3
     animate: bool | None = None
     radius_km = MAP_RADIUS_KM
+    range_mode = False
 
     for regex, name in ((FROM_RE, "from"), (TO_RE, "to"), (STEP_RE, "step"), (RADIUS_RE, "radius")):
         match = regex.search(text)
@@ -79,10 +80,13 @@ def parse_map_request(raw_text: str, default_lead: int = 24) -> ParsedMapRequest
             continue
         value = int(match.group("value"))
         if name == "from":
+            range_mode = True
             lead_from = value
         elif name == "to":
+            range_mode = True
             lead_to = value
         elif name == "step":
+            range_mode = True
             step = value
         elif name == "radius":
             radius_km = float(value)
@@ -98,12 +102,21 @@ def parse_map_request(raw_text: str, default_lead: int = 24) -> ParsedMapRequest
         lead_from = int(lead_match.group("lead"))
         lead_to = lead_from
         animate = False if animate is None else animate
+        range_mode = False
         text = _strip_match(text, lead_match)
+
+    if range_mode:
+        from_match = FROM_RE.search(raw_text)
+        to_match = TO_RE.search(raw_text)
+        if not from_match:
+            lead_from = 0
+        if not to_match:
+            lead_to = default_lead
 
     if radius_km <= 0 or radius_km > 100:
         raise ValueError("Для Telegram-карты radius должен быть в диапазоне 1..100 км")
     if animate is None:
-        animate = lead_to > lead_from
+        animate = False
     if not text:
         raise ValueError("Не указана точка. Пример: /map Москва +24 или /map Москва from=0 to=24 step=3")
     parsed = ParsedMapRequest(text, run, lead_from, lead_to, step, animate, radius_km)

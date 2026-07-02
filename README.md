@@ -13,6 +13,7 @@ Telegram-бот и веб-интерфейс для модельных верт�
 - 🧾 `/aero` и `/skewt` — аэрологические диаграммы Stüve/Emagram/Skew-T через MetPy.
 - 🟦 `/windgram` — срок × уровень: ветер, температура или влажность, со стрелками направления ветра.
 - ☁️ `/cloudgram` — облачность, осадки, явления, видимость, грозовой риск и общая опасность в режимах `pro` и `simple`.
+- 🗺️ `/map` — единая композитная карта GFS вокруг точки: осадки, облачность, гроза, ветер AT500, явления и видимость.
 - 📋 После настройки wizard показывает команду для копирования и повторного запуска.
 
 ## Быстрая установка
@@ -52,6 +53,7 @@ aero - 🧾 Аэродиаграмма
 skewt - 📉 Быстрая Skew-T
 windgram - 🟦 Срок×уровень V/T/RH
 cloudgram - ☁️ Облака, осадки, грозы
+map - 🗺️ Композитная карта GFS
 cycle - 🕒 Последний цикл GFS
 status - ⚙️ Статус и кэш
 cancel - ✖️ Сброс выбора
@@ -76,6 +78,7 @@ python register_telegram_commands.py
 /skewt
 /windgram
 /cloudgram
+/map
 ```
 
 Flow:
@@ -93,6 +96,8 @@ Flow:
 /windgram 45.0000 39.0000 from=0 to=120 step=6 top=500 param=temp
 /cloudgram 45.0000 39.0000 from=0 to=72 step=3 mode=pro
 /cloudgram 45.0000 39.0000 from=0 to=72 step=3 mode=simple
+/map 45.0000 39.0000 +24
+/map 45.0000 39.0000 from=0 to=24 step=3 anim=1
 ```
 
 ## Примеры ручных команд
@@ -115,7 +120,30 @@ Flow:
 /cloudgram Москва to=72 step=3 mode=simple
 /clouds Москва to=72 step=3 mode=simple
 /cloudgram 55.75 37.62 run=20260701/00 from=0 to=72 step=3 mode=pro
+
+/map Москва +24
+/map 45.00 39.00 +24
+/map Краснодар from=0 to=24 step=3
+/map Краснодар from=0 to=24 step=3 anim=1
+/map Москва run=20260702/00 +36
 ```
+
+## Map
+
+`/map` всегда строит один интегрированный метеорологический продукт, а не отдельные пользовательские слои. По умолчанию радиус `100 км`, кольца подписаны через `25 км`, статическая карта строится на `+24 ч`. Диапазон `from/to/step` без `anim=1` отправляет статический PNG для последнего срока диапазона; с `anim=1` бот собирает GIF, ограниченный безопасным числом кадров для Telegram.
+
+Слои и легенда:
+
+```text
+Осадки       APCP, мм; если APCP нет — PRATE, мм/ч
+Облачность   TCDC/TCC, %, серый прозрачный слой
+Гроза        ⚡ — модельный риск по CAPE/CIN/конвективным полям, не наблюдения
+AT500        разреженные стрелки UGRD/VGRD 500 гПа, м/с
+Явления      RA / SN / FZRA / FG / TSRA
+Видимость    подписи только при VIS < 10 км
+```
+
+Подложка использует лёгкие данные OSM/Overpass с кэшем: вода подсвечивается светло-голубым, населённые пункты подписываются. Если Overpass недоступен, карта строится на простой белой подложке и не падает. На самой карте указано: `GFS 0.25 — модель, не радар и не наблюдения`.
 
 ## Cloudgram
 
@@ -194,10 +222,13 @@ windgram_product.py      V/T/RH matrix
 windgram_plot.py         windgram renderer
 cloudgram_product.py     cloud/precip/thunder/ceiling summary
 cloudgram_plot.py        cloudgram pro/simple renderer
+weather_diagnostics.py   общие диагностики видимости, грозы и явлений
+composite_map.py         загрузка spatial GRIB2 и renderer /map
 telegram_product_wizard.py wizard UI
 telegram_aero.py         /aero и /skewt
 telegram_windgram.py     /windgram
 telegram_cloudgram.py    /cloudgram и alias /clouds
+telegram_map.py          /map
 telegram_commands.py     BotCommand definitions
 register_telegram_commands.py registration helper
 runtime_check.py         smoke-check импортов
@@ -222,5 +253,7 @@ PYTHONUNBUFFERED         1
 
 - Все продукты — модель GFS, не наблюдения.
 - ВНГО, грозовой риск и общая опасность в `/cloudgram` — модельная диагностика, не факт наблюдения.
+- Грозовой слой `/map` — модельный риск, не фактические молнии; пространственная детализация ограничена сеткой GFS 0.25.
+- Подложка `/map` зависит от доступности Overpass, но при сбое заменяется простой белой картой.
 - Для части GFS-полей возможны пропуски; продукт должен строиться с доступными слоями и показывать список отсутствующих полей.
 - Для широких PNG Telegram может отправлять документ вместо фото, чтобы не сжимать изображение.
