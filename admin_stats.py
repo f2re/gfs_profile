@@ -115,10 +115,7 @@ def init_admin_db(db_path: str | Path | None = None) -> None:
             CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
             """
         )
-        conn.execute(
-            "INSERT OR REPLACE INTO schema_meta(key, value) VALUES('schema_version', ?)",
-            (str(SCHEMA_VERSION),),
-        )
+        conn.execute("INSERT OR REPLACE INTO schema_meta(key, value) VALUES('schema_version', ?)", (str(SCHEMA_VERSION),))
         now = _utc_ts()
         for user_id in parse_admin_ids():
             conn.execute(
@@ -365,6 +362,7 @@ def format_admin_summary(days: int = 7, db_path: str | Path | None = None) -> st
         lines.append("нет данных")
     lines.extend([
         "",
+        "Кнопки admin-меню доступны под сообщением.",
         "/admin users — пользователи",
         "/admin find <id|@user|name> — найти",
         "/admin add <id|@user> — добавить админа",
@@ -437,3 +435,38 @@ def export_users_csv(db_path: str | Path | None = None) -> str:
         """,
         db_path=db_path,
     )
+
+
+def _looks_like_admin_response(text: str) -> bool:
+    return (
+        text.startswith("<pre>ADMIN")
+        or text.startswith("<pre>USERS")
+        or text.startswith("<pre>RECENT REQUESTS")
+        or text.startswith("Неизвестная admin-команда")
+        or text.startswith("Формат: /admin")
+        or text.startswith("Пользователь не найден")
+        or text.startswith("Администратор добавлен")
+    )
+
+
+def _install_admin_keyboard_patch() -> None:
+    try:
+        from telegram import Message
+        from telegram_admin_ui import admin_keyboard
+    except Exception:
+        return
+
+    original = getattr(Message, "reply_text", None)
+    if original is None or getattr(original, "_gfs_admin_keyboard_patch", False):
+        return
+
+    async def reply_text_with_admin_keyboard(self, text, *args, **kwargs):
+        if "reply_markup" not in kwargs and isinstance(text, str) and _looks_like_admin_response(text):
+            kwargs["reply_markup"] = admin_keyboard()
+        return await original(self, text, *args, **kwargs)
+
+    reply_text_with_admin_keyboard._gfs_admin_keyboard_patch = True  # type: ignore[attr-defined]
+    Message.reply_text = reply_text_with_admin_keyboard
+
+
+_install_admin_keyboard_patch()
