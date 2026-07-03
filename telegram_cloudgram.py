@@ -9,7 +9,7 @@ from typing import NamedTuple
 from telegram import InputFile
 from telegram.constants import ParseMode
 
-from cloudgram_plot import write_cloudgram_png
+from cloudgram_render import write_cloudgram_png
 from cloudgram_product import CLOUDGRAM_DEFAULT_STEP, CLOUDGRAM_DEFAULT_TO, CloudgramData, build_cloudgram_data, cloudgram_leads
 from geocode import GeocodeError, GeoPoint
 from geocode_choices import search_location_candidates
