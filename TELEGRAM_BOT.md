@@ -12,6 +12,7 @@
 - ❄️ Уровень 0 °C или статус, если он вне профиля.
 - 📈 PNG: T/Td, влажность, скорость ветра, ветровые перья.
 - 📄 CSV со всеми уровнями.
+- 🗺️ `/map`: одна PNG-карта, серия PNG или Telegram-анимация.
 
 ## ⚠️ Важно
 
@@ -70,6 +71,7 @@
 /cycle      последний опубликованный анализ GFS f000
 /status     доступность GFS для +0, +24, +48, +120, +240, +384 и состояние кэша
 /profile    экспертный запрос с точкой, сроком и run
+/map        карта: одна PNG, серия PNG или MP4-анимация
 /admin      админ-статистика, пользователи и CSV-отчёты
 ```
 
@@ -79,7 +81,11 @@
 /profile Москва +24
 /profile 59.93 30.31 +12
 /profile Москва run=20260630/06 +24
+/map Москва +24
+/map Москва from=0 to=24 step=3 mode=gif
 ```
+
+`/map ... mode=gif` оставлен как совместимый пользовательский режим, но при наличии системного `ffmpeg` бот создаёт silent H.264/MP4 и отправляет его через Telegram animation. Это отображается в чате как анимация, а не как файл. Если `ffmpeg` не найден, используется GIF fallback с худшим качеством.
 
 ## 🔐 Admin
 
@@ -129,12 +135,20 @@ SQLite-файл статистики лежит в `.cache_gfs` по умолч�
 bash install_telegram_bot.sh
 ```
 
+Для качественных анимаций карты:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ffmpeg
+```
+
 Скрипт создаёт `.venv`, `.env`, systemd-сервис, пользователя `gfsbot`, сохраняет старый `.env` при повторной установке и запускает бота.
 
 Проверка:
 
 ```bash
 bash install_telegram_bot.sh --status
+ffmpeg -version | head -n 1
 sudo journalctl -u gfs-profile-bot.service -f
 ```
 
@@ -238,21 +252,6 @@ python -m unittest discover -s tests
 `/admin find` и `/admin add @username` работают только по локально известным пользователям. Попросите пользователя написать боту или добавьте точный numeric id.
 
 ```text
-Файл GFS для YYYYMMDD HHZ +N ч ещё не опубликован
+ffmpeg не найден
 ```
-Нужный forecast lead ещё не опубликован. Без фиксированного `run=...` бот сам откатывается на предыдущий опубликованный цикл.
-
-```text
-Ошибка чтения GRIB2 через xarray/cfgrib
-```
-Переустановите зависимости через deploy: `bash deploy_telegram_bot.sh` или вручную `pip install -r requirements.txt` внутри venv.
-
-```text
-NOMADS вернул HTML вместо GRIB2
-```
-NOMADS не отдал GRIB2. Обычно это временная недоступность, неверный путь или слишком ранний цикл.
-
-```text
-Город или место не найдено
-```
-Используйте координаты или Telegram-геолокацию.
+Для качественной `/map ... mode=gif` MP4-анимации установите `sudo apt-get install -y ffmpeg`. Без него бот использует GIF fallback.
