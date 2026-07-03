@@ -20,8 +20,8 @@ def draw_utc_day_guides(ax, items, y_date: float, *, fontsize: float = 8.0) -> N
         if idx % 2 == 1:
             ax.axvspan(x0, x1, color="#000000", alpha=0.025, linewidth=0, zorder=0.6)
         if start > 0:
-            ax.axvline(x0, color="#5B6573", linewidth=1.75, alpha=0.58, zorder=6.2)
+            ax.axvline(x0, color="#5B6573", linewidth=1.75, alpha=0.58, zorder=2.2)
         ax.text(center, y_date, label, ha="center", va="center", fontsize=fontsize, color=METEO.axis_text, fontweight="bold", zorder=8)
         rotate = 90 if (n_cols > 25 or span <= 3) else 0
         size = 10.5 if rotate else max(11.0, min(15.5, 7.0 + span))
-        ax.text(center, 0.52, label, transform=transform, ha="center", va="center", rotation=rotate, fontsize=size, color="#56606E", alpha=0.12, fontweight="bold", zorder=6.4)
+        ax.text(center, 0.52, label, transform=transform, ha="center", va="center", rotation=rotate, fontsize=size, color="#56606E", alpha=0.12, fontweight="bold", zorder=1.2)
