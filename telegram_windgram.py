@@ -6,13 +6,13 @@ import re
 from pathlib import Path
 from typing import NamedTuple
 
-from telegram import InputFile
 from telegram.constants import ParseMode
 
 from geocode import GeoPoint, GeocodeError
 from geocode_choices import search_location_candidates
 from gfs_core import GfsProfileError, GfsRun, latest_available_run_for_lead
 from product_progress import run_product_with_progress
+from telegram_file_send import reply_png_file
 from user_location_session import remember_location
 from windgram_plot import write_windgram_png
 from windgram_product import WindgramData, build_windgram_data, normalize_windgram_param, windgram_leads
@@ -152,12 +152,7 @@ async def run_windgram_product(message, point: GeoPoint, parsed: ParsedWindgramR
             data, png_path = await run_product_with_progress(status, header, worker)
         await status.edit_text(format_windgram_caption(data))
         if png_path:
-            caption = format_windgram_file_caption(data)
-            with png_path.open("rb") as file_obj:
-                if len(leads) > 25:
-                    await message.reply_document(document=InputFile(file_obj, filename=png_path.name), caption=caption)
-                else:
-                    await message.reply_photo(photo=InputFile(file_obj, filename=png_path.name), caption=caption)
+            await reply_png_file(message, png_path, caption=format_windgram_file_caption(data), prefer_photo=len(leads) <= 12)
         await message.reply_text(format_repeat_windgram_message(point, parsed, selected_run), parse_mode=ParseMode.HTML)
     except (GfsProfileError, GeocodeError, ValueError) as exc:
         await status.edit_text(f"Ошибка: {exc}")
