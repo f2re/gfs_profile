@@ -35,6 +35,7 @@ OPTIONAL_RUNTIME_MODULES = (
     "debug_map_overlay",
     "user_location_session",
     "composite_map",
+    "map_animation",
     "telegram_commands",
     "telegram_product_wizard",
     "telegram_aero",
