@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import shlex
 import shutil
 import subprocess
 import tempfile
@@ -34,7 +33,8 @@ def _ffmpeg_bin() -> str:
 
 
 def _quote_concat_path(path: Path) -> str:
-    return shlex.quote(str(path.resolve()))
+    escaped = str(path.resolve()).replace("'", "'\\''")
+    return f"'{escaped}'"
 
 
 def _write_concat_list(frame_paths: list[Path], list_path: Path, frame_duration_s: float) -> None:
