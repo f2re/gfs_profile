@@ -6,6 +6,8 @@ from collections import defaultdict
 from datetime import timedelta
 from pathlib import Path
 
+import numpy as np
+
 from plot_style import (
     METEO,
     add_footer,
@@ -54,21 +56,34 @@ def _flow_arrow_components(wind_dir_deg: float) -> tuple[float, float]:
     return dx, dy
 
 
+def _mean_height_km(values: list[float]) -> float | None:
+    finite = np.asarray([value for value in values if value is not None and np.isfinite(value)], dtype=float)
+    if finite.size == 0:
+        return None
+    return float(np.nanmean(finite) / 1000.0)
+
+
 def _height_labels_by_level(data: WindgramData) -> dict[int, str]:
+    """Return y-axis labels with mean geopotential height for each pressure level.
+
+    The mean is calculated over all forecast leads included in the windgram.
+    This avoids static standard-atmosphere labels and keeps wind/temp/RH
+    windgrams consistent with the actual GFS thickness field for the selected
+    point, run and lead range.
+    """
+
     heights: dict[int, list[float]] = defaultdict(list)
     for cell in data.cells:
-        if cell.height_m is not None:
-            heights[cell.pressure_hpa].append(cell.height_m)
+        if cell.height_m is not None and np.isfinite(cell.height_m):
+            heights[cell.pressure_hpa].append(float(cell.height_m))
 
     labels: dict[int, str] = {}
     for level in data.levels_hpa:
-        values = heights.get(level) or []
-        if not values:
-            labels[level] = f"{level}\n—"
-            continue
-        values_sorted = sorted(values)
-        median = values_sorted[len(values_sorted) // 2]
-        labels[level] = f"{level}\n{median / 1000.0:.1f} км"
+        mean_km = _mean_height_km(heights.get(level) or [])
+        if mean_km is None:
+            labels[level] = f"{level}\nZср —"
+        else:
+            labels[level] = f"{level}\nZср {mean_km:.1f} км"
     return labels
 
 
@@ -158,7 +173,7 @@ def write_windgram_png(data: WindgramData, param: str | None = None) -> Path:
         ax.set_yticks(range(n_levels))
         ax.set_yticklabels([height_labels[level] for level in levels_top_down], fontsize=8)
         ax.set_xlabel("Срок прогноза и UTC-время")
-        ax.set_ylabel("Изобарический уровень p, гПа / геопотенциальная высота Z, км")
+        ax.set_ylabel("Изобарический уровень p, гПа / средняя по срокам геопотенциальная высота Zср, км")
         ax.set_title(
             f"GFS 0.25 · windgram: {PARAM_TITLES[selected_param]} по срокам и уровням · {data.run.date} {data.run.cycle}Z · "
             f"+{data.leads[0]}…+{data.leads[-1]} ч · узел {data.grid_lat:.2f}, {data.grid_lon:.2f}",
@@ -190,7 +205,7 @@ def write_windgram_png(data: WindgramData, param: str | None = None) -> Path:
         colorbar.outline.set_edgecolor(METEO.spine)
         colorbar.outline.set_linewidth(0.8)
 
-        add_footer(fig, PARAM_FOOTERS[selected_param] + " Данные: модельный профиль GFS.", y=0.012)
+        add_footer(fig, PARAM_FOOTERS[selected_param] + " Zср слева — средняя геопотенциальная высота уровня по всем срокам диаграммы. Данные: модельный профиль GFS.", y=0.012)
         fig.tight_layout(rect=(0, 0.052, 1, 1))
         fig.savefig(out_path, dpi=180, bbox_inches="tight")
     except Exception:
