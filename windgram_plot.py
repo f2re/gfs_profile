@@ -3,7 +3,8 @@ from __future__ import annotations
 import math
 import tempfile
 from collections import defaultdict
-from datetime import timedelta
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import numpy as np
@@ -36,6 +37,11 @@ PARAM_FOOTERS = {
     "temp": "Цвет и число — температура T, °C; стрелка показывает направление переноса воздуха.",
     "rh": "Цвет и число — относительная влажность RH, %; стрелка показывает направление переноса воздуха.",
 }
+
+
+@dataclass(frozen=True)
+class _LeadGuideItem:
+    valid_time_utc: datetime
 
 
 def _safe_suffix(data: WindgramData, param: str) -> str:
@@ -86,6 +92,21 @@ def _height_labels_by_level(data: WindgramData) -> dict[int, str]:
         else:
             labels[level] = f"{level}\nZср {mean_km:.1f} км"
     return labels
+
+
+def _lead_guide_items(data: WindgramData) -> list[_LeadGuideItem]:
+    """Return one UTC-guide item per lead column.
+
+    Windgram cells are stored as lead × pressure-level records, while the x-axis
+    has only lead columns. Passing all cells to the day-guide helper makes the
+    guide span `len(leads) * len(levels)` columns, which expands the tight PNG
+    canvas far beyond the heatmap and can trigger Telegram Photo_invalid_dimensions.
+    """
+
+    lead_times: dict[int, datetime] = {}
+    for cell in data.cells:
+        lead_times.setdefault(int(cell.lead_hour), cell.valid_time_utc)
+    return [_LeadGuideItem(lead_times[lead]) for lead in data.leads if lead in lead_times]
 
 
 def _x_tick_labels(data: WindgramData) -> list[str]:
@@ -185,7 +206,7 @@ def write_windgram_png(data: WindgramData, param: str | None = None) -> Path:
         )
 
         style_axis(ax, grid=False)
-        draw_utc_day_guides(ax, data.cells, -0.86, fontsize=7.4 if n_leads > 25 else 8.0)
+        draw_utc_day_guides(ax, _lead_guide_items(data), -0.86, fontsize=7.4 if n_leads > 25 else 8.0)
         ax.set_xticks([x - 0.5 for x in range(1, n_leads)], minor=True)
         ax.set_yticks([y - 0.5 for y in range(1, n_levels)], minor=True)
         ax.grid(which="minor", linewidth=0.65, color="#FFFFFF", alpha=0.92)
