@@ -6,7 +6,6 @@ import re
 from pathlib import Path
 from typing import NamedTuple
 
-from telegram import InputFile
 from telegram.constants import ParseMode
 
 from cloudgram_render import write_cloudgram_png
@@ -15,6 +14,7 @@ from geocode import GeocodeError, GeoPoint
 from geocode_choices import search_location_candidates
 from gfs_core import GfsProfileError, GfsRun, latest_available_run_for_lead
 from product_progress import run_product_with_progress
+from telegram_file_send import reply_png_file
 from user_location_session import remember_location
 
 RUN_RE = re.compile(r"\brun=(?P<date>\d{8})[/-]?(?P<cycle>00|06|12|18)\b", re.IGNORECASE)
@@ -170,12 +170,7 @@ async def run_cloudgram_product(message, point: GeoPoint, parsed: ParsedCloudgra
             data, png_path = await run_product_with_progress(status, header, worker)
         await status.edit_text(format_cloudgram_caption(data, parsed.mode))
         if png_path:
-            caption = format_cloudgram_file_caption(data, parsed.mode)
-            with png_path.open("rb") as file_obj:
-                if len(leads) > 25:
-                    await message.reply_document(document=InputFile(file_obj, filename=png_path.name), caption=caption)
-                else:
-                    await message.reply_photo(photo=InputFile(file_obj, filename=png_path.name), caption=caption)
+            await reply_png_file(message, png_path, caption=format_cloudgram_file_caption(data, parsed.mode), prefer_photo=len(leads) <= 12)
         await message.reply_text(format_repeat_cloudgram_message(point, parsed, selected_run), parse_mode=ParseMode.HTML)
     except (GfsProfileError, GeocodeError, ValueError) as exc:
         await status.edit_text(f"Ошибка: {exc}")
