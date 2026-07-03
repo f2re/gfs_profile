@@ -70,6 +70,7 @@
 /cycle      последний опубликованный анализ GFS f000
 /status     доступность GFS для +0, +24, +48, +120, +240, +384 и состояние кэша
 /profile    экспертный запрос с точкой, сроком и run
+/admin      админ-статистика, пользователи и CSV-отчёты
 ```
 
 Примеры:
@@ -79,6 +80,46 @@
 /profile 59.93 30.31 +12
 /profile Москва run=20260630/06 +24
 ```
+
+## 🔐 Admin
+
+Доступ к `/admin` есть только у numeric Telegram user id из `.env` или у пользователей, добавленных действующим администратором.
+
+```text
+TELEGRAM_ADMIN_IDS=123456789,987654321
+TELEGRAM_ADMIN_DB=.cache_gfs/admin_stats.sqlite3
+```
+
+Команды администратора:
+
+```text
+/admin                         сводка за 7 дней
+/admin stats 30                сводка за 30 дней
+/admin recent 20               последние запросы
+/admin users                   последние известные пользователи
+/admin find @username          поиск пользователя
+/admin add @username           добавить администратора из найденных пользователей
+/admin add 123456789           добавить администратора по точному id
+/admin report requests 30      скачать CSV запросов за 30 дней
+/admin report users            скачать CSV пользователей
+```
+
+Учитывается:
+
+```text
+user_id, username, first/last name
+первый и последний визит
+тип продукта: profile/aero/skewt/windgram/cloudgram/map
+город/точка или исходный запрос
+lead_from/lead_to, если известны
+статус: ok/failed/error/running
+время выполнения, мс
+текст запроса
+```
+
+Ограничение: Telegram Bot API не предоставляет глобальный поиск пользователей. `/admin find` ищет только среди пользователей, которые уже писали боту или нажимали inline-кнопки. Если известен numeric Telegram id, его можно добавить напрямую через `/admin add <id>`.
+
+SQLite-файл статистики лежит в `.cache_gfs` по умолчанию и сохраняется при deploy вместе с GRIB-кэшем.
 
 ## 📦 Установка
 
@@ -137,6 +178,7 @@ python telegram_bot.py
 
 ```text
 TELEGRAM_BOT_TOKEN=123456:AA...
+TELEGRAM_ADMIN_IDS=123456789
 ```
 
 Рекомендуемые параметры:
@@ -150,6 +192,7 @@ GFS_CACHE_TTL_SECONDS=86400
 GFS_AVAILABILITY_CACHE_TTL_SECONDS=300
 GFS_REQUEST_TIMEOUT=35
 GFS_PRESSURE_LEVELS_HPA=profile
+TELEGRAM_ADMIN_DB=.cache_gfs/admin_stats.sqlite3
 GEOCODER_USER_AGENT=gfs-profile-telegram-bot/0.1
 GEOCODE_CACHE_DIR=.cache_gfs/geocode
 GEOCODE_TIMEOUT=12
@@ -181,6 +224,16 @@ python -m unittest discover -s tests
 Нужно задать TELEGRAM_BOT_TOKEN
 ```
 Токен не загружен из `.env`.
+
+```text
+Доступ закрыт. Укажите TELEGRAM_ADMIN_IDS
+```
+Для `/admin` не задан numeric Telegram id администратора или пользователь не добавлен через `/admin add`.
+
+```text
+Пользователь не найден или найдено несколько совпадений
+```
+`/admin find` и `/admin add @username` работают только по локально известным пользователям. Попросите пользователя написать боту или добавьте точный numeric id.
 
 ```text
 Файл GFS для YYYYMMDD HHZ +N ч ещё не опубликован

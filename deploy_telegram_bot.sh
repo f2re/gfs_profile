@@ -7,6 +7,7 @@ set -Eeuo pipefail
 DEFAULT_INSTALL_DIR="/opt/gfs_profile"
 DEFAULT_SERVICE_NAME="gfs-profile-bot"
 DEFAULT_SERVICE_USER="gfsbot"
+DEFAULT_ADMIN_DB_RELATIVE=".cache_gfs/admin_stats.sqlite3"
 
 INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 SERVICE_NAME="${SERVICE_NAME:-$DEFAULT_SERVICE_NAME}"
@@ -17,6 +18,8 @@ NO_RESTART=0
 SKIP_PIP=0
 STATUS_ONLY=0
 SKIP_COMMANDS=0
+ADMIN_DB_BACKUP=""
+ADMIN_DB_BACKUP_DIR=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$SCRIPT_DIR"
@@ -37,6 +40,13 @@ success() { printf '%s\n' "${C_GREEN}✓${C_RESET} $*" >&2; }
 warn() { printf '%s\n' "${C_YELLOW}!${C_RESET} $*" >&2; }
 fail() { printf '%s\n' "${C_RED}✗${C_RESET} $*" >&2; exit 1; }
 section() { printf '\n%s\n' "${C_BOLD}${C_CYAN}== $* ==${C_RESET}" >&2; }
+
+cleanup() {
+  if [[ -n "$ADMIN_DB_BACKUP_DIR" && -d "$ADMIN_DB_BACKUP_DIR" ]]; then
+    run_root rm -rf "$ADMIN_DB_BACKUP_DIR" 2>/dev/null || rm -rf "$ADMIN_DB_BACKUP_DIR" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
 
 usage() {
   cat <<EOF
@@ -123,7 +133,31 @@ git_rev() {
   fi
 }
 
+read_env_value() {
+  local key="$1"
+  local line value
+  [[ -f "$ENV_FILE" ]] || return 1
+  line="$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "$ENV_FILE" | tail -n 1 || true)"
+  [[ -n "$line" ]] || return 1
+  value="${line#*=}"
+  value="$(printf '%s' "$value" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")"
+  printf '%s' "$value"
+}
+
+admin_db_path() {
+  local raw
+  raw="$(read_env_value TELEGRAM_ADMIN_DB || true)"
+  [[ -n "$raw" ]] || raw="$DEFAULT_ADMIN_DB_RELATIVE"
+  if [[ "$raw" = /* ]]; then
+    printf '%s' "$raw"
+  else
+    printf '%s/%s' "$INSTALL_DIR" "$raw"
+  fi
+}
+
 print_status() {
+  local admin_db
+  admin_db="$(admin_db_path)"
   section "Состояние deploy"
   [[ -d "$REPO_ROOT/.git" ]] && success "Источник git: $REPO_ROOT @ $(git_rev)" || warn "Источник не похож на git checkout: $REPO_ROOT"
   [[ -d "$INSTALL_DIR" ]] && success "Каталог установки: $INSTALL_DIR" || warn "Каталог установки отсутствует: $INSTALL_DIR"
@@ -131,6 +165,7 @@ print_status() {
   [[ -x "$VENV_DIR/bin/python" ]] && success "venv найден: $VENV_DIR" || warn "venv не найден: $VENV_DIR"
   [[ -f "$UNIT_PATH" ]] && success "systemd unit найден: $UNIT_PATH" || warn "systemd unit не найден: $UNIT_PATH"
   [[ -f "$INSTALL_DIR/register_telegram_commands.py" ]] && success "registrar команд найден" || warn "registrar команд не найден в $INSTALL_DIR"
+  [[ -f "$admin_db" ]] && success "admin DB найден: $admin_db" || warn "admin DB пока не создан: $admin_db"
   if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files "${SERVICE_NAME}.service" >/dev/null 2>&1; then
     printf 'Активность сервиса: ' >&2
     systemctl is-active "${SERVICE_NAME}.service" >&2 || true
@@ -148,6 +183,38 @@ require_ready_install() {
   [[ -d "$INSTALL_DIR" ]] || fail "Каталог $INSTALL_DIR не существует. Сначала выполните bash install_telegram_bot.sh"
   [[ -f "$ENV_FILE" ]] || fail "Нет $ENV_FILE. Сначала выполните первичную установку, чтобы задать TELEGRAM_BOT_TOKEN"
   id "$SERVICE_USER" >/dev/null 2>&1 || fail "Пользователь $SERVICE_USER не найден. Сначала выполните первичную установку"
+}
+
+backup_admin_db() {
+  local admin_db backup
+  admin_db="$(admin_db_path)"
+  if [[ ! -f "$admin_db" ]]; then
+    warn "admin DB пока не создана: $admin_db"
+    return 0
+  fi
+  ADMIN_DB_BACKUP_DIR="$(mktemp -d)"
+  backup="$ADMIN_DB_BACKUP_DIR/$(basename "$admin_db")"
+  run_root cp -a "$admin_db" "$backup"
+  ADMIN_DB_BACKUP="$backup"
+  success "admin DB сохранена перед rsync: $admin_db"
+}
+
+restore_admin_db() {
+  local admin_db admin_dir
+  admin_db="$(admin_db_path)"
+  admin_dir="$(dirname "$admin_db")"
+  run_root mkdir -p "$admin_dir"
+  if [[ -n "$ADMIN_DB_BACKUP" && -f "$ADMIN_DB_BACKUP" && ! -f "$admin_db" ]]; then
+    run_root cp -a "$ADMIN_DB_BACKUP" "$admin_db"
+    success "admin DB восстановлена после rsync: $admin_db"
+  fi
+  if [[ -f "$admin_db" ]]; then
+    run_root chown "$SERVICE_USER:$SERVICE_USER" "$admin_db"
+    success "admin DB сохранена: $admin_db"
+  else
+    run_root chown "$SERVICE_USER:$SERVICE_USER" "$admin_dir" 2>/dev/null || true
+    warn "admin DB будет создана ботом при первом учёте: $admin_db"
+  fi
 }
 
 copy_project() {
@@ -247,8 +314,9 @@ register_telegram_commands() {
 }
 
 write_state() {
-  local rev installed_at
+  local rev installed_at admin_db
   rev="$(git_rev)"
+  admin_db="$(admin_db_path)"
   installed_at="$(grep '^installed_at=' "$STATE_FILE" 2>/dev/null | cut -d= -f2- || true)"
   cat <<EOF | run_root tee "$STATE_FILE" >/dev/null
 installed_at=$installed_at
@@ -260,6 +328,7 @@ service_name=$SERVICE_NAME
 service_user=$SERVICE_USER
 venv=$VENV_DIR
 unit=$UNIT_PATH
+admin_db=$admin_db
 runtime_check=ok
 telegram_commands=attempted
 EOF
@@ -278,7 +347,9 @@ main() {
     fail "Другой deploy уже выполняется: $DEPLOY_LOCK"
   fi
 
+  backup_admin_db
   copy_project
+  restore_admin_db
   ensure_venv_and_deps
   runtime_check
   prepare_basemap_cache
