@@ -14,6 +14,7 @@ Telegram-бот и веб-интерфейс для модельных верт�
 - 🟦 `/windgram` — срок × уровень: ветер, температура или влажность, со стрелками направления ветра.
 - ☁️ `/cloudgram` — облачность, осадки, явления, видимость, грозовой риск и общая опасность в режимах `pro` и `simple`.
 - 🗺️ `/map` — единая композитная карта GFS вокруг точки: осадки, облачность, гроза, ветер AT500, явления и видимость; режимы одна PNG, серия PNG и GIF.
+- 🔐 `/admin` — статистика использования, пользователи, поиск известных Telegram-пользователей, админы и CSV-отчёты.
 - 📋 После настройки wizard показывает команду для копирования и повторного запуска.
 
 ## Быстрая установка
@@ -25,7 +26,7 @@ bash install_telegram_bot.sh
 Автоматически:
 
 ```bash
-TELEGRAM_BOT_TOKEN='123456:AA...' bash install_telegram_bot.sh --yes
+TELEGRAM_BOT_TOKEN='123456:AA...' TELEGRAM_ADMIN_IDS='123456789' bash install_telegram_bot.sh --yes
 ```
 
 Обновление после `git pull`:
@@ -56,6 +57,7 @@ cloudgram - ☁️ Облака, осадки, грозы
 map - 🗺️ Карта: PNG-серия/GIF
 cycle - 🕒 Последний цикл GFS
 status - ⚙️ Статус и кэш
+admin - 🔐 Администрирование
 cancel - ✖️ Сброс выбора
 ```
 
@@ -68,6 +70,33 @@ python register_telegram_commands.py
 ```
 
 `/clouds` работает как alias `/cloudgram`, но в меню Telegram регистрируется только `/cloudgram`, чтобы не раздувать список команд.
+
+## Admin
+
+Админ-доступ задаётся числовыми Telegram user id в `.env`:
+
+```text
+TELEGRAM_ADMIN_IDS=123456789,987654321
+TELEGRAM_ADMIN_DB=.cache_gfs/admin_stats.sqlite3
+```
+
+Команды:
+
+```text
+/admin                         сводка за 7 дней
+/admin stats 30                сводка за 30 дней
+/admin recent 20               последние запросы
+/admin users                   последние пользователи
+/admin find @username          поиск по известным пользователям
+/admin add @username           добавить администратора
+/admin add 123456789           добавить администратора по id
+/admin report requests 30      CSV запросов за 30 дней
+/admin report users            CSV пользователей
+```
+
+Ограничение Telegram Bot API: бот не может искать пользователей глобально по Telegram. `/admin find` ищет только локально известных пользователей: тех, кто уже писал боту или нажимал inline-кнопки. Для неизвестного пользователя можно добавить точный numeric id через `/admin add <id>`.
+
+Статистика хранится в SQLite без внешней БД: пользователи, username/name, первый/последний визит, продукт, город/точка, текст запроса, сроки, статус и время выполнения. Файл лежит в `.cache_gfs` и сохраняется deploy-скриптом вместе с GRIB-кэшем.
 
 ## Wizard-flow
 
@@ -90,7 +119,7 @@ Flow:
 5. Показывает команду для копирования.
 6. `▶ Построить` запускает расчёт.
 
-Последние локации общие для `/profile`, `/aero`, `/skewt`, `/windgram`, `/cloudgram` и `/map`. Они хранятся только в памяти процесса бота: после рестарта история очищается, база данных не используется.
+Последние локации общие для `/profile`, `/aero`, `/skewt`, `/windgram`, `/cloudgram` и `/map`. Они хранятся только в памяти процесса бота: после рестарта история очищается. Админ-статистика пользователей и запросов хранится отдельно в SQLite.
 
 Примеры команд, которые можно получить из wizard:
 
@@ -297,6 +326,7 @@ cloudgram_product.py     cloud/precip/thunder/ceiling summary
 cloudgram_plot.py        cloudgram pro/simple renderer
 weather_diagnostics.py   общие диагностики видимости, грозы и явлений
 composite_map.py         загрузка spatial GRIB2 и renderer /map
+admin_stats.py           SQLite-учёт пользователей, запросов, админов и CSV
 telegram_product_wizard.py wizard UI
 telegram_aero.py         /aero и /skewt
 telegram_windgram.py     /windgram
@@ -311,6 +341,8 @@ runtime_check.py         smoke-check импортов
 
 ```text
 TELEGRAM_BOT_TOKEN       токен Telegram-бота
+TELEGRAM_ADMIN_IDS       numeric id администраторов через comma/space
+TELEGRAM_ADMIN_DB        SQLite-файл статистики и admin ACL
 DEFAULT_LEAD             срок профиля по умолчанию
 MAX_CONCURRENT_GFS       лимит одновременных GFS-запросов
 MAX_CONCURRENT_GEOCODE   лимит геокодинга
@@ -331,5 +363,6 @@ PYTHONUNBUFFERED         1
 - ВНГО, грозовой риск и общая опасность в `/cloudgram` — модельная диагностика, не факт наблюдения.
 - Грозовой слой `/map` — модельный риск, не фактические молнии; пространственная детализация ограничена сеткой GFS 0.25.
 - Подложка `/map` берётся из локального Natural Earth cache; детализация и дороги ограничены доступностью этих слоёв.
+- Telegram Bot API не позволяет искать произвольных пользователей глобально. Админ-поиск работает по локально известным пользователям.
 - Для части GFS-полей возможны пропуски; продукт должен строиться с доступными слоями и показывать список отсутствующих полей.
 - Для широких PNG Telegram может отправлять документ вместо фото, чтобы не сжимать изображение.
