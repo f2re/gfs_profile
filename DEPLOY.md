@@ -18,6 +18,13 @@ deploy_telegram_bot.sh    синхронизация git checkout → /opt + pip
 bash install_telegram_bot.sh
 ```
 
+Для качественных Telegram-анимаций карты нужен системный `ffmpeg`. Если он не установлен, бот сохранит совместимость и соберёт GIF fallback, но картинка будет заметно хуже:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y ffmpeg
+```
+
 После первичной установки включить автообновление из этого же git checkout:
 
 ```bash
@@ -106,6 +113,7 @@ bash deploy_telegram_bot.sh
 bash deploy_telegram_bot.sh --status
 sudo systemctl status gfs-profile-bot.service
 sudo journalctl -u gfs-profile-bot.service -n 80 --no-pager
+ffmpeg -version | head -n 1
 ```
 
 Проверка ядра без Telegram:
@@ -120,6 +128,14 @@ sudo -u gfsbot /opt/gfs_profile/.venv/bin/python -m gfs_core --lat 55.75 --lon 3
 sudo -u gfsbot /opt/gfs_profile/.venv/bin/python /opt/gfs_profile/prepare_basemap_cache.py --check
 sudo -u gfsbot /opt/gfs_profile/.venv/bin/python /opt/gfs_profile/prepare_basemap_cache.py --resolution 10m
 ```
+
+Проверка MP4-анимации карты:
+
+```text
+/map Москва from=0 to=24 step=3 mode=gif
+```
+
+Команда исторически называется `mode=gif`, но при наличии `ffmpeg` бот отправляет silent H.264/MP4 через Telegram animation. Это отображается в чате как анимация, а не как файл.
 
 Проверка в Telegram:
 
