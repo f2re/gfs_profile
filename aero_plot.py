@@ -15,6 +15,7 @@ ISOTHERM_TARGETS_C = (0.0, -10.0, -20.0)
 DIAGRAM_RU_NAMES = {"stuve": "Stüve", "emagram": "Эмаграмма", "skewt": "Skew-T log-P"}
 ISOTHERM_LINE_COLORS = {0.0: METEO.freezing, -10.0: METEO.minus10, -20.0: METEO.minus20}
 HAZARD_COLORS = {"cloud": "#90A4B8", "icing": "#3B82F6", "turb": "#F59E0B", "conv": "#DC2626", "precip": "#16A34A"}
+CARD_COLORS = {0: "#FFFFFF", 1: "#ECFDF5", 2: "#FEF9C3", 3: "#FED7AA", 4: "#FECACA", 5: "#FCA5A5"}
 G = 9.80665
 RD_CP = 0.2854
 
@@ -27,9 +28,9 @@ def _safe_suffix(result: ProfileResult, diagram_type: str) -> str:
 def _diagram_title(result: ProfileResult, diagram_type: str) -> str:
     name = DIAGRAM_RU_NAMES.get(diagram_type, diagram_type.upper())
     return (
-        f"GFS 0.25 · полная аэрограмма {name} · запуск {result.run.date} {result.run.cycle}Z · "
+        f"GFS 0.25 · аэрограмма {name} · запуск {result.run.date} {result.run.cycle}Z · "
         f"+{result.lead_hour} ч · {result.valid_time_utc:%Y-%m-%d %H:%M UTC}\n"
-        f"{result.requested_lat:.3f},{result.requested_lon:.3f} → ⊞GFS {result.grid_lat:.3f},{result.grid_lon:.3f}; модель, не радиозонд"
+        f"{result.requested_lat:.3f},{result.requested_lon:.3f} → ⊞GFS {result.grid_lat:.3f},{result.grid_lon:.3f}; модельный профиль, не радиозонд"
     )
 
 
@@ -222,21 +223,64 @@ def _ls(layers, kind: str) -> str:
     selected = [x for x in layers if x["kind"] == kind]
     if not selected:
         return "—"
-    return ", ".join(f"{x['base_km']:.1f}–{x['top_km']:.1f}" for x in selected[:3]) + ("…" if len(selected) > 3 else "")
+    return ", ".join(f"{x['base_km']:.1f}–{x['top_km']:.1f}" for x in selected[:2]) + ("…" if len(selected) > 2 else "")
 
 
-def _summary_text(df, diag, layers) -> str:
+def _risk_level(name: str, value: float | None) -> int:
+    if value is None or not np.isfinite(float(value)):
+        return 0
+    v = float(value)
+    if name == "cape":
+        return 5 if v >= 2500 else 4 if v >= 1500 else 3 if v >= 800 else 2 if v >= 300 else 1 if v >= 100 else 0
+    if name == "cin":
+        a = abs(v)
+        return 4 if a >= 200 else 3 if a >= 100 else 2 if a >= 50 else 1 if a >= 25 else 0
+    if name == "tt":
+        return 4 if v >= 55 else 3 if v >= 50 else 2 if v >= 45 else 1 if v >= 40 else 0
+    if name == "k":
+        return 4 if v >= 35 else 3 if v >= 30 else 2 if v >= 25 else 1 if v >= 20 else 0
+    if name == "shear":
+        return 5 if v >= 16 else 4 if v >= 12 else 3 if v >= 8 else 2 if v >= 5 else 0
+    if name == "ri":
+        return 5 if v < 0.0 else 4 if v < 0.25 else 2 if v < 1.0 else 0
+    return 0
+
+
+def _card(ax, x: float, y: float, w: float, h: float, title: str, value: str, note: str, level: int) -> None:
+    import matplotlib.patches as patches
+
+    ax.add_patch(patches.FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.012,rounding_size=0.018", facecolor=CARD_COLORS[min(max(level, 0), 5)], edgecolor=METEO.annotation_edge, linewidth=0.8))
+    ax.text(x + 0.025, y + h - 0.055, title, ha="left", va="top", fontsize=8.5, color=METEO.muted_text, fontweight="bold")
+    ax.text(x + 0.025, y + h * 0.50, value, ha="left", va="center", fontsize=13.2, color=METEO.axis_text, fontweight="bold")
+    ax.text(x + 0.025, y + 0.035, note, ha="left", va="bottom", fontsize=7.2, color=METEO.muted_text)
+
+
+def _plot_index_cards(ax, df, diag, layers) -> None:
+    ax.axis("off")
+    ax.text(0.0, 1.02, "Индексы и критические значения", ha="left", va="bottom", fontsize=11, fontweight="bold", color=METEO.axis_text)
+    cape_values = [diag.get("sbcape"), diag.get("mlcape"), diag.get("mucape")]
+    cape = max([float(v) for v in cape_values if v is not None and np.isfinite(float(v))], default=None)
+    cin_values = [diag.get("sbcin"), diag.get("mlcin"), diag.get("mucin")]
+    cin = min([float(v) for v in cin_values if v is not None and np.isfinite(float(v))], default=None)
+    vmax = float(np.nanmax(df["wind_speed_ms"].to_numpy(dtype=float)))
+    shear = float(np.nanmax(df["vertical_shear_ms_per_km"].to_numpy(dtype=float)))
+    ri = float(np.nanmin(df["gradient_richardson"].to_numpy(dtype=float)))
     iso = "/".join(_hkm(_interpolate_isotherm_height(df, t)) for t in ISOTHERM_TARGETS_C)
-    vmax = np.nanmax(df["wind_speed_ms"].to_numpy(dtype=float))
-    shear = np.nanmax(df["vertical_shear_ms_per_km"].to_numpy(dtype=float))
-    ri = np.nanmin(df["gradient_richardson"].to_numpy(dtype=float))
-    return "\n".join([
-        "ИНДЕКСЫ И СЛОИ GFS",
-        f"SBCAPE/CIN {_fmt(diag.get('sbcape'))}/{_fmt(diag.get('sbcin'))} Дж/кг    MLCAPE/CIN {_fmt(diag.get('mlcape'))}/{_fmt(diag.get('mlcin'))}    MUCAPE/CIN {_fmt(diag.get('mucape'))}/{_fmt(diag.get('mucin'))}",
-        f"LCL/LFC/EL {_fmt(diag.get('lcl'))}/{_fmt(diag.get('lfc'))}/{_fmt(diag.get('el'))} гПа    PWAT {_fmt(diag.get('pwat'), '.1f')} мм    TT {_fmt(diag.get('tt'), '.1f')}    K {_fmt(diag.get('k'), '.1f')}",
-        f"0/−10/−20 °C {iso} км    Vmax {_fmt(vmax, '.1f')} м/с    max shear {_fmt(shear, '.1f')} м/с/км    min Ri {_fmt(ri, '.2f')}",
-        f"Облачность {_ls(layers, 'cloud')} км    Обледенение {_ls(layers, 'icing')} км    Турбулентность {_ls(layers, 'turb')} км    КНС {_ls(layers, 'conv')} км",
-    ])
+    hazard = max([int(x["severity"]) for x in layers], default=0)
+    cards = [
+        ("CAPE max", f"{_fmt(cape)} Дж/кг", "≥800 заметно, ≥1500 сильно", _risk_level("cape", cape)),
+        ("CIN", f"{_fmt(cin)} Дж/кг", "|CIN|≥50 тормозит конвекцию", _risk_level("cin", cin)),
+        ("TT / K", f"{_fmt(diag.get('tt'), '.1f')} / {_fmt(diag.get('k'), '.1f')}", "TT≥50, K≥30 подсвечены", max(_risk_level("tt", diag.get("tt")), _risk_level("k", diag.get("k")))),
+        ("LCL/LFC/EL", f"{_fmt(diag.get('lcl'))}/{_fmt(diag.get('lfc'))}/{_fmt(diag.get('el'))}", "гПа", 0),
+        ("0/−10/−20 °C", iso, "км", 1),
+        ("Vmax / shear", f"{_fmt(vmax, '.1f')} / {_fmt(shear, '.1f')}", "м/с; м/с/км", _risk_level("shear", shear)),
+        ("min Ri", _fmt(ri, ".2f"), "Ri<0.25 критично для турб.", _risk_level("ri", ri)),
+        ("Слои", f"Лёд {_ls(layers, 'icing')}  Турб {_ls(layers, 'turb')}", "км", hazard),
+    ]
+    w, h = 0.235, 0.22
+    for n, item in enumerate(cards):
+        row, col = divmod(n, 4)
+        _card(ax, 0.005 + col * 0.248, 0.735 - row * 0.255, w, h, *item)
 
 
 def _create_metpy_diagram(fig, diagram_type: str):
@@ -255,7 +299,7 @@ def _add_isotherm_guides(ax, df, tmin: float, tmax: float) -> None:
         h = _interpolate_isotherm_height(df, target)
         p = _pressure_at_height(df, h)
         if p is not None and tmin <= target <= tmax:
-            ax.text(target, p, f" {int(target)} °C · {h / 1000:.1f} км", ha="left", va="center", fontsize=7, color=ISOTHERM_LINE_COLORS[target], bbox={"facecolor": METEO.axes_bg, "edgecolor": "none", "alpha": 0.8, "pad": 1.2}, zorder=9)
+            ax.text(target, p, f" {int(target)} °C · {h / 1000:.1f} км", ha="left", va="center", fontsize=7.4, color=ISOTHERM_LINE_COLORS[target], bbox={"facecolor": METEO.axes_bg, "edgecolor": "none", "alpha": 0.8, "pad": 1.2}, zorder=9)
 
 
 def _level(ax, p: float | None, label: str, color: str) -> None:
@@ -263,7 +307,7 @@ def _level(ax, p: float | None, label: str, color: str) -> None:
         return
     ax.axhline(p, linewidth=0.8, color=color, linestyle=":", alpha=0.8)
     x0, x1 = ax.get_xlim()
-    ax.text(x0 + 0.02 * (x1 - x0), p, label, fontsize=7, color=color, va="center", bbox={"facecolor": METEO.axes_bg, "edgecolor": "none", "alpha": 0.8})
+    ax.text(x0 + 0.02 * (x1 - x0), p, label, fontsize=7.4, color=color, va="center", bbox={"facecolor": METEO.axes_bg, "edgecolor": "none", "alpha": 0.82})
 
 
 def _pressure_axis(ax) -> None:
@@ -277,24 +321,25 @@ def _pressure_axis(ax) -> None:
 def _hazards(ax, layers) -> None:
     cats = [("cloud", "Обл"), ("icing", "Лёд"), ("turb", "Турб"), ("conv", "КНС"), ("precip", "Ос")]
     ax.set_xlim(-0.5, 4.5)
-    ax.set_xticks(range(5), [x[1] for x in cats], fontsize=7)
-    ax.set_title("Опасные слои", fontsize=9, fontweight="bold")
+    ax.set_xticks(range(5), [x[1] for x in cats], fontsize=8)
+    ax.set_title("Слои риска по высоте", fontsize=9.5, fontweight="bold")
     for i, (kind, _label) in enumerate(cats):
         ax.axvline(i, color=METEO.grid_minor, linewidth=0.6)
         for layer in [x for x in layers if x["kind"] == kind]:
-            ax.fill_betweenx([layer["top_hpa"], layer["base_hpa"]], i - 0.34, i + 0.34, color=HAZARD_COLORS[kind], alpha=0.22 + int(layer["severity"]) * 0.09, linewidth=0)
-            ax.text(i, math.sqrt(layer["top_hpa"] * layer["base_hpa"]), str(layer["severity"]), ha="center", va="center", fontsize=7, fontweight="bold")
+            ax.fill_betweenx([layer["top_hpa"], layer["base_hpa"]], i - 0.36, i + 0.36, color=HAZARD_COLORS[kind], alpha=0.25 + int(layer["severity"]) * 0.10, linewidth=0)
+            ax.text(i, math.sqrt(layer["top_hpa"] * layer["base_hpa"]), str(layer["severity"]), ha="center", va="center", fontsize=8, fontweight="bold")
     ax.set_xlabel("риск 1–5")
     _pressure_axis(ax)
-    ax.tick_params(labelleft=False)
 
 
 def _wind_panel(ax, df) -> None:
-    ax.plot(df["wind_speed_ms"], df["pressure_hpa"], color=METEO.wind, linewidth=1.6, label="V")
-    ax.plot(df["vertical_shear_ms_per_km"], df["pressure_hpa"], color="#D97706", linewidth=1.2, label="сдвиг")
-    ax.set_title("Ветер", fontsize=9, fontweight="bold")
+    ax.plot(df["wind_speed_ms"], df["pressure_hpa"], color=METEO.wind, linewidth=1.9, label="V")
+    ax.plot(df["vertical_shear_ms_per_km"], df["pressure_hpa"], color="#D97706", linewidth=1.45, label="сдвиг")
+    ax.axvspan(8, 40, color="#F59E0B", alpha=0.08, linewidth=0)
+    ax.axvspan(12, 40, color="#DC2626", alpha=0.07, linewidth=0)
+    ax.set_title("Ветер и сдвиг", fontsize=9.5, fontweight="bold")
     ax.set_xlabel("м/с; м/с/км")
-    ax.legend(loc="lower right", fontsize=7)
+    ax.legend(loc="lower right", fontsize=7.5)
     _pressure_axis(ax)
     ax.tick_params(labelleft=False)
 
@@ -303,16 +348,16 @@ def _hodograph(ax, df) -> None:
     p = df.sort_values("geopotential_height_m")
     p = p[p["geopotential_height_m"] <= 8000]
     if len(p) >= 2:
-        ax.plot(p["u_wind_ms"], p["v_wind_ms"], color=METEO.wind, linewidth=1.3)
-        ax.scatter(p["u_wind_ms"], p["v_wind_ms"], s=10, color=METEO.wind)
+        ax.plot(p["u_wind_ms"], p["v_wind_ms"], color=METEO.wind, linewidth=1.55)
+        ax.scatter(p["u_wind_ms"], p["v_wind_ms"], s=14, color=METEO.wind)
         for km in (0, 1, 3, 6):
             row = p.loc[(p["geopotential_height_km"] - km).abs().idxmin()]
-            ax.text(row["u_wind_ms"], row["v_wind_ms"], str(km), fontsize=7)
+            ax.text(row["u_wind_ms"], row["v_wind_ms"], str(km), fontsize=8, fontweight="bold")
     else:
         ax.text(0.5, 0.5, "Годограф\nн/д", ha="center", va="center", transform=ax.transAxes)
     ax.axhline(0, color=METEO.grid_minor, linewidth=0.6)
     ax.axvline(0, color=METEO.grid_minor, linewidth=0.6)
-    ax.set_title("Годограф 0–8 км", fontsize=9, fontweight="bold")
+    ax.set_title("Годограф 0–8 км", fontsize=9.5, fontweight="bold")
     ax.set_xlabel("u")
     ax.set_ylabel("v")
     style_axis(ax)
@@ -321,11 +366,19 @@ def _hodograph(ax, df) -> None:
 def _legend(ax) -> None:
     ax.axis("off")
     text = (
-        "ЛЕГЕНДА\nT — температура; Td — точка росы\nКривая частицы — подъём нижнего уровня\nCAPE — энергия неустойчивости\nCIN — подавление конвекции\n"
-        "LCL — уровень конденсации\nLFC — свободная конвекция\nEL — уровень равновесия\nОбл — RH≥85% или T−Td≤3 °C\nЛёд — влажно и 0…−20 °C\n"
-        "Турб — Ri<0.25 или сильный сдвиг\nКНС — dθe/dz<0; Ос — гидрометеоры\nВсе опасности — модельная диагностика."
+        "ЛЕГЕНДА\n"
+        "Кривая состояния — T среды\n"
+        "Td — точка росы\n"
+        "Кривая частицы — подъём нижнего уровня\n"
+        "CAPE/CIN — плавучесть/задержка\n"
+        "LCL/LFC/EL — осн. уровни конвекции\n"
+        "Обл — RH≥85% или T−Td≤3 °C\n"
+        "Лёд — влажно и 0…−20 °C\n"
+        "Турб — Ri<0.25 или shear≥8\n"
+        "КНС — dθe/dz≤−3 K/км\n"
+        "Цвет карточек: зелёный→красный риск."
     )
-    ax.text(0, 1, text, ha="left", va="top", fontsize=7.2, color=METEO.axis_text, bbox=annotation_box_kwargs())
+    ax.text(0, 1, text, ha="left", va="top", fontsize=8.0, color=METEO.axis_text, bbox=annotation_box_kwargs())
 
 
 def _plot_metpy_diagram(result: ProfileResult, diagram_type: str, out_path: Path) -> None:
@@ -346,23 +399,23 @@ def _plot_metpy_diagram(result: ProfileResult, diagram_type: str, out_path: Path
 
     fig = None
     try:
-        fig = plt.figure(figsize=(15.8, 11.4), facecolor=METEO.figure_bg)
+        fig = plt.figure(figsize=(15.8, 9.2), facecolor=METEO.figure_bg)
         diagram = _create_metpy_diagram(fig, diagram_type)
-        diagram.ax.set_position([0.055, 0.205, 0.545, 0.69])
+        diagram.ax.set_position([0.055, 0.105, 0.585, 0.79])
         diagram.ax.set_facecolor(METEO.axes_bg)
-        diagram.plot(p, t, linewidth=2.5, color=METEO.temperature, label="T — температура", zorder=6)
-        diagram.plot(p, td, linewidth=2.25, color=METEO.dewpoint, label="Td — точка росы", zorder=6)
+        diagram.plot(p, t, linewidth=2.75, color="#111827", label="кривая состояния", zorder=8)
+        diagram.plot(p, td, linewidth=2.25, color=METEO.dewpoint, label="Td — точка росы", zorder=7)
         if diag.get("parcel") is not None:
-            diagram.plot(p, diag["parcel"], linewidth=1.7, color="#111827", linestyle="--", label="кривая частицы", zorder=7)
+            diagram.plot(p, diag["parcel"], linewidth=1.85, color="#B45309", linestyle="--", label="кривая частицы", zorder=7)
             try:
-                diagram.shade_cape(p, t, diag["parcel"], alpha=0.20, color="#F97316")
-                diagram.shade_cin(p, t, diag["parcel"], alpha=0.16, color="#64748B")
+                diagram.shade_cape(p, t, diag["parcel"], alpha=0.22, color="#F97316")
+                diagram.shade_cin(p, t, diag["parcel"], alpha=0.18, color="#64748B")
             except Exception:
                 pass
         diagram.plot_barbs(p, u, v, xloc=1.045, color=METEO.wind, linewidth=0.72)
-        diagram.plot_dry_adiabats(linewidth=0.50, alpha=0.50, color="#C7A569")
-        diagram.plot_moist_adiabats(linewidth=0.55, alpha=0.50, color="#3BA99C")
-        diagram.plot_mixing_lines(linewidth=0.42, alpha=0.42, color="#74A57F")
+        diagram.plot_dry_adiabats(linewidth=0.50, alpha=0.42, color="#C7A569")
+        diagram.plot_moist_adiabats(linewidth=0.55, alpha=0.42, color="#3BA99C")
+        diagram.plot_mixing_lines(linewidth=0.42, alpha=0.35, color="#74A57F")
         tmin = min(-72.0, float(df[["temperature_c", "dewpoint_c"]].min().min()) - 8.0)
         tmax = max(36.0, float(df["temperature_c"].max()) + 8.0)
         diagram.ax.set_ylim(1050, 100)
@@ -372,24 +425,22 @@ def _plot_metpy_diagram(result: ProfileResult, diagram_type: str, out_path: Path
         _level(diagram.ax, diag.get("lfc"), "LFC", "#B45309")
         _level(diagram.ax, diag.get("el"), "EL", "#BE123C")
         style_axis(diagram.ax)
-        diagram.ax.set_title(_diagram_title(result, diagram_type), fontsize=10.5, fontweight="bold", color=METEO.axis_text, pad=14)
+        diagram.ax.set_title(_diagram_title(result, diagram_type), fontsize=10.8, fontweight="bold", color=METEO.axis_text, pad=14)
         diagram.ax.set_xlabel("Температура T, °C")
         diagram.ax.set_ylabel("Давление p, гПа")
-        diagram.ax.legend(loc="upper right", fontsize=7.4, framealpha=0.94)
-        diagram.ax.text(0.018, 0.022, _summary_text(df, diag, layers).replace("ИНДЕКСЫ И СЛОИ GFS\n", ""), transform=diagram.ax.transAxes, ha="left", va="bottom", fontsize=7.2, color=METEO.axis_text, bbox=annotation_box_kwargs(), zorder=10)
+        diagram.ax.legend(loc="upper right", fontsize=8.0, framealpha=0.95)
 
-        hz = fig.add_axes([0.625, 0.205, 0.115, 0.69], sharey=diagram.ax)
+        cards = fig.add_axes([0.665, 0.665, 0.315, 0.23])
+        _plot_index_cards(cards, df, diag, layers)
+        hz = fig.add_axes([0.665, 0.365, 0.15, 0.25], sharey=diagram.ax)
         _hazards(hz, layers)
-        wx = fig.add_axes([0.758, 0.205, 0.095, 0.69], sharey=diagram.ax)
+        wx = fig.add_axes([0.835, 0.365, 0.145, 0.25], sharey=diagram.ax)
         _wind_panel(wx, df)
-        hodo = fig.add_axes([0.875, 0.585, 0.11, 0.31])
+        hodo = fig.add_axes([0.665, 0.105, 0.15, 0.22])
         _hodograph(hodo, df)
-        leg = fig.add_axes([0.875, 0.205, 0.115, 0.335])
+        leg = fig.add_axes([0.835, 0.105, 0.145, 0.22])
         _legend(leg)
-        table = fig.add_axes([0.055, 0.055, 0.93, 0.115])
-        table.axis("off")
-        table.text(0, 0.98, _summary_text(df, diag, layers), ha="left", va="top", fontsize=8.2, family="DejaVu Sans Mono", color=METEO.axis_text, bbox={"facecolor": "#FFFFFF", "edgecolor": METEO.annotation_edge, "alpha": 0.96, "pad": 5.5, "linewidth": 0.75})
-        add_footer(fig, "NOMADS subset • GFS grid, не радиозонд. Облачность/обледенение/турбулентность/КНС — диагностические слои по модельному профилю.", y=0.015)
+        add_footer(fig, "NOMADS subset • GFS grid, не радиозонд. Подсветка индексов и слоёв — модельная диагностика, не факт наблюдения.", y=0.018)
         fig.savefig(out_path, dpi=180, bbox_inches="tight")
     finally:
         if fig is not None:
