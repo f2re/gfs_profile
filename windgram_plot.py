@@ -18,6 +18,7 @@ from plot_style import (
     value_text_color,
     wind_speed_cmap_and_norm,
 )
+from time_guides_plot import draw_utc_day_guides
 from windgram_product import WindgramData, normalize_windgram_param, windgram_matrices
 
 PARAM_TITLES = {
@@ -184,6 +185,7 @@ def write_windgram_png(data: WindgramData, param: str | None = None) -> Path:
         )
 
         style_axis(ax, grid=False)
+        draw_utc_day_guides(ax, data.cells, -0.86, fontsize=7.4 if n_leads > 25 else 8.0)
         ax.set_xticks([x - 0.5 for x in range(1, n_leads)], minor=True)
         ax.set_yticks([y - 0.5 for y in range(1, n_levels)], minor=True)
         ax.grid(which="minor", linewidth=0.65, color="#FFFFFF", alpha=0.92)
