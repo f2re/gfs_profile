@@ -8,11 +8,13 @@ from typing import NamedTuple
 
 from telegram import InputFile, InputMediaPhoto
 from telegram.constants import ParseMode
+from telegram.error import BadRequest
 
 from composite_map import MAP_BASEMAP_DEFAULT, MAP_BASEMAPS, MAP_MAX_ANIMATION_FRAMES, MAP_MAX_PNG_SERIES_FRAMES, MAP_RADIUS_KM, build_composite_map, build_composite_map_frames, write_composite_map_gif, write_composite_map_png
 from geocode import GeoPoint, GeocodeError
 from geocode_choices import search_location_candidates
 from gfs_core import GfsProfileError, GfsRun, latest_available_run_for_lead, validate_lead
+from map_animation import write_composite_map_mp4
 from product_progress import run_product_with_progress
 from user_location_session import remember_location
 
@@ -86,7 +88,7 @@ def _lead_list(parsed: ParsedMapRequest) -> list[int]:
     for lead in leads:
         validate_lead(lead)
     if parsed.mode == "gif" and len(leads) > MAP_MAX_ANIMATION_FRAMES:
-        raise ValueError(f"Слишком много кадров для Telegram GIF: {len(leads)}. Увеличьте step или уменьшите to. Максимум {MAP_MAX_ANIMATION_FRAMES}.")
+        raise ValueError(f"Слишком много кадров для Telegram-анимации: {len(leads)}. Увеличьте step или уменьшите to. Максимум {MAP_MAX_ANIMATION_FRAMES}.")
     if parsed.mode == "series" and len(leads) > MAP_MAX_PNG_SERIES_FRAMES:
         raise ValueError(f"Слишком много PNG-карт для серии: {len(leads)}. Увеличьте step или уменьшите to. Максимум {MAP_MAX_PNG_SERIES_FRAMES}.")
     return leads
@@ -183,17 +185,17 @@ def parse_map_request(raw_text: str, default_lead: int = 24) -> ParsedMapRequest
 def _mode_title(parsed_or_mode) -> str:
     mode = parsed_or_mode.mode if hasattr(parsed_or_mode, "mode") else str(parsed_or_mode)
     if mode == "gif":
-        return "GIF-анимация"
+        return "MP4-анимация"
     if mode == "series":
         return "Серия PNG"
     return "Одна карта"
 
 
-def format_map_file_caption(data: dict, *, animated: bool = False, series: bool = False) -> str:
+def format_map_file_caption(data: dict, *, animated: bool = False, series: bool = False, animation_format: str = "MP4-анимация") -> str:
     run = data["run"]
     point = data["point"]
     missing = data.get("missing") or set()
-    kind = "GIF" if animated else "PNG-серия" if series else "PNG"
+    kind = animation_format if animated else "PNG-серия" if series else "PNG"
     lines = [
         f"{kind} · MAP · GFS {run.date} {run.cycle}Z · UTC",
         f"{point.label} · {point.lat:.4f}, {point.lon:.4f}",
@@ -219,7 +221,7 @@ def format_map_status(data: dict, *, animated: bool = False, series: bool = Fals
         "GFS 0.25: это модельная карта, не радар и не наблюдения.",
     ]
     if animated:
-        lines[0] = "🗺️ Композитная анимация GFS"
+        lines[0] = f"🗺️ Композитная MP4-анимация GFS ({lead_count} кадров)"
     elif series:
         lines[0] = f"🗺️ Серия PNG-карт GFS ({lead_count} кадров)"
     return "\n".join(lines)
@@ -277,6 +279,27 @@ async def send_png_series(message, paths: list[Path], caption: str) -> None:
                 file_obj.close()
 
 
+async def send_map_animation(message, path: Path, caption: str) -> None:
+    try:
+        with path.open("rb") as file_obj:
+            await message.reply_animation(animation=InputFile(file_obj, filename=path.name), caption=caption)
+        return
+    except BadRequest:
+        if path.suffix.lower() == ".mp4":
+            try:
+                with path.open("rb") as file_obj:
+                    await message.reply_video(video=InputFile(file_obj, filename=path.name), caption=caption, supports_streaming=True)
+                return
+            except BadRequest:
+                pass
+    with path.open("rb") as file_obj:
+        await message.reply_document(document=InputFile(file_obj, filename=path.name), caption=caption)
+
+
+def _animation_format(path: Path) -> str:
+    return "MP4-анимация" if path.suffix.lower() == ".mp4" else "GIF"
+
+
 async def run_map_product(message, point: GeoPoint, parsed: ParsedMapRequest, gfs_semaphore) -> None:
     leads = _lead_list(parsed)
     selected_run = parsed.run or await asyncio.to_thread(latest_available_run_for_lead, max(leads))
@@ -301,8 +324,14 @@ async def run_map_product(message, point: GeoPoint, parsed: ParsedMapRequest, gf
             def worker(progress_callback):
                 if parsed.mode == "gif":
                     frames = build_composite_map_frames(selected_run, leads, point, radius_km=parsed.radius_km, basemap=parsed.basemap, progress_callback=progress_callback)
-                    progress_callback({"stage": "map_animation_start", "message": "Собираю GIF для Telegram"})
-                    path = write_composite_map_gif(frames, progress_callback=progress_callback)
+                    progress_callback({"stage": "map_animation_start", "message": "Собираю MP4-анимацию для Telegram"})
+                    try:
+                        path = write_composite_map_mp4(frames, progress_callback=progress_callback)
+                    except GfsProfileError as exc:
+                        if "ffmpeg" not in str(exc).lower():
+                            raise
+                        progress_callback({"stage": "map_animation_fallback", "message": "ffmpeg не найден, собираю GIF"})
+                        path = write_composite_map_gif(frames, progress_callback=progress_callback)
                     return frames[0], [path], True, False
                 if parsed.mode == "series":
                     frames = build_composite_map_frames(selected_run, leads, point, radius_km=parsed.radius_km, basemap=parsed.basemap, progress_callback=progress_callback)
@@ -318,20 +347,18 @@ async def run_map_product(message, point: GeoPoint, parsed: ParsedMapRequest, gf
             first_data, out_paths, animated, series = await run_product_with_progress(status, header, worker)
         await status.edit_text(format_map_status(first_data, animated=animated, series=series, lead_count=len(leads)))
         if out_paths:
-            caption = format_map_file_caption(first_data, animated=animated, series=series)
             if animated:
                 out_path = out_paths[0]
-                with out_path.open("rb") as file_obj:
-                    await message.reply_animation(animation=InputFile(file_obj, filename=out_path.name), caption=caption)
+                caption = format_map_file_caption(first_data, animated=True, animation_format=_animation_format(out_path))
+                await send_map_animation(message, out_path, caption)
             elif series:
+                caption = format_map_file_caption(first_data, series=True)
                 await send_png_series(message, out_paths, caption)
             else:
                 out_path = out_paths[0]
+                caption = format_map_file_caption(first_data)
                 with out_path.open("rb") as file_obj:
-                    if animated:
-                        await message.reply_animation(animation=InputFile(file_obj, filename=out_path.name), caption=caption)
-                    else:
-                        await message.reply_photo(photo=InputFile(file_obj, filename=out_path.name), caption=caption)
+                    await message.reply_photo(photo=InputFile(file_obj, filename=out_path.name), caption=caption)
         await message.reply_text(format_repeat_map_message(point, parsed, selected_run), parse_mode=ParseMode.HTML)
     except (GfsProfileError, GeocodeError, ValueError) as exc:
         await status.edit_text(f"Ошибка: {exc}")
