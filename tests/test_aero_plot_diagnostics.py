@@ -5,7 +5,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from aero_plot import _augment_profile, _diagnose_layers, _interpolate_isotherm_height
+from aero_plot import _augment_profile, _diagnose_layers, _interpolate_isotherm_height, _risk_level
 
 
 def sample_profile() -> pd.DataFrame:
@@ -58,6 +58,15 @@ class AeroPlotDiagnosticsTest(unittest.TestCase):
         self.assertIn("icing", kinds)
         self.assertIn("turb", kinds)
         self.assertIn("conv", kinds)
+
+    def test_index_risk_levels_highlight_critical_values(self) -> None:
+        self.assertEqual(_risk_level("cape", 0), 0)
+        self.assertGreaterEqual(_risk_level("cape", 1600), 4)
+        self.assertGreaterEqual(_risk_level("cin", -120), 3)
+        self.assertGreaterEqual(_risk_level("tt", 52), 3)
+        self.assertGreaterEqual(_risk_level("k", 32), 3)
+        self.assertGreaterEqual(_risk_level("shear", 12), 4)
+        self.assertGreaterEqual(_risk_level("ri", 0.2), 4)
 
 
 if __name__ == "__main__":
