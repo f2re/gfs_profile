@@ -4,6 +4,8 @@ import asyncio
 import html
 import os
 import re
+import time
+from io import BytesIO
 from pathlib import Path
 from typing import NamedTuple
 
@@ -11,6 +13,19 @@ from telegram import InputFile, Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
+from admin_stats import (
+    add_admin_by_query,
+    export_requests_csv,
+    export_users_csv,
+    find_users,
+    format_admin_summary,
+    format_recent_requests,
+    format_users,
+    is_admin,
+    record_request_finish,
+    record_request_start,
+    record_telegram_user,
+)
 from formatters import format_profile_summary, write_profile_csv
 from geocode import GeoPoint, GeocodeError
 from geocode_choices import search_location_candidates
@@ -106,6 +121,10 @@ def _user_id_from_update(update: Update) -> int:
     return int(getattr(user, "id", 0) or 0)
 
 
+def _record_update_user(update: Update) -> None:
+    record_telegram_user(update.effective_user)
+
+
 def _location_keyboard_for_user(user_id: int):
     return location_keyboard(get_recent_locations(user_id))
 
@@ -127,9 +146,171 @@ def _profile_command(point: GeoPoint, lead_hour: int, run: GfsRun) -> str:
     return f"/profile {point.lat:.4f} {point.lon:.4f} run={run.date}/{run.cycle} +{lead_hour}"
 
 
+def _profile_request_text(point: GeoPoint, lead_hour: int, run: GfsRun | None) -> str:
+    if run:
+        return _profile_command(point, lead_hour, run)
+    return f"/profile {point.lat:.4f} {point.lon:.4f} +{lead_hour}"
+
+
 def _profile_repeat_message(point: GeoPoint, lead_hour: int, run: GfsRun) -> str:
     command = html.escape(_profile_command(point, lead_hour, run))
     return "📋 Повторить профиль:\n" f"<code>{command}</code>\n\n" "Нажмите на строку команды и скопируйте её целиком."
+
+
+async def _track_update(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _record_update_user(update)
+
+
+async def _tracked_product(
+    message,
+    product: str,
+    city: str | None,
+    request_text: str | None,
+    runner,
+    *,
+    lead_from: int | None = None,
+    lead_to: int | None = None,
+    run: GfsRun | None = None,
+    user=None,
+):
+    user = user or getattr(message, "from_user", None)
+    user_id = int(getattr(user, "id", 0) or 0) or None
+    username = getattr(user, "username", None)
+    started = time.perf_counter()
+    request_id = record_request_start(
+        product=product,
+        user_id=user_id,
+        username=username,
+        city=city,
+        request_text=request_text,
+        lead_from=lead_from,
+        lead_to=lead_to,
+        run_date=run.date if run else None,
+        run_cycle=run.cycle if run else None,
+    )
+    try:
+        result = await runner()
+        status = "ok" if result is not False else "failed"
+        record_request_finish(request_id, status=status, duration_ms=int((time.perf_counter() - started) * 1000))
+        return result
+    except Exception as exc:
+        record_request_finish(request_id, status="error", duration_ms=int((time.perf_counter() - started) * 1000), error=str(exc)[:500])
+        raise
+
+
+async def _tracked_run_profile(message, point: GeoPoint, lead_hour: int, run: GfsRun | None = None, request_text: str | None = None, user=None) -> bool:
+    return bool(
+        await _tracked_product(
+            message,
+            "profile",
+            point.label,
+            request_text or _profile_request_text(point, lead_hour, run),
+            lambda: run_profile(message, point, lead_hour, run),
+            lead_from=lead_hour,
+            lead_to=lead_hour,
+            run=run,
+            user=user,
+        )
+    )
+
+
+async def _send_admin_csv(message, filename: str, content: str, caption: str) -> None:
+    payload = BytesIO(content.encode("utf-8-sig"))
+    await message.reply_document(document=InputFile(payload, filename=filename), caption=caption)
+
+
+def _safe_int_arg(args: list[str], index: int, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(args[index])
+    except (IndexError, ValueError):
+        return default
+    return max(minimum, min(value, maximum))
+
+
+async def admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    _record_update_user(update)
+    message = update.effective_message
+    if not message:
+        return
+    user_id = _user_id_from_update(update)
+    if not is_admin(user_id):
+        await message.reply_text(
+            "Доступ закрыт. Укажите TELEGRAM_ADMIN_IDS в .env или попросите действующего администратора добавить ваш id через /admin add."
+        )
+        return
+
+    args = list(context.args or [])
+    if not args:
+        await message.reply_text(format_admin_summary(7), parse_mode=ParseMode.HTML)
+        return
+
+    action = args[0].lower()
+    if action in {"help", "?", "помощь"}:
+        await message.reply_text(
+            "<pre>ADMIN\n"
+            "/admin — сводка за 7 дней\n"
+            "/admin stats [days] — сводка\n"
+            "/admin recent [n] — последние запросы\n"
+            "/admin users [query] — пользователи\n"
+            "/admin find &lt;id|@user|name&gt; — поиск по известным пользователям\n"
+            "/admin add &lt;id|@user&gt; — добавить администратора\n"
+            "/admin report requests [days] — CSV запросов\n"
+            "/admin report users — CSV пользователей\n\n"
+            "Важно: Telegram Bot API не ищет пользователей глобально. Поиск работает по тем, кто уже писал боту.</pre>",
+            parse_mode=ParseMode.HTML,
+        )
+        return
+
+    if action in {"stats", "stat", "стат"}:
+        days = _safe_int_arg(args, 1, 7, 1, 3650)
+        await message.reply_text(format_admin_summary(days), parse_mode=ParseMode.HTML)
+        return
+
+    if action in {"recent", "requests", "req", "запросы"}:
+        limit = _safe_int_arg(args, 1, 10, 1, 50)
+        await message.reply_text(format_recent_requests(limit), parse_mode=ParseMode.HTML)
+        return
+
+    if action in {"users", "user", "пользователи"}:
+        if len(args) > 1 and args[1].lower() in {"csv", "report", "отчет", "отчёт"}:
+            await _send_admin_csv(message, "gfs_bot_users.csv", export_users_csv(), "CSV · пользователи GFS bot")
+            return
+        query = " ".join(args[1:])
+        await message.reply_text(format_users(find_users(query, limit=30)), parse_mode=ParseMode.HTML)
+        return
+
+    if action in {"find", "search", "найти"}:
+        query = " ".join(args[1:]).strip()
+        if not query:
+            await message.reply_text("Формат: /admin find <id|@username|имя>")
+            return
+        await message.reply_text(format_users(find_users(query, limit=20)), parse_mode=ParseMode.HTML)
+        return
+
+    if action in {"add", "admin", "админ"}:
+        query = " ".join(args[1:]).strip()
+        if not query:
+            await message.reply_text("Формат: /admin add <id|@username>. Пользователь должен хотя бы раз написать боту.")
+            return
+        try:
+            user = add_admin_by_query(query, added_by=user_id)
+        except ValueError as exc:
+            await message.reply_text(str(exc))
+            return
+        username = f"@{user.username}" if user.username else "без username"
+        await message.reply_text(f"Администратор добавлен: {user.user_id} · {username}")
+        return
+
+    if action in {"report", "reports", "csv", "download", "отчет", "отчёт"}:
+        kind = args[1].lower() if len(args) > 1 else "requests"
+        if kind in {"users", "user", "пользователи"}:
+            await _send_admin_csv(message, "gfs_bot_users.csv", export_users_csv(), "CSV · пользователи GFS bot")
+            return
+        days = _safe_int_arg(args, 2, 30, 1, 3650)
+        await _send_admin_csv(message, f"gfs_bot_requests_{days}d.csv", export_requests_csv(days), f"CSV · запросы GFS bot · {days} дней")
+        return
+
+    await message.reply_text("Неизвестная admin-команда. Справка: /admin help")
 
 
 async def _start_product_wizard(message, context: ContextTypes.DEFAULT_TYPE, state: dict[str, object]) -> None:
@@ -181,7 +362,7 @@ async def _resolve_wizard_point(message, context: ContextTypes.DEFAULT_TYPE, raw
     return True
 
 
-async def _run_wizard_product(message, context: ContextTypes.DEFAULT_TYPE, state: dict[str, object]) -> None:
+async def _run_wizard_product(message, context: ContextTypes.DEFAULT_TYPE, state: dict[str, object], user=None) -> None:
     point_payload = state.get("point")
     if not isinstance(point_payload, dict):
         await message.reply_text("Сначала выберите точку.")
@@ -197,7 +378,17 @@ async def _run_wizard_product(message, context: ContextTypes.DEFAULT_TYPE, state
             run=None,
             diagram_type=str(state.get("diagram_type", "stuve")),
         )
-        await run_aero_product(message, point, parsed, GFS_SEMAPHORE)
+        await _tracked_product(
+            message,
+            "aero",
+            point.label,
+            f"/aero {parsed.location_query} +{parsed.lead_hour} type={parsed.diagram_type}",
+            lambda: run_aero_product(message, point, parsed, GFS_SEMAPHORE),
+            lead_from=parsed.lead_hour,
+            lead_to=parsed.lead_hour,
+            run=parsed.run,
+            user=user,
+        )
         return
 
     if product == "windgram":
@@ -210,7 +401,17 @@ async def _run_wizard_product(message, context: ContextTypes.DEFAULT_TYPE, state
             top_hpa=int(state.get("top", 500)),
             param=str(state.get("param", "wind")),
         )
-        await run_windgram_product(message, point, parsed, GFS_SEMAPHORE)
+        await _tracked_product(
+            message,
+            "windgram",
+            point.label,
+            f"/windgram {parsed.location_query} from={parsed.lead_from} to={parsed.lead_to} step={parsed.step} top={parsed.top_hpa} param={parsed.param}",
+            lambda: run_windgram_product(message, point, parsed, GFS_SEMAPHORE),
+            lead_from=parsed.lead_from,
+            lead_to=parsed.lead_to,
+            run=parsed.run,
+            user=user,
+        )
         return
 
     if product == "cloudgram":
@@ -222,7 +423,17 @@ async def _run_wizard_product(message, context: ContextTypes.DEFAULT_TYPE, state
             step=int(state.get("time_step", 3)),
             mode=str(state.get("mode", "pro")),
         )
-        await run_cloudgram_product(message, point, parsed, GFS_SEMAPHORE)
+        await _tracked_product(
+            message,
+            "cloudgram",
+            point.label,
+            f"/cloudgram {parsed.location_query} from={parsed.lead_from} to={parsed.lead_to} step={parsed.step} mode={parsed.mode}",
+            lambda: run_cloudgram_product(message, point, parsed, GFS_SEMAPHORE),
+            lead_from=parsed.lead_from,
+            lead_to=parsed.lead_to,
+            run=parsed.run,
+            user=user,
+        )
         return
 
     if product == "map":
@@ -238,7 +449,17 @@ async def _run_wizard_product(message, context: ContextTypes.DEFAULT_TYPE, state
             mode=map_mode,
             basemap=str(state.get("basemap", "places")),
         )
-        await run_map_product(message, point, parsed, GFS_SEMAPHORE)
+        await _tracked_product(
+            message,
+            "map",
+            point.label,
+            f"/map {parsed.location_query} from={parsed.lead_from} to={parsed.lead_to} step={parsed.step} mode={parsed.mode} basemap={parsed.basemap}",
+            lambda: run_map_product(message, point, parsed, GFS_SEMAPHORE),
+            lead_from=parsed.lead_from,
+            lead_to=parsed.lead_to,
+            run=parsed.run,
+            user=user,
+        )
         return
 
     await message.reply_text("Неизвестный продукт. Начните заново: /aero, /skewt, /windgram, /cloudgram или /map.")
@@ -318,7 +539,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await message.reply_text("\n".join(lines))
 
 
-async def run_profile(message, point: GeoPoint, lead_hour: int, run: GfsRun | None = None) -> None:
+async def run_profile(message, point: GeoPoint, lead_hour: int, run: GfsRun | None = None) -> bool:
     status = await message.reply_text(
         "⏳ Профиль GFS\n"
         f"📍 {point.label}\n"
@@ -328,6 +549,7 @@ async def run_profile(message, point: GeoPoint, lead_hour: int, run: GfsRun | No
     csv_path: Path | None = None
     png_path: Path | None = None
     selected_run: GfsRun | None = None
+    success = False
     try:
         async with GFS_SEMAPHORE:
             selected_run = run or await asyncio.to_thread(latest_available_run_for_lead, lead_hour)
@@ -345,6 +567,7 @@ async def run_profile(message, point: GeoPoint, lead_hour: int, run: GfsRun | No
                 await message.reply_document(document=InputFile(file_obj, filename=csv_path.name), caption=f"CSV · PROFILE · GFS {selected_run.date} {selected_run.cycle}Z · +{lead_hour} ч")
         if selected_run:
             await message.reply_text(_profile_repeat_message(point, lead_hour, selected_run), parse_mode=ParseMode.HTML)
+        success = True
     except (GfsProfileError, GeocodeError, ValueError) as exc:
         await status.edit_text(f"Ошибка: {exc}")
     except Exception as exc:
@@ -354,6 +577,7 @@ async def run_profile(message, point: GeoPoint, lead_hour: int, run: GfsRun | No
             png_path.unlink(missing_ok=True)
         if csv_path:
             csv_path.unlink(missing_ok=True)
+    return success
 
 
 async def resolve_profile_request(message, context: ContextTypes.DEFAULT_TYPE, raw: str) -> None:
@@ -368,7 +592,6 @@ async def resolve_profile_request(message, context: ContextTypes.DEFAULT_TYPE, r
     if not candidates:
         await message.reply_text("Точка не найдена. Пришлите координаты, город или геолокацию Telegram.")
         return
-
     if len(candidates) > 1:
         context.user_data["pending_candidates"] = {
             "candidates": [_pack_point(point) for point in candidates[:3]],
@@ -378,13 +601,11 @@ async def resolve_profile_request(message, context: ContextTypes.DEFAULT_TYPE, r
         }
         await message.reply_text("Найдено несколько точек. Выберите нужную:", reply_markup=place_keyboard([point.label for point in candidates]))
         return
-
     point = candidates[0]
     remember_location(_user_id_from_message(message), point)
     if parsed.lead_from_user:
-        await run_profile(message, point, parsed.lead_hour, parsed.run)
+        await _tracked_run_profile(message, point, parsed.lead_hour, parsed.run, request_text=f"/profile {raw}")
         return
-
     _set_pending_point(context, point, parsed.run)
     await message.reply_text(f"📍 Точка выбрана:\n{_point_brief(point)}\n\nВыберите срок прогноза:\n{lead_page_text(0)}", reply_markup=lead_keyboard(0))
 
@@ -414,7 +635,13 @@ async def aero_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not raw:
         await _start_product_wizard(message, context, start_aero_wizard_state(DEFAULT_LEAD, "stuve"))
         return
-    await resolve_aero_request(message, raw, DEFAULT_LEAD, GFS_SEMAPHORE, GEOCODE_SEMAPHORE, default_diagram_type="stuve", user_id=_user_id_from_update(update))
+    await _tracked_product(
+        message,
+        "aero",
+        raw,
+        f"/aero {raw}",
+        lambda: resolve_aero_request(message, raw, DEFAULT_LEAD, GFS_SEMAPHORE, GEOCODE_SEMAPHORE, default_diagram_type="stuve", user_id=_user_id_from_update(update)),
+    )
 
 
 async def skewt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -425,7 +652,13 @@ async def skewt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not raw:
         await _start_product_wizard(message, context, start_aero_wizard_state(DEFAULT_LEAD, "skewt"))
         return
-    await resolve_aero_request(message, raw, DEFAULT_LEAD, GFS_SEMAPHORE, GEOCODE_SEMAPHORE, default_diagram_type="skewt", user_id=_user_id_from_update(update))
+    await _tracked_product(
+        message,
+        "skewt",
+        raw,
+        f"/skewt {raw}",
+        lambda: resolve_aero_request(message, raw, DEFAULT_LEAD, GFS_SEMAPHORE, GEOCODE_SEMAPHORE, default_diagram_type="skewt", user_id=_user_id_from_update(update)),
+    )
 
 
 async def windgram_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -436,7 +669,13 @@ async def windgram_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not raw:
         await _start_product_wizard(message, context, start_windgram_wizard_state())
         return
-    await resolve_windgram_request(message, raw, GFS_SEMAPHORE, GEOCODE_SEMAPHORE, user_id=_user_id_from_update(update))
+    await _tracked_product(
+        message,
+        "windgram",
+        raw,
+        f"/windgram {raw}",
+        lambda: resolve_windgram_request(message, raw, GFS_SEMAPHORE, GEOCODE_SEMAPHORE, user_id=_user_id_from_update(update)),
+    )
 
 
 async def cloudgram_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -447,7 +686,13 @@ async def cloudgram_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     if not raw:
         await _start_product_wizard(message, context, start_cloudgram_wizard_state())
         return
-    await resolve_cloudgram_request(message, raw, GFS_SEMAPHORE, GEOCODE_SEMAPHORE, user_id=_user_id_from_update(update))
+    await _tracked_product(
+        message,
+        "cloudgram",
+        raw,
+        f"/cloudgram {raw}",
+        lambda: resolve_cloudgram_request(message, raw, GFS_SEMAPHORE, GEOCODE_SEMAPHORE, user_id=_user_id_from_update(update)),
+    )
 
 
 async def map_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -458,7 +703,13 @@ async def map_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if not raw:
         await _start_product_wizard(message, context, start_map_wizard_state(DEFAULT_LEAD))
         return
-    await resolve_map_request(message, raw, GFS_SEMAPHORE, GEOCODE_SEMAPHORE, DEFAULT_LEAD, user_id=_user_id_from_update(update))
+    await _tracked_product(
+        message,
+        "map",
+        raw,
+        f"/map {raw}",
+        lambda: resolve_map_request(message, raw, GFS_SEMAPHORE, GEOCODE_SEMAPHORE, DEFAULT_LEAD, user_id=_user_id_from_update(update)),
+    )
 
 
 async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -581,7 +832,7 @@ async def product_wizard_callback(update: Update, context: ContextTypes.DEFAULT_
     elif data == "wiz:run":
         if query.message:
             await query.edit_message_text("Параметры выбраны. Запускаю расчёт…")
-            await _run_wizard_product(query.message, context, state)
+            await _run_wizard_product(query.message, context, state, user=update.effective_user)
         return
     else:
         return
@@ -608,7 +859,7 @@ async def lead_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     _clear_pending(context)
     if query.message:
         await query.edit_message_text(f"Срок +{lead_hour} ч выбран. Строю профиль…")
-        await run_profile(query.message, point, lead_hour, run)
+        await _tracked_run_profile(query.message, point, lead_hour, run, user=update.effective_user)
 
 
 async def lead_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -662,7 +913,7 @@ async def place_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
     if lead_from_user:
         await query.edit_message_text(f"Выбрано:\n{_point_brief(point)}\nСтрою профиль +{lead_hour} ч…")
-        await run_profile(query.message, point, lead_hour, run)
+        await _tracked_run_profile(query.message, point, lead_hour, run, user=update.effective_user)
         return
     _set_pending_point(context, point, run)
     await query.edit_message_text(f"📍 Выбрано:\n{_point_brief(point)}\n\nВыберите срок прогноза:\n{lead_page_text(0)}", reply_markup=lead_keyboard(0))
@@ -673,11 +924,14 @@ def build_application() -> Application:
     if not token:
         raise RuntimeError("Нужно задать TELEGRAM_BOT_TOKEN или BOT_TOKEN")
     application = Application.builder().token(token).build()
+    application.add_handler(MessageHandler(filters.ALL, _track_update), group=-1)
+    application.add_handler(CallbackQueryHandler(_track_update), group=-1)
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("cancel", cancel_command))
     application.add_handler(CommandHandler("cycle", cycle_command))
     application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("admin", admin_command))
     application.add_handler(CommandHandler("profile", profile_command))
     application.add_handler(CommandHandler("aero", aero_command))
     application.add_handler(CommandHandler("skewt", skewt_command))
