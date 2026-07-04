@@ -14,8 +14,8 @@ CLOUDGRAM_STEPS = (3, 6)
 CLOUDGRAM_MODES = (("pro", "Профи"), ("simple", "Упрощённо"))
 MAP_LEADS = (24, 48, 72, 96)
 MAP_FROM_HOURS = (0, 6, 12, 24)
-MAP_TO_HOURS = (24, 48, 72)
-MAP_STEPS = (3, 6)
+MAP_TO_HOURS = (24, 48, 72, 96)
+MAP_STEPS = (6,)
 MAP_MODES = (("single", "Одна карта"), ("series", "Серия PNG"), ("gif", "GIF"))
 MAP_BASEMAPS = (("places", "Полная"), ("basic", "Базовая"))
 
@@ -33,7 +33,7 @@ def start_cloudgram_wizard_state() -> dict[str, object]:
 
 
 def start_map_wizard_state(default_lead: int = 24) -> dict[str, object]:
-    return {"product": "map", "step": "await_point", "mode": "single", "lead": int(default_lead), "from": 0, "to": 24, "time_step": 3, "basemap": "places", "radius": 100}
+    return {"product": "map", "step": "await_point", "mode": "single", "lead": int(default_lead), "from": 0, "to": 24, "time_step": 6, "basemap": "places", "radius": 100}
 
 
 def product_title(product: str) -> str:
@@ -135,13 +135,13 @@ def copy_command(state: dict[str, object]) -> str | None:
             return (
                 f"/map {lat:.4f} {lon:.4f} "
                 f"from={int(state.get('from', 0))} to={int(state.get('to', 24))} "
-                f"step={int(state.get('time_step', 3))} mode=gif{radius_part}{basemap_part}"
+                f"step={int(state.get('time_step', 6))} mode=gif{radius_part}{basemap_part}"
             )
         if mode == "series":
             return (
                 f"/map {lat:.4f} {lon:.4f} "
                 f"from={int(state.get('from', 0))} to={int(state.get('to', 24))} "
-                f"step={int(state.get('time_step', 3))} mode=series{radius_part}{basemap_part}"
+                f"step={int(state.get('time_step', 6))} mode=series{radius_part}{basemap_part}"
             )
         return f"/map {lat:.4f} {lon:.4f} +{int(state.get('lead', 24))}{radius_part}{basemap_part}"
     return None
@@ -196,9 +196,9 @@ def params_text(state: dict[str, object]) -> str:
         if mode == "single":
             time_line = f"Одна карта: срок +{int(state.get('lead', 24))} ч"
         elif mode == "gif":
-            time_line = f"GIF-анимация: от +{int(state.get('from', 0))} до +{int(state.get('to', 24))} ч, шаг {int(state.get('time_step', 3))} ч"
+            time_line = f"GIF-анимация: от +{int(state.get('from', 0))} до +{int(state.get('to', 24))} ч, шаг {int(state.get('time_step', 6))} ч"
         else:
-            time_line = f"Серия PNG: от +{int(state.get('from', 0))} до +{int(state.get('to', 24))} ч, шаг {int(state.get('time_step', 3))} ч"
+            time_line = f"Серия PNG: от +{int(state.get('from', 0))} до +{int(state.get('to', 24))} ч, шаг {int(state.get('time_step', 6))} ч"
         basemap_label = _map_basemap_label(str(state.get("basemap", "places")))
         return (
             f"{product_title(product)}\n"
@@ -248,7 +248,7 @@ def params_keyboard(state: dict[str, object]) -> InlineKeyboardMarkup:
             rows.append([InlineKeyboardButton(("✓ " if current_from == value else "") + f"от +{value}", callback_data=f"wiz:map:from:{value}") for value in MAP_FROM_HOURS])
             current_to = int(state.get("to", 24))
             rows.append([InlineKeyboardButton(("✓ " if current_to == value else "") + f"до +{value}", callback_data=f"wiz:map:to:{value}") for value in MAP_TO_HOURS])
-            current_step = int(state.get("time_step", 3))
+            current_step = int(state.get("time_step", 6))
             rows.append([InlineKeyboardButton(("✓ " if current_step == value else "") + f"шаг {value}ч", callback_data=f"wiz:map:step:{value}") for value in MAP_STEPS])
         current_basemap = str(state.get("basemap", "places"))
         rows.append([InlineKeyboardButton(("✓ " if current_basemap == key else "") + label, callback_data=f"wiz:map:basemap:{key}") for key, label in MAP_BASEMAPS])

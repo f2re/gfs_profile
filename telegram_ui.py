@@ -85,8 +85,7 @@ def place_keyboard(labels: list[str]) -> InlineKeyboardMarkup:
 
 def location_keyboard(recent_locations: list[GeoPoint] | None = None) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = [[KeyboardButton("📍 Отправить геолокацию", request_location=True)]]
-    recent_points = (recent_locations or [])[:4]
-    recent_buttons = [KeyboardButton(recent_location_button_label(point, max_chars=30, index=index)) for index, point in enumerate(recent_points, start=1)]
+    recent_buttons = [KeyboardButton(recent_location_button_label(point)) for point in (recent_locations or [])[:4]]
     if len(recent_buttons) == 1:
         rows.append([recent_buttons[0]])
     else:

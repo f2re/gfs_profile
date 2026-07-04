@@ -8,7 +8,8 @@ from geocode import GeoPoint
 
 RECENT_LOCATION_LIMIT = 4
 RECENT_LOCATION_PREFIX = "🕘 "
-RECENT_LOCATION_INDEX_RE = re.compile(rf"^{re.escape(RECENT_LOCATION_PREFIX)}(?P<index>[1-9])\.\s")
+RECENT_LOCATION_BUTTON_CHARS = 30
+LEGACY_RECENT_LOCATION_INDEX_RE = re.compile(rf"^{re.escape(RECENT_LOCATION_PREFIX)}[1-9]\.\s*(?P<label>.+)$")
 RECENT_LOCATIONS: dict[int, list["RecentLocation"]] = {}
 
 
@@ -61,27 +62,33 @@ def clear_recent_locations(user_id: int) -> None:
     RECENT_LOCATIONS.pop(user_id, None)
 
 
-def recent_location_button_label(point: GeoPoint, max_chars: int = 28, index: int | None = None) -> str:
+def recent_location_button_label(point: GeoPoint, max_chars: int = RECENT_LOCATION_BUTTON_CHARS, index: int | None = None) -> str:
+    del index
     label = _clean_label(point.label, point.lat, point.lon)
     if label.lower() in {"точка", "геолокация telegram", "telegram location"}:
         label = f"{point.lat:.4f}, {point.lon:.4f}"
-    if index is not None:
-        prefix = f"{RECENT_LOCATION_PREFIX}{int(index)}. "
-        return prefix + _truncate_label(label, max_chars)
     return RECENT_LOCATION_PREFIX + _truncate_label(label, max_chars)
+
+
+def _candidate_button_texts(value: str) -> list[str]:
+    values = [value]
+    legacy_match = LEGACY_RECENT_LOCATION_INDEX_RE.match(value)
+    if legacy_match:
+        values.append(RECENT_LOCATION_PREFIX + legacy_match.group("label"))
+    return values
 
 
 def match_recent_location_button(user_id: int, text: str) -> GeoPoint | None:
     value = str(text or "").strip()
     if not value.startswith(RECENT_LOCATION_PREFIX):
         return None
-    recent = get_recent_locations(user_id)
-    index_match = RECENT_LOCATION_INDEX_RE.match(value)
-    if index_match:
-        index = int(index_match.group("index")) - 1
-        if 0 <= index < len(recent):
-            return recent[index]
-    for index, point in enumerate(recent, start=1):
-        if recent_location_button_label(point) == value or recent_location_button_label(point, index=index) == value:
+    candidates = _candidate_button_texts(value)
+    for point in get_recent_locations(user_id):
+        labels = {
+            recent_location_button_label(point),
+            recent_location_button_label(point, max_chars=28),
+            recent_location_button_label(point, max_chars=RECENT_LOCATION_BUTTON_CHARS),
+        }
+        if any(label in candidates for label in labels):
             return point
     return None

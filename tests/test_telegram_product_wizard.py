@@ -57,6 +57,16 @@ class ProductWizardTests(unittest.TestCase):
         self.assertNotIn("Города", texts)
         self.assertNotIn("Дороги", texts)
 
+    def test_map_animation_keyboard_reaches_plus_96_with_six_hour_step(self) -> None:
+        state = set_point(start_map_wizard_state(24), {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
+        state["mode"] = "gif"
+        state["to"] = 96
+        texts = _button_texts(params_keyboard(state))
+        self.assertIn("✓ до +96", texts)
+        self.assertIn("✓ шаг 6ч", texts)
+        self.assertNotIn("шаг 3ч", texts)
+        self.assertEqual(copy_command(state), "/map 45.0000 39.0000 from=0 to=96 step=6 mode=gif")
+
     def test_map_copy_command_can_use_png_series(self) -> None:
         state = start_map_wizard_state(24)
         state = set_point(state, {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
