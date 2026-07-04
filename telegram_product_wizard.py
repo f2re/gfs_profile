@@ -9,16 +9,15 @@ AERO_TYPES = ("stuve", "emagram", "skewt")
 WINDGRAM_PARAMS = (("wind", "Ветер"), ("temp", "Температура"), ("rh", "Влажность"))
 WINDGRAM_TO_HOURS = (120, 240, 384)
 WINDGRAM_STEPS = (3, 6, 12)
-WINDGRAM_TOPS = (500,)
 CLOUDGRAM_TO_HOURS = (24, 48, 72, 120)
 CLOUDGRAM_STEPS = (3, 6)
 CLOUDGRAM_MODES = (("pro", "Профи"), ("simple", "Упрощённо"))
-MAP_LEADS = (12, 24, 48, 72)
+MAP_LEADS = (24, 48, 72, 96)
 MAP_FROM_HOURS = (0, 6, 12, 24)
 MAP_TO_HOURS = (24, 48, 72)
 MAP_STEPS = (3, 6)
 MAP_MODES = (("single", "Одна карта"), ("series", "Серия PNG"), ("gif", "GIF"))
-MAP_BASEMAPS = (("basic", "База"), ("water", "Вода"), ("places", "Города"), ("roads", "Дороги"))
+MAP_BASEMAPS = (("places", "Полная"), ("basic", "Базовая"))
 
 
 def start_aero_wizard_state(default_lead: int, diagram_type: str = "stuve") -> dict[str, object]:
@@ -65,8 +64,15 @@ def point_prompt_text(state: dict[str, object]) -> str:
     )
 
 
+def _short_label(label: str, max_chars: int = 56) -> str:
+    value = " ".join(str(label or "").split())
+    if len(value) <= max_chars:
+        return value
+    return value[: max(1, max_chars - 1)] + "…"
+
+
 def place_keyboard(labels: list[str]) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(label[:58], callback_data=f"wiz:place:{index}")] for index, label in enumerate(labels[:5])]
+    rows = [[InlineKeyboardButton(_short_label(label, 58), callback_data=f"wiz:place:{index}")] for index, label in enumerate(labels[:5])]
     rows.append([InlineKeyboardButton("Отмена", callback_data="wiz:cancel")])
     return InlineKeyboardMarkup(rows)
 
@@ -75,7 +81,7 @@ def _point_line(state: dict[str, object]) -> str:
     point = state.get("point")
     if not isinstance(point, dict):
         return "Точка: не выбрана"
-    label = str(point.get("label", "точка"))
+    label = _short_label(str(point.get("label", "точка")))
     lat = float(point.get("lat", 0.0))
     lon = float(point.get("lon", 0.0))
     return f"Точка: {label}\n{lat:.4f}, {lon:.4f}"
@@ -87,6 +93,15 @@ def _param_label(param: str) -> str:
 
 def _cloud_mode_label(mode: str) -> str:
     return "упрощённо" if mode == "simple" else "профи"
+
+
+def _map_basemap_label(basemap: str) -> str:
+    return {
+        "basic": "базовая",
+        "water": "вода",
+        "places": "полная: вода, города и границы",
+        "roads": "полная с дорогами, если слой доступен",
+    }.get(basemap, basemap)
 
 
 def copy_command(state: dict[str, object]) -> str | None:
@@ -184,12 +199,7 @@ def params_text(state: dict[str, object]) -> str:
             time_line = f"GIF-анимация: от +{int(state.get('from', 0))} до +{int(state.get('to', 24))} ч, шаг {int(state.get('time_step', 3))} ч"
         else:
             time_line = f"Серия PNG: от +{int(state.get('from', 0))} до +{int(state.get('to', 24))} ч, шаг {int(state.get('time_step', 3))} ч"
-        basemap_label = {
-            "basic": "без геослоёв",
-            "water": "береговая линия, реки, водоёмы",
-            "places": "вода, города и границы",
-            "roads": "города и основные дороги, если слой доступен",
-        }.get(str(state.get("basemap", "places")), "вода, города и границы")
+        basemap_label = _map_basemap_label(str(state.get("basemap", "places")))
         return (
             f"{product_title(product)}\n"
             "Шаг 2/3 — параметры\n\n"
@@ -220,7 +230,6 @@ def params_keyboard(state: dict[str, object]) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(("✓ " if current_to == value else "") + f"до +{value}", callback_data=f"wiz:wind:to:{value}") for value in WINDGRAM_TO_HOURS])
         current_step = int(state.get("time_step", 6))
         rows.append([InlineKeyboardButton(("✓ " if current_step == value else "") + f"шаг {value}ч", callback_data=f"wiz:wind:step:{value}") for value in WINDGRAM_STEPS])
-        rows.append([InlineKeyboardButton("✓ top 500 гПа", callback_data="wiz:wind:top:500")])
     elif product == "cloudgram":
         current_mode = str(state.get("mode", "pro"))
         rows.append([InlineKeyboardButton(("✓ " if current_mode == key else "") + label, callback_data=f"wiz:cloud:mode:{key}") for key, label in CLOUDGRAM_MODES])
@@ -242,8 +251,7 @@ def params_keyboard(state: dict[str, object]) -> InlineKeyboardMarkup:
             current_step = int(state.get("time_step", 3))
             rows.append([InlineKeyboardButton(("✓ " if current_step == value else "") + f"шаг {value}ч", callback_data=f"wiz:map:step:{value}") for value in MAP_STEPS])
         current_basemap = str(state.get("basemap", "places"))
-        rows.append([InlineKeyboardButton(("✓ " if current_basemap == key else "") + label, callback_data=f"wiz:map:basemap:{key}") for key, label in MAP_BASEMAPS[:2]])
-        rows.append([InlineKeyboardButton(("✓ " if current_basemap == key else "") + label, callback_data=f"wiz:map:basemap:{key}") for key, label in MAP_BASEMAPS[2:]])
+        rows.append([InlineKeyboardButton(("✓ " if current_basemap == key else "") + label, callback_data=f"wiz:map:basemap:{key}") for key, label in MAP_BASEMAPS])
 
     rows.append([InlineKeyboardButton("Построить", callback_data="wiz:run")])
     rows.append([InlineKeyboardButton("Другая точка", callback_data="wiz:point"), InlineKeyboardButton("Отмена", callback_data="wiz:cancel")])

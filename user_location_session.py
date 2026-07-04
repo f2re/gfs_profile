@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 
@@ -7,6 +8,7 @@ from geocode import GeoPoint
 
 RECENT_LOCATION_LIMIT = 4
 RECENT_LOCATION_PREFIX = "🕘 "
+RECENT_LOCATION_INDEX_RE = re.compile(rf"^{re.escape(RECENT_LOCATION_PREFIX)}(?P<index>[1-9])\.\s")
 RECENT_LOCATIONS: dict[int, list["RecentLocation"]] = {}
 
 
@@ -33,6 +35,12 @@ def _is_duplicate(existing: RecentLocation, point: GeoPoint) -> bool:
     return close or (same_label and abs(existing.lat - point.lat) <= 0.05 and abs(existing.lon - point.lon) <= 0.05)
 
 
+def _truncate_label(label: str, max_chars: int) -> str:
+    if len(label) <= max_chars:
+        return label
+    return label[: max(1, max_chars - 1)] + "…"
+
+
 def remember_location(user_id: int, point: GeoPoint) -> None:
     if user_id <= 0:
         return
@@ -53,20 +61,27 @@ def clear_recent_locations(user_id: int) -> None:
     RECENT_LOCATIONS.pop(user_id, None)
 
 
-def recent_location_button_label(point: GeoPoint, max_chars: int = 28) -> str:
+def recent_location_button_label(point: GeoPoint, max_chars: int = 28, index: int | None = None) -> str:
     label = _clean_label(point.label, point.lat, point.lon)
     if label.lower() in {"точка", "геолокация telegram", "telegram location"}:
         label = f"{point.lat:.4f}, {point.lon:.4f}"
-    if len(label) > max_chars:
-        label = label[: max(1, max_chars - 1)] + "…"
-    return RECENT_LOCATION_PREFIX + label
+    if index is not None:
+        prefix = f"{RECENT_LOCATION_PREFIX}{int(index)}. "
+        return prefix + _truncate_label(label, max_chars)
+    return RECENT_LOCATION_PREFIX + _truncate_label(label, max_chars)
 
 
 def match_recent_location_button(user_id: int, text: str) -> GeoPoint | None:
     value = str(text or "").strip()
     if not value.startswith(RECENT_LOCATION_PREFIX):
         return None
-    for point in get_recent_locations(user_id):
-        if recent_location_button_label(point) == value:
+    recent = get_recent_locations(user_id)
+    index_match = RECENT_LOCATION_INDEX_RE.match(value)
+    if index_match:
+        index = int(index_match.group("index")) - 1
+        if 0 <= index < len(recent):
+            return recent[index]
+    for index, point in enumerate(recent, start=1):
+        if recent_location_button_label(point) == value or recent_location_button_label(point, index=index) == value:
             return point
     return None

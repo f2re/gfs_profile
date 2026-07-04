@@ -37,6 +37,20 @@ class UserLocationSessionTests(unittest.TestCase):
         assert matched is not None
         self.assertEqual(matched.label, "Пятигорск")
 
+    def test_indexed_recent_button_keeps_full_session_label(self) -> None:
+        long_label = "Очень длинный адрес с районом, улицей, домом и уточнением подъезда"
+        point = GeoPoint(44.0393, 43.0708, long_label, "test")
+        remember_location(1001, point)
+
+        button_text = recent_location_button_label(point, max_chars=18, index=1)
+        self.assertIn("…", button_text)
+        matched = match_recent_location_button(1001, button_text)
+
+        self.assertIsNotNone(matched)
+        assert matched is not None
+        self.assertEqual(matched.label, long_label)
+        self.assertNotIn("…", matched.label)
+
     def test_button_label_falls_back_to_coordinates(self) -> None:
         label = recent_location_button_label(GeoPoint(55.7558, 37.6173, "геолокация Telegram", "telegram"))
         self.assertEqual(label, "🕘 55.7558, 37.6173")
