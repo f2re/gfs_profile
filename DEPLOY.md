@@ -2,12 +2,12 @@
 
 Проблема: `git pull` обновляет только рабочий git-каталог, но установленный бот работает из `/opt/gfs_profile`. Поэтому после pull нужно синхронизировать код в `/opt`, обновить зависимости и перезапустить systemd-сервис.
 
-Для этого добавлены два скрипта:
+Для этого добавлены три скрипта:
 
 ```text
-install_telegram_bot.sh   первичная установка
+install_telegram_bot.sh   первичная установка: apt + venv + .env + systemd + старт
 install_git_hooks.sh      установка локальных git hooks для автообновления после git pull
-deploy_telegram_bot.sh    синхронизация git checkout → /opt + pip install + restart
+deploy_telegram_bot.sh    синхронизация git checkout → /opt + pip install + checks + restart
 ```
 
 ## ✅ Рекомендуемая схема
@@ -18,12 +18,15 @@ deploy_telegram_bot.sh    синхронизация git checkout → /opt + pip
 bash install_telegram_bot.sh
 ```
 
-Для качественных Telegram-анимаций карты нужен системный `ffmpeg`. Если он не установлен, бот сохранит совместимость и соберёт GIF fallback, но картинка будет заметно хуже:
+`install_telegram_bot.sh` теперь ставит актуальный runtime-набор через `apt`, если не указан `--skip-apt`:
 
-```bash
-sudo apt-get update
-sudo apt-get install -y ffmpeg
+```text
+python3 python3-venv python3-pip ca-certificates rsync
+fonts-dejavu-core fonts-dejavu-extra ffmpeg
+python3-dev build-essential pkg-config libeccodes0 libeccodes-dev
 ```
+
+`ffmpeg` нужен для качественной MP4-анимации `/map ... mode=gif`. Без него бот остаётся совместимым и собирает GIF fallback, но качество ниже.
 
 После первичной установки включить автообновление из этого же git checkout:
 
@@ -44,17 +47,25 @@ git pull
 3. Скопирует код в `/opt/gfs_profile` через `rsync`.
 4. Сохранит `.env`, `.install-state`, `.venv`, кэш и локальные служебные файлы.
 5. Выполнит `pip install -r /opt/gfs_profile/requirements.txt`.
-6. Проверит офлайн-подложку Natural Earth и скачает недостающие слои, если кэш не готов.
-7. Выполнит `systemctl restart gfs-profile-bot.service`.
-8. Запишет лог в `.git/gfs-profile-deploy.log`.
+6. Проверит runtime-импорты и наличие `ffmpeg`.
+7. Проверит офлайн-подложку Natural Earth и скачает недостающие слои, если кэш не готов.
+8. Выполнит `systemctl restart gfs-profile-bot.service`.
+9. Запишет лог в `.git/gfs-profile-deploy.log`.
 
 ## 🛠️ Ручной deploy после pull
 
-Если hooks не нужны или sudo требует пароль:
+Обычный deploy без apt:
 
 ```bash
 git pull
 bash deploy_telegram_bot.sh
+```
+
+Первый deploy после добавления новых системных зависимостей:
+
+```bash
+git pull
+bash deploy_telegram_bot.sh --install-system-packages --yes
 ```
 
 Неразговорный режим:
@@ -84,19 +95,23 @@ bash deploy_telegram_bot.sh --skip-pip
 ## ⚙️ Опции deploy
 
 ```text
---install-dir DIR       каталог установки, по умолчанию /opt/gfs_profile
---service-name NAME     имя systemd-сервиса, по умолчанию gfs-profile-bot
---service-user USER     системный пользователь, по умолчанию gfsbot
---python PATH           Python для создания venv, если он отсутствует
---yes                   не задавать вопросов
---skip-pip              не обновлять Python-зависимости
---no-restart            не перезапускать сервис
---status                только показать состояние
+--install-dir DIR             каталог установки, по умолчанию /opt/gfs_profile
+--service-name NAME           имя systemd-сервиса, по умолчанию gfs-profile-bot
+--service-user USER           системный пользователь, по умолчанию gfsbot
+--python PATH                 Python для создания venv, если он отсутствует
+--yes                         не задавать вопросов
+--install-system-packages     поставить/обновить apt runtime-пакеты
+--skip-pip                    не обновлять Python-зависимости
+--skip-commands               не регистрировать Telegram slash-команды
+--no-restart                  не перезапускать сервис
+--status                      только показать состояние
 ```
 
 ## 🔐 Важное про sudo
 
 Git hooks выполняются от пользователя, который запускает `git pull`. Для полностью автоматического режима этому пользователю нужен доступ к командам, которые требуют root-прав: `rsync` в `/opt`, `chown`, `systemctl restart`, иногда `pip install` в venv пользователя `gfsbot`.
+
+`deploy_telegram_bot.sh --yes` из hook не ставит apt-пакеты автоматически. Системные пакеты обновляются только явным флагом `--install-system-packages`, чтобы обычный `git pull` не зависал на `apt` и sudo.
 
 Если sudo требует пароль, hook может остановить `git pull` или завершиться ошибкой. В этом случае используйте ручной deploy:
 
@@ -120,6 +135,7 @@ ffmpeg -version | head -n 1
 
 ```bash
 sudo -u gfsbot /opt/gfs_profile/.venv/bin/python -m gfs_core --lat 55.75 --lon 37.62 --lead 24
+sudo -u gfsbot /opt/gfs_profile/.venv/bin/python -m gfs_core --lat 55.75 --lon 37.62 --lead 384
 ```
 
 Проверка офлайн-подложки карт:
