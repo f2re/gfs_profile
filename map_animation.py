@@ -13,6 +13,7 @@ from basemap_cache import local_basemap_overlay
 from composite_map import MAP_BASEMAP_DEFAULT, MAP_MAX_ANIMATION_FRAMES, _validate_basemap, write_composite_map_png
 from geocode import GeoPoint
 from gfs_core import CACHE_DIR, GfsProfileError, ProgressCallback
+from map_animation_overlay import decorate_map_animation_frame
 
 MAP_ANIMATION_PIXEL_SIZE = int(os.getenv("MAP_ANIMATION_PIXEL_SIZE", "1280"))
 MAP_ANIMATION_FRAME_DURATION_MS = int(os.getenv("MAP_ANIMATION_FRAME_DURATION_MS", "650"))
@@ -137,10 +138,12 @@ def write_composite_map_mp4(
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
         frame_paths: list[Path] = []
+        total = len(frames)
         for index, frame in enumerate(frames, start=1):
-            _emit(progress_callback, stage="map_animation_frame", message=f"Строю MP4-кадр {index}/{len(frames)}", index=index, total=len(frames), lead_hour=frame["lead_hour"])
+            _emit(progress_callback, stage="map_animation_frame", message=f"Строю MP4-кадр {index}/{total}", index=index, total=total, lead_hour=frame["lead_hour"])
             png_path = tmp_dir / f"frame_{index:03d}.png"
             write_composite_map_png(frame, png_path, pixel_size=pixel_size, basemap_overlay=basemap_overlay)
+            decorate_map_animation_frame(png_path, frame, index=index, total=total)
             frame_paths.append(png_path)
         if frame_paths:
             width, height = _image_size(frame_paths[0])
