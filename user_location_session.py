@@ -78,17 +78,18 @@ def _candidate_button_texts(value: str) -> list[str]:
     return values
 
 
+def _received_label_width(value: str) -> int:
+    return max(1, len(value) - len(RECENT_LOCATION_PREFIX))
+
+
 def match_recent_location_button(user_id: int, text: str) -> GeoPoint | None:
     value = str(text or "").strip()
     if not value.startswith(RECENT_LOCATION_PREFIX):
         return None
     candidates = _candidate_button_texts(value)
     for point in get_recent_locations(user_id):
-        labels = {
-            recent_location_button_label(point),
-            recent_location_button_label(point, max_chars=28),
-            recent_location_button_label(point, max_chars=RECENT_LOCATION_BUTTON_CHARS),
-        }
+        labels = {recent_location_button_label(point), recent_location_button_label(point, max_chars=28)}
+        labels.update(recent_location_button_label(point, max_chars=_received_label_width(candidate)) for candidate in candidates)
         if any(label in candidates for label in labels):
             return point
     return None
