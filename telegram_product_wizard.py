@@ -14,8 +14,9 @@ CLOUDGRAM_STEPS = (3, 6)
 CLOUDGRAM_MODES = (("pro", "Профи"), ("simple", "Упрощённо"))
 MAP_LEADS = (24, 48, 72, 96)
 MAP_FROM_HOURS = (0, 6, 12, 24)
-MAP_TO_HOURS = (24, 48, 72, 96)
-MAP_STEPS = (6,)
+MAP_TO_HOURS = (12, 24, 48, 72, 96)
+MAP_STEPS = (1, 3, 6)
+MAP_MENU_MAX_FRAMES = 18
 MAP_MODES = (("single", "Одна карта"), ("series", "Серия PNG"), ("gif", "GIF"))
 MAP_BASEMAPS = (("places", "Полная"), ("basic", "Базовая"))
 
@@ -102,6 +103,29 @@ def _map_basemap_label(basemap: str) -> str:
         "places": "полная: вода, города и границы",
         "roads": "полная с дорогами, если слой доступен",
     }.get(basemap, basemap)
+
+
+def _map_frame_count(lead_from: int, lead_to: int, step: int) -> int:
+    if step <= 0 or lead_to < lead_from:
+        return 10**9
+    count = ((lead_to - lead_from) // step) + 1
+    if (lead_to - lead_from) % step:
+        count += 1
+    return count
+
+
+def _map_step_options(state: dict[str, object]) -> tuple[int, ...]:
+    lead_from = int(state.get("from", 0))
+    lead_to = int(state.get("to", 24))
+    options = tuple(step for step in MAP_STEPS if _map_frame_count(lead_from, lead_to, step) <= MAP_MENU_MAX_FRAMES)
+    return options or (6,)
+
+
+def _map_to_options(state: dict[str, object]) -> tuple[int, ...]:
+    lead_from = int(state.get("from", 0))
+    step = int(state.get("time_step", 6))
+    options = tuple(value for value in MAP_TO_HOURS if value >= lead_from and _map_frame_count(lead_from, value, step) <= MAP_MENU_MAX_FRAMES)
+    return options or (max(lead_from, 12),)
 
 
 def copy_command(state: dict[str, object]) -> str | None:
@@ -247,9 +271,11 @@ def params_keyboard(state: dict[str, object]) -> InlineKeyboardMarkup:
             current_from = int(state.get("from", 0))
             rows.append([InlineKeyboardButton(("✓ " if current_from == value else "") + f"от +{value}", callback_data=f"wiz:map:from:{value}") for value in MAP_FROM_HOURS])
             current_to = int(state.get("to", 24))
-            rows.append([InlineKeyboardButton(("✓ " if current_to == value else "") + f"до +{value}", callback_data=f"wiz:map:to:{value}") for value in MAP_TO_HOURS])
+            to_options = _map_to_options(state)
+            rows.append([InlineKeyboardButton(("✓ " if current_to == value else "") + f"до +{value}", callback_data=f"wiz:map:to:{value}") for value in to_options])
             current_step = int(state.get("time_step", 6))
-            rows.append([InlineKeyboardButton(("✓ " if current_step == value else "") + f"шаг {value}ч", callback_data=f"wiz:map:step:{value}") for value in MAP_STEPS])
+            step_options = _map_step_options(state)
+            rows.append([InlineKeyboardButton(("✓ " if current_step == value else "") + f"шаг {value}ч", callback_data=f"wiz:map:step:{value}") for value in step_options])
         current_basemap = str(state.get("basemap", "places"))
         rows.append([InlineKeyboardButton(("✓ " if current_basemap == key else "") + label, callback_data=f"wiz:map:basemap:{key}") for key, label in MAP_BASEMAPS])
 
