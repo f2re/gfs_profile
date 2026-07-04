@@ -18,6 +18,7 @@ NO_RESTART=0
 SKIP_PIP=0
 STATUS_ONLY=0
 SKIP_COMMANDS=0
+INSTALL_SYSTEM_PACKAGES=0
 ADMIN_DB_BACKUP=""
 ADMIN_DB_BACKUP_DIR=""
 
@@ -56,16 +57,17 @@ usage() {
   ./deploy_telegram_bot.sh [опции]
 
 Опции:
-  --install-dir DIR       каталог установки, по умолчанию $DEFAULT_INSTALL_DIR
-  --service-name NAME     имя systemd-сервиса, по умолчанию $DEFAULT_SERVICE_NAME
-  --service-user USER     системный пользователь, по умолчанию $DEFAULT_SERVICE_USER
-  --python PATH           Python-интерпретатор для создания venv, если venv отсутствует
-  --yes                   не задавать подтверждающие вопросы
-  --skip-pip              не обновлять pip-зависимости
-  --skip-commands         не регистрировать Telegram slash-команды
-  --no-restart            не перезапускать systemd-сервис
-  --status                только показать состояние
-  -h, --help              показать справку
+  --install-dir DIR             каталог установки, по умолчанию $DEFAULT_INSTALL_DIR
+  --service-name NAME           имя systemd-сервиса, по умолчанию $DEFAULT_SERVICE_NAME
+  --service-user USER           системный пользователь, по умолчанию $DEFAULT_SERVICE_USER
+  --python PATH                 Python-интерпретатор для создания venv, если venv отсутствует
+  --yes                         не задавать подтверждающие вопросы
+  --install-system-packages     поставить/обновить apt-пакеты: Python, rsync, шрифты, ffmpeg, eccodes
+  --skip-pip                    не обновлять pip-зависимости
+  --skip-commands               не регистрировать Telegram slash-команды
+  --no-restart                  не перезапускать systemd-сервис
+  --status                      только показать состояние
+  -h, --help                    показать справку
 EOF
 }
 
@@ -76,6 +78,7 @@ while [[ $# -gt 0 ]]; do
     --service-user) SERVICE_USER="$2"; shift 2 ;;
     --python) PYTHON_BIN="$2"; shift 2 ;;
     --yes) ASSUME_YES=1; shift ;;
+    --install-system-packages) INSTALL_SYSTEM_PACKAGES=1; shift ;;
     --skip-pip) SKIP_PIP=1; shift ;;
     --skip-commands) SKIP_COMMANDS=1; shift ;;
     --no-restart) NO_RESTART=1; shift ;;
@@ -155,8 +158,16 @@ admin_db_path() {
   fi
 }
 
+ffmpeg_status() {
+  if command -v ffmpeg >/dev/null 2>&1; then
+    ffmpeg -version 2>/dev/null | head -n 1 || true
+  else
+    return 1
+  fi
+}
+
 print_status() {
-  local admin_db
+  local admin_db ffmpeg_line
   admin_db="$(admin_db_path)"
   section "Состояние deploy"
   [[ -d "$REPO_ROOT/.git" ]] && success "Источник git: $REPO_ROOT @ $(git_rev)" || warn "Источник не похож на git checkout: $REPO_ROOT"
@@ -166,6 +177,11 @@ print_status() {
   [[ -f "$UNIT_PATH" ]] && success "systemd unit найден: $UNIT_PATH" || warn "systemd unit не найден: $UNIT_PATH"
   [[ -f "$INSTALL_DIR/register_telegram_commands.py" ]] && success "registrar команд найден" || warn "registrar команд не найден в $INSTALL_DIR"
   [[ -f "$admin_db" ]] && success "admin DB найден: $admin_db" || warn "admin DB пока не создан: $admin_db"
+  if ffmpeg_line="$(ffmpeg_status)"; then
+    success "ffmpeg: $ffmpeg_line"
+  else
+    warn "ffmpeg не найден: /map mode=gif будет использовать GIF fallback вместо MP4"
+  fi
   if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files "${SERVICE_NAME}.service" >/dev/null 2>&1; then
     printf 'Активность сервиса: ' >&2
     systemctl is-active "${SERVICE_NAME}.service" >&2 || true
@@ -183,6 +199,19 @@ require_ready_install() {
   [[ -d "$INSTALL_DIR" ]] || fail "Каталог $INSTALL_DIR не существует. Сначала выполните bash install_telegram_bot.sh"
   [[ -f "$ENV_FILE" ]] || fail "Нет $ENV_FILE. Сначала выполните первичную установку, чтобы задать TELEGRAM_BOT_TOKEN"
   id "$SERVICE_USER" >/dev/null 2>&1 || fail "Пользователь $SERVICE_USER не найден. Сначала выполните первичную установку"
+}
+
+install_system_packages() {
+  [[ "$INSTALL_SYSTEM_PACKAGES" -eq 1 ]] || return 0
+  command -v apt-get >/dev/null 2>&1 || { warn "apt-get не найден. Системные пакеты не обновлены."; return 0; }
+  log "Обновляю apt и ставлю системные пакеты runtime"
+  run_root apt-get update
+  local base_packages=(python3 python3-venv python3-pip ca-certificates rsync fonts-dejavu-core fonts-dejavu-extra ffmpeg)
+  run_root apt-get install -y "${base_packages[@]}"
+  local optional_packages=(python3-dev build-essential pkg-config libeccodes0 libeccodes-dev)
+  if ! run_root apt-get install -y "${optional_packages[@]}"; then
+    warn "Часть дополнительных пакетов не установлена. Если cfgrib/eccodes или pip wheel не соберётся, установите вручную: ${optional_packages[*]}"
+  fi
 }
 
 backup_admin_db() {
@@ -265,6 +294,9 @@ ensure_venv_and_deps() {
 runtime_check() {
   log "Проверяю runtime-зависимости до перезапуска сервиса"
   run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" MPLBACKEND=Agg "$VENV_DIR/bin/python" "$INSTALL_DIR/runtime_check.py"
+  if ! ffmpeg_status >/dev/null 2>&1; then
+    warn "ffmpeg не найден. Бот работает, но качественная MP4-анимация /map недоступна. Выполните: bash deploy_telegram_bot.sh --install-system-packages"
+  fi
 }
 
 prepare_basemap_cache() {
@@ -314,9 +346,10 @@ register_telegram_commands() {
 }
 
 write_state() {
-  local rev installed_at admin_db
+  local rev installed_at admin_db ffmpeg_line
   rev="$(git_rev)"
   admin_db="$(admin_db_path)"
+  ffmpeg_line="$(ffmpeg_status || true)"
   installed_at="$(grep '^installed_at=' "$STATE_FILE" 2>/dev/null | cut -d= -f2- || true)"
   cat <<EOF | run_root tee "$STATE_FILE" >/dev/null
 installed_at=$installed_at
@@ -330,6 +363,7 @@ venv=$VENV_DIR
 unit=$UNIT_PATH
 admin_db=$admin_db
 runtime_check=ok
+ffmpeg=${ffmpeg_line:-missing}
 telegram_commands=attempted
 EOF
   run_root chown "$SERVICE_USER:$SERVICE_USER" "$STATE_FILE"
@@ -347,6 +381,7 @@ main() {
     fail "Другой deploy уже выполняется: $DEPLOY_LOCK"
   fi
 
+  install_system_packages
   backup_admin_db
   copy_project
   restore_admin_db
