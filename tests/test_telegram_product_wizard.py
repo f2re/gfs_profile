@@ -61,11 +61,25 @@ class ProductWizardTests(unittest.TestCase):
         state = set_point(start_map_wizard_state(24), {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
         state["mode"] = "gif"
         state["to"] = 96
+        state["time_step"] = 6
         texts = _button_texts(params_keyboard(state))
         self.assertIn("✓ до +96", texts)
         self.assertIn("✓ шаг 6ч", texts)
-        self.assertNotIn("шаг 3ч", texts)
+        self.assertNotIn("шаг 1ч", texts)
         self.assertEqual(copy_command(state), "/map 45.0000 39.0000 from=0 to=96 step=6 mode=gif")
+
+    def test_map_animation_keyboard_allows_one_hour_step_for_short_range(self) -> None:
+        state = set_point(start_map_wizard_state(24), {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
+        state["mode"] = "gif"
+        state["to"] = 12
+        texts = _button_texts(params_keyboard(state))
+        self.assertIn("шаг 1ч", texts)
+        state["time_step"] = 1
+        texts = _button_texts(params_keyboard(state))
+        self.assertIn("✓ шаг 1ч", texts)
+        self.assertIn("✓ до +12", texts)
+        self.assertNotIn("до +24", texts)
+        self.assertEqual(copy_command(state), "/map 45.0000 39.0000 from=0 to=12 step=1 mode=gif")
 
     def test_map_copy_command_can_use_png_series(self) -> None:
         state = start_map_wizard_state(24)
