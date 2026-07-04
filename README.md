@@ -26,17 +26,12 @@ Telegram-бот и веб-интерфейс для модельных верт�
 bash install_telegram_bot.sh
 ```
 
-Для качественной MP4-анимации карты установите системный `ffmpeg`:
-
-```bash
-sudo apt-get update
-sudo apt-get install -y ffmpeg
-```
+Скрипт ставит актуальный runtime-набор через `apt`: Python/venv/pip, `rsync`, DejaVu-шрифты, `ffmpeg`, `libeccodes0/libeccodes-dev` и сборочные пакеты. Чтобы пропустить apt-этап, используйте `--skip-apt`.
 
 Автоматически:
 
 ```bash
-TELEGRAM_BOT_TOKEN='123456:AA...' TELEGRAM_ADMIN_IDS='123456789' bash install_telegram_bot.sh --yes
+TELEGRAM_BOT_TOKEN='<BOT_TOKEN>' TELEGRAM_ADMIN_IDS='<TELEGRAM_USER_ID>' bash install_telegram_bot.sh --yes
 ```
 
 Обновление после `git pull`:
@@ -46,7 +41,13 @@ git pull
 bash deploy_telegram_bot.sh --yes
 ```
 
-`deploy_telegram_bot.sh` показывает путь `admin DB` в `--status`, сохраняет дефолтный `.cache_gfs/admin_stats.sqlite3` и делает backup/restore для кастомного `TELEGRAM_ADMIN_DB`, если он лежит внутри `/opt/gfs_profile` и мог бы попасть под `rsync --delete`.
+Если на уже установленном сервере нужно подтянуть новые системные пакеты, включая `ffmpeg` для MP4-анимации:
+
+```bash
+bash deploy_telegram_bot.sh --install-system-packages --yes
+```
+
+`deploy_telegram_bot.sh` показывает путь `admin DB` в `--status`, статус `ffmpeg`, сохраняет дефолтный `.cache_gfs/admin_stats.sqlite3` и делает backup/restore для кастомного `TELEGRAM_ADMIN_DB`, если он лежит внутри `/opt/gfs_profile` и мог бы попасть под `rsync --delete`.
 
 Проверка:
 
