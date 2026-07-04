@@ -18,6 +18,10 @@ DEFAULT_GEOCODE_TIMEOUT="12"
 DEFAULT_MAP_BASEMAP_RESOLUTION="10m"
 DEFAULT_MAP_BASEMAP_AUTO_DOWNLOAD="1"
 DEFAULT_MAP_BASEMAP_DOWNLOAD_TIMEOUT="30"
+DEFAULT_MAP_ANIMATION_PIXEL_SIZE="1280"
+DEFAULT_MAP_ANIMATION_FRAME_DURATION_MS="650"
+DEFAULT_MAP_ANIMATION_OUTPUT_FPS="8"
+DEFAULT_MAP_ANIMATION_CRF="20"
 
 INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 SERVICE_NAME="${SERVICE_NAME:-$DEFAULT_SERVICE_NAME}"
@@ -70,7 +74,8 @@ $APP_NAME — установка Telegram-бота
   GFS_CACHE_DIR, GFS_CACHE_TTL_SECONDS, GFS_AVAILABILITY_CACHE_TTL_SECONDS,
   GFS_REQUEST_TIMEOUT, GEOCODER_USER_AGENT, GEOCODE_CACHE_DIR, GEOCODE_TIMEOUT,
   MAP_BASEMAP_DIR, MAP_BASEMAP_RESOLUTION, MAP_BASEMAP_AUTO_DOWNLOAD,
-  MAP_BASEMAP_DOWNLOAD_TIMEOUT
+  MAP_BASEMAP_DOWNLOAD_TIMEOUT, MAP_ANIMATION_PIXEL_SIZE,
+  MAP_ANIMATION_FRAME_DURATION_MS, MAP_ANIMATION_OUTPUT_FPS, MAP_ANIMATION_CRF
 EOF
 }
 
@@ -162,6 +167,14 @@ append_rw_path() {
   EXTRA_READ_WRITE_PATHS+=" $path"
 }
 
+ffmpeg_status() {
+  if command -v ffmpeg >/dev/null 2>&1; then
+    ffmpeg -version 2>/dev/null | head -n 1 || true
+  else
+    return 1
+  fi
+}
+
 print_status() {
   section "Состояние"
   [[ -d "$INSTALL_DIR" ]] && success "Каталог установки: $INSTALL_DIR" || warn "Каталог установки отсутствует: $INSTALL_DIR"
@@ -176,6 +189,11 @@ print_status() {
   fi
   [[ -f "$UNIT_PATH" ]] && success "systemd unit: $UNIT_PATH" || warn "systemd unit отсутствует: $UNIT_PATH"
   [[ -f "$INSTALL_DIR/register_telegram_commands.py" ]] && success "registrar команд найден" || warn "registrar команд не найден"
+  if ffmpeg_line="$(ffmpeg_status)"; then
+    success "ffmpeg: $ffmpeg_line"
+  else
+    warn "ffmpeg не найден: /map mode=gif будет использовать GIF fallback вместо MP4"
+  fi
   if command -v systemctl >/dev/null 2>&1 && systemctl list-unit-files "${SERVICE_NAME}.service" >/dev/null 2>&1; then
     printf 'Активность сервиса: ' >&2
     systemctl is-active "${SERVICE_NAME}.service" >&2 || true
@@ -197,14 +215,14 @@ require_repo_files() {
 install_system_packages() {
   [[ "$SKIP_APT" -eq 1 ]] && { warn "Установка системных пакетов пропущена (--skip-apt)"; return 0; }
   command -v apt-get >/dev/null 2>&1 || { warn "apt-get не найден. Пропускаю системные пакеты."; return 0; }
-  confirm "Установить/обновить системные пакеты Python, rsync, шрифты и библиотеки сборки?" || return 0
+  confirm "Установить/обновить системные пакеты Python, rsync, шрифты, ffmpeg и библиотеки GRIB?" || return 0
   log "Обновляю apt и ставлю базовые пакеты"
   run_root apt-get update
-  local base_packages=(python3 python3-venv python3-pip ca-certificates rsync fonts-dejavu-core)
+  local base_packages=(python3 python3-venv python3-pip ca-certificates rsync fonts-dejavu-core fonts-dejavu-extra ffmpeg)
   run_root apt-get install -y "${base_packages[@]}"
-  local optional_packages=(python3-dev build-essential pkg-config libeccodes0)
+  local optional_packages=(python3-dev build-essential pkg-config libeccodes0 libeccodes-dev)
   if ! run_root apt-get install -y "${optional_packages[@]}"; then
-    warn "Часть дополнительных пакетов не установлена. Если pip wheel не соберётся, установите вручную: ${optional_packages[*]}"
+    warn "Часть дополнительных пакетов не установлена. Если cfgrib/eccodes или pip wheel не соберётся, установите вручную: ${optional_packages[*]}"
   fi
 }
 
@@ -294,7 +312,8 @@ ask_token() {
 }
 
 write_env() {
-  local token default_lead max_concurrent max_geocode cache_dir ttl availability_ttl timeout ua geocode_dir geocode_timeout basemap_dir basemap_resolution basemap_auto basemap_timeout
+  local token default_lead max_concurrent max_geocode cache_dir ttl availability_ttl timeout ua geocode_dir geocode_timeout
+  local basemap_dir basemap_resolution basemap_auto basemap_timeout anim_size anim_duration anim_fps anim_crf
   token="${TELEGRAM_BOT_TOKEN_FINAL:-$(ask_token)}"
   default_lead="$(ask_default "Срок прогноза по умолчанию, часы" "${DEFAULT_LEAD:-$DEFAULT_DEFAULT_LEAD}")"
   max_concurrent="$(ask_default "Максимум одновременных GFS-запросов" "${MAX_CONCURRENT_GFS:-$DEFAULT_MAX_CONCURRENT_GFS}")"
@@ -310,6 +329,10 @@ write_env() {
   basemap_resolution="$(ask_default "Разрешение Natural Earth basemap" "${MAP_BASEMAP_RESOLUTION:-$DEFAULT_MAP_BASEMAP_RESOLUTION}")"
   basemap_auto="$(ask_default "Автоскачивание basemap при отсутствии кэша (1/0)" "${MAP_BASEMAP_AUTO_DOWNLOAD:-$DEFAULT_MAP_BASEMAP_AUTO_DOWNLOAD}")"
   basemap_timeout="$(ask_default "Timeout скачивания basemap, секунд" "${MAP_BASEMAP_DOWNLOAD_TIMEOUT:-$DEFAULT_MAP_BASEMAP_DOWNLOAD_TIMEOUT}")"
+  anim_size="$(ask_default "Размер кадра MP4-анимации карты, px" "${MAP_ANIMATION_PIXEL_SIZE:-$DEFAULT_MAP_ANIMATION_PIXEL_SIZE}")"
+  anim_duration="$(ask_default "Длительность кадра MP4-анимации, мс" "${MAP_ANIMATION_FRAME_DURATION_MS:-$DEFAULT_MAP_ANIMATION_FRAME_DURATION_MS}")"
+  anim_fps="$(ask_default "FPS выходной MP4-анимации" "${MAP_ANIMATION_OUTPUT_FPS:-$DEFAULT_MAP_ANIMATION_OUTPUT_FPS}")"
+  anim_crf="$(ask_default "CRF MP4-анимации H.264" "${MAP_ANIMATION_CRF:-$DEFAULT_MAP_ANIMATION_CRF}")"
 
   log "Записываю $ENV_FILE"
   run_root install -m 0640 -o root -g "$SERVICE_USER" /dev/null "$ENV_FILE"
@@ -329,6 +352,10 @@ MAP_BASEMAP_DIR=$basemap_dir
 MAP_BASEMAP_RESOLUTION=$basemap_resolution
 MAP_BASEMAP_AUTO_DOWNLOAD=$basemap_auto
 MAP_BASEMAP_DOWNLOAD_TIMEOUT=$basemap_timeout
+MAP_ANIMATION_PIXEL_SIZE=$anim_size
+MAP_ANIMATION_FRAME_DURATION_MS=$anim_duration
+MAP_ANIMATION_OUTPUT_FPS=$anim_fps
+MAP_ANIMATION_CRF=$anim_crf
 MPLBACKEND=Agg
 PYTHONUNBUFFERED=1
 EOF
@@ -418,6 +445,8 @@ register_telegram_commands() {
 }
 
 write_state() {
+  local ffmpeg_line
+  ffmpeg_line="$(ffmpeg_status || true)"
   cat <<EOF | run_root tee "$STATE_FILE" >/dev/null
 installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 install_dir=$INSTALL_DIR
@@ -428,6 +457,7 @@ venv=$VENV_DIR
 unit=$UNIT_PATH
 read_write_paths=$INSTALL_DIR$EXTRA_READ_WRITE_PATHS
 runtime_check=ok
+ffmpeg=${ffmpeg_line:-missing}
 telegram_commands=attempted
 EOF
   run_root chown "$SERVICE_USER:$SERVICE_USER" "$STATE_FILE"
@@ -471,6 +501,7 @@ main() {
   echo "Пользователь:  $SERVICE_USER" >&2
   echo "Python:        $PYTHON_BIN" >&2
   echo "Файл .env:     $ENV_FILE" >&2
+  echo "Анимация:      ffmpeg MP4 при наличии системного ffmpeg" >&2
   confirm "Продолжить установку?" || fail "Отменено пользователем"
 
   TELEGRAM_BOT_TOKEN_FINAL="$(ask_token)"
