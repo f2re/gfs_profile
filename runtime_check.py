@@ -34,6 +34,7 @@ OPTIONAL_RUNTIME_MODULES = (
     "route_profile",
     "route_profile_plot",
     "route_profile_contract",
+    "route_profile_vertical_policy",
     "route_profile_simple_overlay",
     "basemap_cache",
     "prepare_basemap_cache",
@@ -75,7 +76,7 @@ def main() -> int:
     import matplotlib
 
     matplotlib.use("Agg", force=True)
-    print("Runtime check OK: dependencies, route risk contract, command definitions, route/map/cloudgram, wizard and bot modules import successfully")
+    print("Runtime check OK: dependencies, point-wise route risk, vertical persistence, command definitions and bot modules import successfully")
     return 0
 
 
