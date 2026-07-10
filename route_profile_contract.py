@@ -3,12 +3,14 @@ from __future__ import annotations
 """Доменный контракт маршрутного профиля.
 
 Риск является свойством модельных данных в конкретной точке и на конкретном
-сроке. Режим ``simple``/``pro`` влияет только на представление: исходные точки,
-сроки, вертикальные поля и категории риска обязаны совпадать.
+сроке. Режим ``simple``/``pro`` влияет только на представление. Пространственный
+шаг выбирает пользователь; ETA каждой точки рассчитывается из расстояния и
+средней скорости.
 """
 
 import inspect
 import math
+from contextvars import ContextVar
 from dataclasses import replace
 from typing import Any, Iterable
 
@@ -20,9 +22,18 @@ from geocode import GeoPoint
 from gfs_core import GfsProfileError
 
 ROUTE_SPATIAL_STEP_KM = 25.0
-# 161 точка сохраняет шаг <=25 км для маршрутов длиной до 4000 км.
+ROUTE_SPATIAL_STEPS_KM = (25, 50, 100)
 ROUTE_MAX_POINTS = 161
 ROUTE_RISK_CARD_LIMIT = 12
+_ROUTE_STEP_CONTEXT: ContextVar[float] = ContextVar("route_spatial_step_km", default=ROUTE_SPATIAL_STEP_KM)
+
+
+def validate_spatial_step(value: float | int) -> int:
+    step = int(value)
+    if step not in ROUTE_SPATIAL_STEPS_KM:
+        allowed = "/".join(str(item) for item in ROUTE_SPATIAL_STEPS_KM)
+        raise GfsProfileError(f"Шаг маршрута должен быть {allowed} км")
+    return step
 
 
 def route_waypoint_specs(
@@ -31,7 +42,7 @@ def route_waypoint_specs(
     departure_lead: int,
     speed_kmh: int = _route.ROUTE_DEFAULT_SPEED_KMH,
     max_points: int = ROUTE_MAX_POINTS,
-    spatial_step_km: float = ROUTE_SPATIAL_STEP_KM,
+    spatial_step_km: float | None = None,
 ) -> tuple[float, float, list[tuple[float, float, float, float, int]]]:
     """Построить точки по расстоянию, а срок каждой точки — по ETA."""
 
@@ -39,7 +50,8 @@ def route_waypoint_specs(
         raise GfsProfileError(
             f"Скорость маршрута должна быть {_route.ROUTE_MIN_SPEED_KMH}…{_route.ROUTE_MAX_SPEED_KMH} км/ч"
         )
-    if not math.isfinite(spatial_step_km) or spatial_step_km <= 0:
+    step = float(_ROUTE_STEP_CONTEXT.get() if spatial_step_km is None else spatial_step_km)
+    if not math.isfinite(step) or step <= 0:
         raise GfsProfileError("Пространственный шаг маршрута должен быть положительным")
 
     distance = _route.haversine_km(origin.lat, origin.lon, destination.lat, destination.lon)
@@ -47,7 +59,7 @@ def route_waypoint_specs(
         raise GfsProfileError("Начало и конец маршрута почти совпадают; задайте маршрут длиннее 5 км")
     duration = distance / float(speed_kmh)
 
-    requested_segments = max(1, int(math.ceil(distance / float(spatial_step_km))))
+    requested_segments = max(1, int(math.ceil(distance / step)))
     segment_count = min(requested_segments, max(1, int(max_points) - 1))
 
     specs: list[tuple[float, float, float, float, int]] = []
@@ -82,22 +94,13 @@ def _finite_max(values: np.ndarray, default: float = 0.0) -> float:
 
 
 def confirmed_thunder(surface: Any) -> bool:
-    """Гроза отображается только при явном коде TSRA.
-
-    ``cb_score == 2`` означает конвективный потенциал, но не грозу. Он не должен
-    давать молнию, слово «гроза» и максимальный риск сам по себе.
-    """
-
     return str(getattr(surface, "phenomena", "")) == "TSRA"
 
 
 def vertical_risk_for_point(data: Any, point_index: int) -> int:
-    """Рассчитать риск по всей вертикали одной маршрутной точки."""
-
     icing = _finite_max(data.icing_score[:, point_index])
     turbulence = _finite_max(data.turbulence_score[:, point_index])
     wind = _finite_max(data.wind_speed_ms[:, point_index])
-
     if icing >= 3 or turbulence >= 3:
         return 3
     if icing >= 2 or turbulence >= 2 or wind >= 30.0:
@@ -108,32 +111,23 @@ def vertical_risk_for_point(data: Any, point_index: int) -> int:
 
 
 def surface_risk(surface: Any) -> int:
-    """Рассчитать приземный/конвективный риск без ложной грозы."""
-
     score = 0
     precip = getattr(surface, "precip_mm", None)
     ceiling = getattr(surface, "ceiling_m", None)
     visibility = getattr(surface, "visibility_km", None)
     cb_score = int(getattr(surface, "cb_score", 0) or 0)
-
     if precip is not None and float(precip) >= 0.2:
         score = max(score, 1)
     if precip is not None and float(precip) >= 7.0:
         score = max(score, 2)
-
     if ceiling is not None and float(ceiling) < 1000.0:
         score = max(score, 2)
     if ceiling is not None and float(ceiling) < 300.0:
         score = max(score, 3)
-
     if visibility is not None and float(visibility) < 5.0:
         score = max(score, 2)
     if visibility is not None and float(visibility) < 1.0:
         score = max(score, 3)
-
-    # 1 — слабая неустойчивость, 2 — конвективный потенциал, 3/TSRA — гроза.
-    if cb_score >= 1:
-        score = max(score, 1)
     if cb_score >= 2:
         score = max(score, 2)
     if confirmed_thunder(surface):
@@ -145,7 +139,6 @@ def point_risk_reasons(data: Any, point_index: int) -> tuple[str, ...]:
     point = data.waypoints[point_index]
     surface = point.surface
     reasons: list[str] = []
-
     if confirmed_thunder(surface):
         reasons.append("гроза")
     elif int(getattr(surface, "cb_score", 0) or 0) >= 2:
@@ -154,7 +147,6 @@ def point_risk_reasons(data: Any, point_index: int) -> tuple[str, ...]:
     phenomena = str(getattr(surface, "phenomena", "—") or "—")
     if phenomena not in {"—", "TSRA"}:
         reasons.append(phenomena)
-
     visibility = getattr(surface, "visibility_km", None)
     ceiling = getattr(surface, "ceiling_m", None)
     precip = getattr(surface, "precip_mm", None)
@@ -182,35 +174,22 @@ def point_risk_reasons(data: Any, point_index: int) -> tuple[str, ...]:
         reasons.append("ветер ≥30 м/с")
     elif wind >= 20.0:
         reasons.append("сильный ветер")
-
     if not reasons:
         reasons.append("значимых модельных рисков нет")
     return tuple(dict.fromkeys(reasons))
 
 
 def recompute_objective_risk(data: Any) -> Any:
-    """Пересчитать риск отдельно по вертикали и поверхности каждой точки."""
-
     scores = np.zeros(len(data.waypoints), dtype=int)
     waypoints = []
     for point_index, point in enumerate(data.waypoints):
-        vertical = vertical_risk_for_point(data, point_index)
-        surface = surface_risk(point.surface)
-        score = max(vertical, surface)
+        score = max(vertical_risk_for_point(data, point_index), surface_risk(point.surface))
         scores[point_index] = score
-        waypoints.append(
-            replace(
-                point,
-                risk_score=score,
-                risk_reasons=point_risk_reasons(data, point_index),
-            )
-        )
+        waypoints.append(replace(point, risk_score=score, risk_reasons=point_risk_reasons(data, point_index)))
     return replace(data, waypoints=tuple(waypoints), point_risk=scores)
 
 
 def risk_signature(data: Any) -> tuple[Any, ...]:
-    """Вернуть объективные поля риска без режима отображения."""
-
     return (
         tuple(int(value) for value in np.asarray(data.point_risk, dtype=int).tolist()),
         np.asarray(data.icing_score, dtype=np.int8).tobytes(),
@@ -234,17 +213,23 @@ def build_route_profile_data(
     mode: str = "simple",
     progress_callback=None,
     max_points: int = ROUTE_MAX_POINTS,
+    spatial_step_km: int = int(ROUTE_SPATIAL_STEP_KM),
 ):
-    data = _original_build_route_profile_data(
-        run,
-        origin,
-        destination,
-        departure_lead,
-        speed_kmh=speed_kmh,
-        mode=mode,
-        progress_callback=progress_callback,
-        max_points=max_points,
-    )
+    step = validate_spatial_step(spatial_step_km)
+    token = _ROUTE_STEP_CONTEXT.set(float(step))
+    try:
+        data = _original_build_route_profile_data(
+            run,
+            origin,
+            destination,
+            departure_lead,
+            speed_kmh=speed_kmh,
+            mode=mode,
+            progress_callback=progress_callback,
+            max_points=max_points,
+        )
+    finally:
+        _ROUTE_STEP_CONTEXT.reset(token)
     return recompute_objective_risk(data)
 
 
@@ -259,7 +244,6 @@ def _hazard_tokens_for_indices(data: Any, indices: Iterable[int], limit: int = 3
     selected = tuple(sorted(set(int(index) for index in indices)))
     if not selected:
         return ()
-
     points = [data.waypoints[index] for index in selected]
     active = {
         "thunder": any(confirmed_thunder(point.surface) for point in points),
@@ -274,7 +258,6 @@ def _hazard_tokens_for_indices(data: Any, indices: Iterable[int], limit: int = 3
         "precip": any((point.surface.precip_mm or 0.0) >= 0.2 for point in points),
         "cloud": bool(np.any(data.cloud_mask[:, selected])),
     }
-
     tokens = []
     for key in ("thunder", "icing", "turbulence", "wind", "visibility", "precip", "cloud"):
         if active[key] and not (key == "precip" and active["thunder"]):
@@ -287,7 +270,6 @@ def _hazard_tokens_for_indices(data: Any, indices: Iterable[int], limit: int = 3
 def _draw_surface_symbols(ax, data: Any, x: np.ndarray, *, professional: bool) -> None:
     thunder_mask = np.asarray([confirmed_thunder(point.surface) for point in data.waypoints], dtype=bool)
     precip_mask = np.asarray([(point.surface.precip_mm or 0.0) >= 0.2 for point in data.waypoints], dtype=bool) & ~thunder_mask
-
     for mask, symbol, label, color, y in (
         (thunder_mask, "⚡", "ГРОЗА", _plot.AVIATION.convection, 960.0),
         (precip_mask, "●", "ОСАДКИ", "#3F73B8", 975.0),
@@ -308,7 +290,6 @@ def _draw_surface_symbols(ax, data: Any, x: np.ndarray, *, professional: bool) -
             )
 
 
-# Patch before telegram_route imports symbols from route_profile.
 _route.ROUTE_SPATIAL_STEP_KM = ROUTE_SPATIAL_STEP_KM
 _route.ROUTE_MAX_POINTS = ROUTE_MAX_POINTS
 _route.route_waypoint_specs = route_waypoint_specs
@@ -320,7 +301,6 @@ if not hasattr(_route.RouteProfileData, "spatial_step_km"):
 if not hasattr(_route.RouteProfileData, "risk_signature"):
     _route.RouteProfileData.risk_signature = property(risk_signature)  # type: ignore[attr-defined]
 
-# One card partition and one risk aggregation for both views.
 _plot._MAX_SIMPLE_CARDS = ROUTE_RISK_CARD_LIMIT
 _plot._MAX_PRO_CARDS = ROUTE_RISK_CARD_LIMIT
 _plot._hazard_tokens_for_indices = _hazard_tokens_for_indices

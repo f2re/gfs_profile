@@ -21,11 +21,17 @@ from route_profile import (
     ROUTE_MAX_SPEED_KMH,
     ROUTE_MIN_SPEED_KMH,
     RouteProfileData,
+    write_route_csv,
+)
+from route_profile_contract import (
+    ROUTE_SPATIAL_STEP_KM,
+    ROUTE_SPATIAL_STEPS_KM,
     build_route_profile_data,
     route_summary,
     route_waypoint_specs,
-    write_route_csv,
+    validate_spatial_step,
 )
+import route_profile_vertical_policy  # noqa: F401
 from route_profile_plot import write_route_profile_png
 from telegram_file_send import reply_png_file
 from user_location_session import remember_location
@@ -34,12 +40,14 @@ ROUTE_SESSION_KEY = "route_profile_wizard"
 RUN_RE = re.compile(r"\brun=(?P<date>\d{8})[/-]?(?P<cycle>00|06|12|18)\b", re.IGNORECASE)
 SPEED_RE = re.compile(r"\b(?:speed|v|скорость)=(?P<value>\d{2,4})\b", re.IGNORECASE)
 MODE_RE = re.compile(r"\bmode=(?P<value>simple|pro|простой|профи)\b", re.IGNORECASE)
+STEP_RE = re.compile(r"\b(?:step|grid|шаг)=(?P<value>25|50|100)(?:\s*км)?\b", re.IGNORECASE)
 LEAD_RE = re.compile(r"(?:\blead=|\+)(?P<value>\d{1,3})(?:\s*(?:h|ч))?\b", re.IGNORECASE)
 ROUTE_SPLIT_RE = re.compile(r"\s*(?:->|→|=>|\|)\s*")
 
 ROUTE_LEADS = (0, 6, 12, 24, 48)
 ROUTE_SPEEDS = (150, 300, 450, 600)
 ROUTE_MODES = (("simple", "Простой"), ("pro", "Профи"))
+ROUTE_LONG_POINT_WARNING = 60
 
 _GFS_SEMAPHORE = None
 _GEOCODE_SEMAPHORE = None
@@ -53,6 +61,8 @@ class ParsedRouteRequest:
     speed_kmh: int = ROUTE_DEFAULT_SPEED_KMH
     mode: str = "simple"
     run: GfsRun | None = None
+    spatial_step_km: int = int(ROUTE_SPATIAL_STEP_KM)
+    step_explicit: bool = False
 
 
 def _normalize_mode(value: str) -> str:
@@ -81,6 +91,14 @@ def parse_route_request(raw_text: str, default_lead: int = 24) -> ParsedRouteReq
         mode = _normalize_mode(match.group("value"))
         text = (text[: match.start()] + text[match.end() :]).strip()
 
+    spatial_step = int(ROUTE_SPATIAL_STEP_KM)
+    step_explicit = False
+    match = STEP_RE.search(text)
+    if match:
+        spatial_step = validate_spatial_step(int(match.group("value")))
+        step_explicit = True
+        text = (text[: match.start()] + text[match.end() :]).strip()
+
     lead = int(default_lead)
     match = LEAD_RE.search(text)
     if match:
@@ -90,8 +108,8 @@ def parse_route_request(raw_text: str, default_lead: int = 24) -> ParsedRouteReq
 
     parts = [part.strip(" ,;") for part in ROUTE_SPLIT_RE.split(text, maxsplit=1)]
     if len(parts) != 2 or not parts[0] or not parts[1]:
-        raise ValueError("Маршрут задаётся через → или ->. Пример: Москва -> Санкт-Петербург +24 speed=300 mode=pro")
-    return ParsedRouteRequest(parts[0], parts[1], lead, speed, mode, run)
+        raise ValueError("Маршрут задаётся через → или ->. Пример: Москва -> Санкт-Петербург +24 speed=300 step=50 mode=pro")
+    return ParsedRouteRequest(parts[0], parts[1], lead, speed, mode, run, spatial_step, step_explicit)
 
 
 def _pack_point(point: GeoPoint) -> dict[str, object]:
@@ -102,15 +120,50 @@ def _unpack_point(payload: dict[str, object]) -> GeoPoint:
     return GeoPoint(float(payload["lat"]), float(payload["lon"]), str(payload["label"]), str(payload.get("source", "route")))
 
 
+def _route_plan(origin: GeoPoint, destination: GeoPoint, lead: int, speed: int, spatial_step: int):
+    return route_waypoint_specs(origin, destination, lead, speed, spatial_step_km=validate_spatial_step(spatial_step))
+
+
+def _point_count_for_step(origin: GeoPoint, destination: GeoPoint, lead: int, speed: int, step: int) -> int:
+    return len(_route_plan(origin, destination, lead, speed, step)[2])
+
+
+def _long_route_warning(point_count: int, spatial_step: int) -> str:
+    if point_count < ROUTE_LONG_POINT_WARNING:
+        return ""
+    return (
+        f"\n⚠️ Детальная сетка {spatial_step} км: {point_count} расчётных точек. "
+        "Расчёт может занять заметно больше времени. Можно выбрать 50 или 100 км.\n"
+    )
+
+
+def _settings_state(origin: GeoPoint, destination: GeoPoint, parsed: ParsedRouteRequest) -> dict[str, object]:
+    return {
+        "step": "settings",
+        "origin": _pack_point(origin),
+        "destination": _pack_point(destination),
+        "lead": parsed.departure_lead,
+        "speed": parsed.speed_kmh,
+        "mode": parsed.mode,
+        "spatial_step": parsed.spatial_step_km,
+    }
+
+
 def route_settings_text(state: dict[str, object]) -> str:
     origin = _unpack_point(state["origin"])
     destination = _unpack_point(state["destination"])
     speed = int(state.get("speed", ROUTE_DEFAULT_SPEED_KMH))
     lead = int(state.get("lead", 24))
     mode = str(state.get("mode", "simple"))
-    distance, duration, specs = route_waypoint_specs(origin, destination, lead, speed)
+    spatial_step = validate_spatial_step(int(state.get("spatial_step", ROUTE_SPATIAL_STEP_KM)))
+    distance, duration, specs = _route_plan(origin, destination, lead, speed, spatial_step)
     max_lead = max(item[4] for item in specs)
     mode_name = "Профи" if mode == "pro" else "Простой"
+    alternatives = " · ".join(
+        f"{step} км ≈{_point_count_for_step(origin, destination, lead, speed, step)} т."
+        for step in ROUTE_SPATIAL_STEPS_KM
+    )
+    warning = _long_route_warning(len(specs), spatial_step)
     return (
         "✈️ Маршрутный профиль GFS\n"
         "Шаг 2/2 — параметры\n\n"
@@ -118,8 +171,12 @@ def route_settings_text(state: dict[str, object]) -> str:
         f"📏 {distance:.0f} км · расчётное время {duration:.1f} ч\n"
         f"🕒 вылет через +{lead} ч · прибытие около +{max_lead} ч\n"
         f"🚀 средняя скорость {speed} км/ч\n"
-        f"📊 режим {mode_name} · профиль до 500 гПа\n\n"
-        "Простой режим показывает зелёные/жёлтые/оранжевые/красные участки. Профи добавляет T/RH, ветер, облака, осадки, видимость, ВНГО, конвекцию, обледенение и сдвиг ветра."
+        f"🧩 сетка {spatial_step} км · {len(specs)} точек\n"
+        f"📊 режим {mode_name} · профиль до 500 гПа\n"
+        f"{warning}\n"
+        f"Детализация: {alternatives}\n\n"
+        "25 км — максимум деталей; 50/100 км — быстрее для длинного маршрута. "
+        "Риск считается одинаково в simple/pro, меняется только отображение."
     )
 
 
@@ -127,11 +184,13 @@ def route_settings_keyboard(state: dict[str, object]) -> InlineKeyboardMarkup:
     lead = int(state.get("lead", 24))
     speed = int(state.get("speed", ROUTE_DEFAULT_SPEED_KMH))
     mode = str(state.get("mode", "simple"))
+    spatial_step = int(state.get("spatial_step", ROUTE_SPATIAL_STEP_KM))
     lead_buttons = [InlineKeyboardButton(("✓ " if lead == value else "") + f"вылет +{value}ч", callback_data=f"route:lead:{value}") for value in ROUTE_LEADS]
     return InlineKeyboardMarkup([
         lead_buttons[:3],
         lead_buttons[3:],
         [InlineKeyboardButton(("✓ " if speed == value else "") + f"{value} км/ч", callback_data=f"route:speed:{value}") for value in ROUTE_SPEEDS],
+        [InlineKeyboardButton(("✓ " if spatial_step == value else "") + f"сетка {value} км", callback_data=f"route:grid:{value}") for value in ROUTE_SPATIAL_STEPS_KM],
         [InlineKeyboardButton(("✓ " if mode == key else "") + label, callback_data=f"route:mode:{key}") for key, label in ROUTE_MODES],
         [InlineKeyboardButton("▶ Построить", callback_data="route:run")],
         [InlineKeyboardButton("↩ Другой маршрут", callback_data="route:restart"), InlineKeyboardButton("Отмена", callback_data="route:cancel")],
@@ -146,7 +205,12 @@ async def _resolve_endpoint(query: str) -> GeoPoint:
             candidates = await asyncio.to_thread(search_location_candidates, query, 1)
     if not candidates:
         raise GeocodeError(f"Точка не найдена: {query}")
-    return candidates[0]
+    candidate = candidates[0]
+    if candidate.source == "coordinates":
+        label = f"{candidate.lat:.4f} {candidate.lon:.4f}"
+    else:
+        label = re.sub(r"\s+", " ", query.strip()) or candidate.label
+    return GeoPoint(candidate.lat, candidate.lon, label, candidate.source)
 
 
 async def _resolve_route(parsed: ParsedRouteRequest) -> tuple[GeoPoint, GeoPoint]:
@@ -154,23 +218,32 @@ async def _resolve_route(parsed: ParsedRouteRequest) -> tuple[GeoPoint, GeoPoint
     return origin, destination
 
 
-def _repeat_command(data: RouteProfileData) -> str:
+def _command_endpoint(point: GeoPoint) -> str:
+    label = re.sub(r"\s+", " ", point.label.strip())
+    label = label.replace("→", "-").replace("->", "-")
+    return label or f"{point.lat:.4f} {point.lon:.4f}"
+
+
+def _repeat_command(data: RouteProfileData, parsed: ParsedRouteRequest) -> str:
     return (
-        f"/route {data.origin.lat:.4f} {data.origin.lon:.4f} -> {data.destination.lat:.4f} {data.destination.lon:.4f} "
-        f"+{data.departure_lead} speed={data.speed_kmh} mode={data.mode} run={data.run.date}/{data.run.cycle}"
+        f"/route {_command_endpoint(data.origin)} -> {_command_endpoint(data.destination)} "
+        f"+{data.departure_lead} speed={data.speed_kmh} step={parsed.spatial_step_km} "
+        f"mode={data.mode} run={data.run.date}/{data.run.cycle}"
     )
 
 
 async def run_route_product(message, origin: GeoPoint, destination: GeoPoint, parsed: ParsedRouteRequest, user=None) -> bool:
-    distance, duration, specs = route_waypoint_specs(origin, destination, parsed.departure_lead, parsed.speed_kmh)
+    distance, duration, specs = _route_plan(origin, destination, parsed.departure_lead, parsed.speed_kmh, parsed.spatial_step_km)
     max_lead = max(item[4] for item in specs)
     selected_run = parsed.run or await asyncio.to_thread(latest_available_run_for_lead, max_lead)
+    warning = _long_route_warning(len(specs), parsed.spatial_step_km)
     status = await message.reply_text(
         "⏳ Маршрутный профиль GFS\n"
         f"🧭 {origin.label} → {destination.label}\n"
         f"📏 {distance:.0f} км · {duration:.1f} ч · {parsed.speed_kmh} км/ч\n"
+        f"🧩 сетка {parsed.spatial_step_km} км · {len(specs)} точек\n"
         f"🕒 вылет +{parsed.departure_lead} ч · до +{max_lead} ч\n"
-        "Подготавливаю точки маршрута…"
+        f"{warning}Подготавливаю точки маршрута…"
     )
     png_path: Path | None = None
     csv_path: Path | None = None
@@ -182,7 +255,7 @@ async def run_route_product(message, origin: GeoPoint, destination: GeoPoint, pa
         user_id=user_id,
         username=username,
         city=f"{origin.label} → {destination.label}",
-        request_text=f"/route {parsed.origin_query} -> {parsed.destination_query} +{parsed.departure_lead} speed={parsed.speed_kmh} mode={parsed.mode}",
+        request_text=f"/route {parsed.origin_query} -> {parsed.destination_query} +{parsed.departure_lead} speed={parsed.speed_kmh} step={parsed.spatial_step_km} mode={parsed.mode}",
         lead_from=parsed.departure_lead,
         lead_to=max_lead,
         run_date=selected_run.date,
@@ -192,7 +265,7 @@ async def run_route_product(message, origin: GeoPoint, destination: GeoPoint, pa
         header = (
             f"✈️ ROUTE · {parsed.mode}\n"
             f"GFS {selected_run.date} {selected_run.cycle}Z · {origin.label} → {destination.label}\n"
-            f"{distance:.0f} км · {parsed.speed_kmh} км/ч · +{parsed.departure_lead}…+{max_lead} ч"
+            f"{distance:.0f} км · шаг {parsed.spatial_step_km} км · {len(specs)} точек · +{parsed.departure_lead}…+{max_lead} ч"
         )
 
         def worker(progress_callback):
@@ -204,6 +277,7 @@ async def run_route_product(message, origin: GeoPoint, destination: GeoPoint, pa
                 speed_kmh=parsed.speed_kmh,
                 mode=parsed.mode,
                 progress_callback=progress_callback,
+                spatial_step_km=parsed.spatial_step_km,
             )
             progress_callback({"stage": "plot_start", "message": "строю маршрутный PNG"})
             png = write_route_profile_png(data)
@@ -220,12 +294,12 @@ async def run_route_product(message, origin: GeoPoint, destination: GeoPoint, pa
         await reply_png_file(
             message,
             png_path,
-            caption=f"PNG · ROUTE {parsed.mode.upper()} · GFS {selected_run.date} {selected_run.cycle}Z · {distance:.0f} км · {parsed.speed_kmh} км/ч",
+            caption=f"PNG · ROUTE {parsed.mode.upper()} · GFS {selected_run.date} {selected_run.cycle}Z · {origin.label} → {destination.label} · {distance:.0f} км · сетка {parsed.spatial_step_km} км",
             prefer_photo=True,
         )
         with csv_path.open("rb") as file_obj:
             await message.reply_document(document=InputFile(file_obj, filename=csv_path.name), caption="CSV · точки маршрута, ETA, уровни до 500 гПа и диагностические риски")
-        command = html.escape(_repeat_command(data))
+        command = html.escape(_repeat_command(data, parsed))
         await message.reply_text("📋 Повторить расчёт:\n" f"<code>{command}</code>", parse_mode=ParseMode.HTML)
         record_request_finish(request_id, status="ok", duration_ms=int((time.perf_counter() - started) * 1000))
         return True
@@ -251,7 +325,7 @@ async def route_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     raw = " ".join(context.args or []).strip()
     if not raw:
-        context.user_data[ROUTE_SESSION_KEY] = {"step": "await_route", "lead": 24, "speed": ROUTE_DEFAULT_SPEED_KMH, "mode": "simple"}
+        context.user_data[ROUTE_SESSION_KEY] = {"step": "await_route", "lead": 24, "speed": ROUTE_DEFAULT_SPEED_KMH, "mode": "simple", "spatial_step": int(ROUTE_SPATIAL_STEP_KM)}
         await message.reply_text(
             "✈️ Маршрутный профиль GFS\n"
             "Шаг 1/2 — маршрут\n\n"
@@ -259,7 +333,7 @@ async def route_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             "Примеры:\n"
             "Москва -> Санкт-Петербург\n"
             "55.75 37.62 -> 59.94 30.31\n\n"
-            "Далее выберете срок вылета, скорость и режим отображения."
+            "Далее выберите срок, скорость, режим и сетку 25/50/100 км."
         )
         return
     try:
@@ -267,6 +341,12 @@ async def route_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         origin, destination = await _resolve_route(parsed)
         remember_location(int(getattr(update.effective_user, "id", 0) or 0), origin)
         remember_location(int(getattr(update.effective_user, "id", 0) or 0), destination)
+        point_count = _point_count_for_step(origin, destination, parsed.departure_lead, parsed.speed_kmh, parsed.spatial_step_km)
+        if point_count >= ROUTE_LONG_POINT_WARNING and not parsed.step_explicit:
+            state = _settings_state(origin, destination, parsed)
+            context.user_data[ROUTE_SESSION_KEY] = state
+            await message.reply_text(route_settings_text(state), reply_markup=route_settings_keyboard(state))
+            return
         await run_route_product(message, origin, destination, parsed, user=update.effective_user)
     except (ValueError, GeocodeError, GfsProfileError) as exc:
         await message.reply_text(f"Ошибка: {exc}")
@@ -286,14 +366,7 @@ async def route_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
         user_id = int(getattr(update.effective_user, "id", 0) or 0)
         remember_location(user_id, origin)
         remember_location(user_id, destination)
-        state = {
-            "step": "settings",
-            "origin": _pack_point(origin),
-            "destination": _pack_point(destination),
-            "lead": parsed.departure_lead,
-            "speed": parsed.speed_kmh,
-            "mode": parsed.mode,
-        }
+        state = _settings_state(origin, destination, parsed)
         context.user_data[ROUTE_SESSION_KEY] = state
         await message.reply_text(route_settings_text(state), reply_markup=route_settings_keyboard(state))
     except (ValueError, GeocodeError, GfsProfileError) as exc:
@@ -308,35 +381,39 @@ async def route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await query.answer()
     record_telegram_user(update.effective_user)
     state = context.user_data.get(ROUTE_SESSION_KEY)
-    data = query.data or ""
-    if data == "route:cancel":
+    callback_data = query.data or ""
+    if callback_data == "route:cancel":
         context.user_data.pop(ROUTE_SESSION_KEY, None)
         await query.edit_message_text("Маршрутный расчёт отменён. Начать заново: /route")
         return
-    if data == "route:restart":
-        context.user_data[ROUTE_SESSION_KEY] = {"step": "await_route", "lead": 24, "speed": ROUTE_DEFAULT_SPEED_KMH, "mode": "simple"}
+    if callback_data == "route:restart":
+        context.user_data[ROUTE_SESSION_KEY] = {"step": "await_route", "lead": 24, "speed": ROUTE_DEFAULT_SPEED_KMH, "mode": "simple", "spatial_step": int(ROUTE_SPATIAL_STEP_KM)}
         await query.edit_message_text("Введите новый маршрут через → или ->. Пример: Москва -> Санкт-Петербург")
         return
     if not isinstance(state, dict) or state.get("step") != "settings":
         await query.edit_message_text("Сценарий маршрута устарел. Начните заново: /route")
         return
     state = dict(state)
-    if data.startswith("route:lead:"):
-        state["lead"] = int(data.rsplit(":", 1)[1])
-    elif data.startswith("route:speed:"):
-        state["speed"] = int(data.rsplit(":", 1)[1])
-    elif data.startswith("route:mode:"):
-        state["mode"] = data.rsplit(":", 1)[1]
-    elif data == "route:run":
+    if callback_data.startswith("route:lead:"):
+        state["lead"] = int(callback_data.rsplit(":", 1)[1])
+    elif callback_data.startswith("route:speed:"):
+        state["speed"] = int(callback_data.rsplit(":", 1)[1])
+    elif callback_data.startswith("route:grid:"):
+        state["spatial_step"] = validate_spatial_step(int(callback_data.rsplit(":", 1)[1]))
+    elif callback_data.startswith("route:mode:"):
+        state["mode"] = callback_data.rsplit(":", 1)[1]
+    elif callback_data == "route:run":
         origin = _unpack_point(state["origin"])
         destination = _unpack_point(state["destination"])
         parsed = ParsedRouteRequest(
-            origin.label,
-            destination.label,
-            int(state.get("lead", 24)),
-            int(state.get("speed", ROUTE_DEFAULT_SPEED_KMH)),
-            str(state.get("mode", "simple")),
-            None,
+            origin_query=origin.label,
+            destination_query=destination.label,
+            departure_lead=int(state.get("lead", 24)),
+            speed_kmh=int(state.get("speed", ROUTE_DEFAULT_SPEED_KMH)),
+            mode=str(state.get("mode", "simple")),
+            run=None,
+            spatial_step_km=validate_spatial_step(int(state.get("spatial_step", ROUTE_SPATIAL_STEP_KM))),
+            step_explicit=True,
         )
         context.user_data.pop(ROUTE_SESSION_KEY, None)
         if query.message:
