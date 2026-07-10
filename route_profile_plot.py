@@ -12,20 +12,22 @@ from aviation_style import AVIATION, risk_color, risk_label
 from plot_style import METEO, add_footer, apply_meteo_rcparams, style_axis
 from route_profile import RouteProfileData
 
-_SIMPLE_Y_LEVELS = (1000, 900, 800, 700, 600, 500)
+_SIMPLE_Y_LEVELS = (1000, 850, 700, 500)
 _PRO_Y_LEVELS = (1000, 925, 850, 700, 600, 500)
-_MAX_ROUTE_CARDS = 12
+_MAX_SIMPLE_CARDS = 8
+_MAX_PRO_CARDS = 12
 _TEMP_BOUNDS_C = (-70, -50, -35, -20, -10, 0, 10, 25, 40)
 _TEMP_COLORS = (
-    "#CADAF0",
-    "#D7E6F5",
-    "#E2EFF4",
-    "#E8F2EE",
-    "#F0F3E3",
-    "#F7F1D9",
-    "#F8E8CF",
-    "#F2D8CA",
+    "#D6E1EF",
+    "#E0EAF3",
+    "#E8F0F2",
+    "#EEF3EC",
+    "#F3F3E7",
+    "#F7F1DE",
+    "#F6E9DC",
+    "#F2DDD5",
 )
+_ISOTHERM_COLORS = {0.0: "#D32F2F", -10.0: "#C62828", -20.0: "#A51D1D"}
 
 
 @dataclass(frozen=True)
@@ -67,7 +69,7 @@ def _x_values(data: RouteProfileData) -> np.ndarray:
 
 
 def _short_label(value: str, limit: int = 34) -> str:
-    label = str(value).split(",", 1)[0].strip() or str(value).strip()
+    label = str(value or "").split(",", 1)[0].strip() or str(value or "").strip() or "точка"
     return label if len(label) <= limit else label[: limit - 1].rstrip() + "…"
 
 
@@ -83,15 +85,19 @@ def _finite_min(values: np.ndarray, default: float = 0.0) -> float:
     return float(np.min(finite)) if finite.size else float(default)
 
 
+def format_wind_speed_ms(value_ms: float) -> str:
+    return f"{float(value_ms):.0f} м/с"
+
+
 def _temperature_cmap_and_norm():
     from matplotlib.colors import BoundaryNorm, ListedColormap
 
     cmap = ListedColormap(_TEMP_COLORS, name="route_temperature_muted")
-    cmap.set_bad("#F5F7FA")
+    cmap.set_bad("#F6F8FA")
     return cmap, BoundaryNorm(_TEMP_BOUNDS_C, cmap.N, clip=True)
 
 
-def _display_groups(data: RouteProfileData, max_cards: int = _MAX_ROUTE_CARDS) -> tuple[RouteDisplayGroup, ...]:
+def _display_groups(data: RouteProfileData, max_cards: int = _MAX_PRO_CARDS) -> tuple[RouteDisplayGroup, ...]:
     """Aggregate adjacent route legs into no more than max_cards readable cards."""
 
     n_points = len(data.waypoints)
@@ -130,7 +136,6 @@ def _hazard_tokens_for_indices(data: RouteProfileData, indices: Iterable[int], l
     if not selected:
         return ()
 
-    tokens: list[HazardToken] = []
     points = [data.waypoints[index] for index in selected]
     thunder = any(point.surface.cb_score >= 2 or point.surface.phenomena == "TSRA" for point in points)
     icing = _finite_max(data.icing_score[:, selected]) >= 1
@@ -144,6 +149,7 @@ def _hazard_tokens_for_indices(data: RouteProfileData, indices: Iterable[int], l
     precip = any((point.surface.precip_mm or 0.0) >= 0.2 for point in points)
     cloud = bool(np.any(data.cloud_mask[:, selected])) or any((point.surface.total_cloud_pct or 0.0) >= 60.0 for point in points)
 
+    tokens: list[HazardToken] = []
     for key, active in (
         ("thunder", thunder),
         ("icing", icing),
@@ -187,6 +193,13 @@ def _zone_pressure_center(mask: np.ndarray, start: int, end: int, levels: np.nda
     return float(np.mean(levels[rows]))
 
 
+def _set_hatch_color(contour_set, color: str, linewidth: float = 0.45) -> None:
+    collections = getattr(contour_set, "collections", ())
+    for collection in collections:
+        collection.set_edgecolor(color)
+        collection.set_linewidth(linewidth)
+
+
 def _annotate_zone_runs(
     ax,
     x: np.ndarray,
@@ -196,146 +209,220 @@ def _annotate_zone_runs(
     symbol: str,
     label: str,
     color: str,
+    fill: str = "white",
+    fallback_y: float = 750.0,
     max_labels: int = 4,
 ) -> None:
     point_mask = np.any(np.asarray(mask, dtype=bool), axis=0)
     runs = _mask_runs(point_mask)
-    if not runs:
-        return
     if len(runs) > max_labels:
-        order = sorted(range(len(runs)), key=lambda i: runs[i][1] - runs[i][0], reverse=True)[:max_labels]
-        runs = [runs[index] for index in sorted(order)]
+        runs = sorted(runs, key=lambda item: item[1] - item[0], reverse=True)[:max_labels]
     for start, end in runs:
         center_x = float(np.mean(x[start : end + 1]))
-        center_y = _zone_pressure_center(mask, start, end, levels, 750.0)
+        center_y = _zone_pressure_center(mask, start, end, levels, fallback_y)
         ax.text(
             center_x,
             center_y,
-            f"{symbol} {label}",
+            f"{symbol} {label}" if label else symbol,
             ha="center",
             va="center",
-            fontsize=7.0,
+            fontsize=7.2 if label else 11.0,
             fontweight="bold",
             color=color,
-            zorder=9,
-            bbox={"boxstyle": "round,pad=0.22", "fc": "white", "ec": color, "lw": 0.8, "alpha": 0.90},
+            zorder=10,
+            bbox={"boxstyle": "round,pad=0.20", "fc": fill, "ec": color, "lw": 0.8, "alpha": 0.92},
         )
 
 
 def _draw_temperature_background(ax, data: RouteProfileData, x: np.ndarray, levels: np.ndarray, *, professional: bool):
     cmap, norm = _temperature_cmap_and_norm()
-    image = ax.pcolormesh(
+    return ax.pcolormesh(
         x,
         levels,
         data.temperature_c,
         cmap=cmap,
         norm=norm,
         shading="nearest",
-        alpha=0.28 if professional else 0.34,
+        alpha=0.20 if professional else 0.12,
         zorder=0,
     )
-    return image
 
 
-def _draw_cloud_layer(ax, data: RouteProfileData, x: np.ndarray, levels: np.ndarray) -> None:
+def _draw_cloud_layer(ax, data: RouteProfileData, x: np.ndarray, levels: np.ndarray, *, professional: bool) -> None:
     if not np.any(data.cloud_mask):
         return
     xx, yy = np.meshgrid(x, levels)
     cloud = np.ma.masked_where(~data.cloud_mask, np.ones_like(data.temperature_c))
-    ax.pcolormesh(
+    cloud_set = ax.contourf(
         xx,
         yy,
         cloud,
-        shading="nearest",
-        color=AVIATION.cloud,
-        alpha=0.20,
+        levels=[0.5, 1.5],
+        colors=[AVIATION.cloud_soft],
+        alpha=0.42 if professional else 0.34,
         zorder=2,
     )
+    _set_hatch_color(cloud_set, AVIATION.cloud, 0.25)
+    ax.contour(xx, yy, data.cloud_mask.astype(float), levels=[0.5], colors=[AVIATION.cloud], linewidths=0.55, alpha=0.62, zorder=3)
+    if not professional:
+        _annotate_zone_runs(
+            ax,
+            x,
+            levels,
+            data.cloud_mask,
+            symbol="☁",
+            label="",
+            color=AVIATION.cloud,
+            fill="#F8FAFC",
+            fallback_y=650.0,
+            max_labels=5,
+        )
 
 
-def _draw_hazard_fields(ax, data: RouteProfileData, x: np.ndarray, levels: np.ndarray, *, professional: bool) -> None:
-    xx, yy = np.meshgrid(x, levels)
-
+def _draw_icing_layer(ax, data: RouteProfileData, x: np.ndarray, levels: np.ndarray, *, professional: bool) -> None:
     icing_mask = data.icing_score > 0
-    if np.any(icing_mask):
-        icing = np.ma.masked_where(~icing_mask, data.icing_score)
-        ax.contourf(
+    if not np.any(icing_mask):
+        return
+    xx, yy = np.meshgrid(x, levels)
+    icing = np.ma.masked_where(~icing_mask, data.icing_score)
+    hatch = ["..", "...", "...."] if professional else [None, None, None]
+    if professional:
+        from matplotlib import rc_context
+
+        with rc_context({"hatch.color": AVIATION.icing, "hatch.linewidth": 0.45}):
+            icing_set = ax.contourf(
+                xx,
+                yy,
+                icing,
+                levels=[0.5, 1.5, 2.5, 3.5],
+                colors=[AVIATION.icing_soft] * 3,
+                alpha=0.48,
+                hatches=hatch,
+                zorder=4,
+            )
+    else:
+        icing_set = ax.contourf(
             xx,
             yy,
             icing,
             levels=[0.5, 1.5, 2.5, 3.5],
             colors=[AVIATION.icing_soft] * 3,
-            alpha=0.62,
-            hatches=["..", "...", "...."],
+            alpha=0.42,
             zorder=4,
         )
-        ax.contour(xx, yy, icing_mask.astype(float), levels=[0.5], colors=[AVIATION.icing], linewidths=0.9, zorder=5)
+    _set_hatch_color(icing_set, AVIATION.icing, 0.42)
+    ax.contour(xx, yy, icing_mask.astype(float), levels=[0.5], colors=[AVIATION.icing], linewidths=0.9, zorder=5)
+    if not professional:
+        _annotate_zone_runs(
+            ax,
+            x,
+            levels,
+            icing_mask,
+            symbol="❄",
+            label="ЛЁД",
+            color=AVIATION.icing,
+            fill="white",
+            fallback_y=600.0,
+        )
 
+
+def _draw_turbulence_layer(ax, data: RouteProfileData, x: np.ndarray, levels: np.ndarray, *, professional: bool) -> None:
     turbulence_mask = data.turbulence_score > 0
-    if np.any(turbulence_mask):
-        turbulence = np.ma.masked_where(~turbulence_mask, data.turbulence_score)
-        ax.contourf(
+    if not np.any(turbulence_mask):
+        return
+    xx, yy = np.meshgrid(x, levels)
+    turbulence = np.ma.masked_where(~turbulence_mask, data.turbulence_score)
+    hatch = ["/", "//", "///"] if professional else [None, None, None]
+    if professional:
+        from matplotlib import rc_context
+
+        with rc_context({"hatch.color": AVIATION.turbulence, "hatch.linewidth": 0.45}):
+            turbulence_set = ax.contourf(
+                xx,
+                yy,
+                turbulence,
+                levels=[0.5, 1.5, 2.5, 3.5],
+                colors=[AVIATION.turbulence_soft] * 3,
+                alpha=0.38,
+                hatches=hatch,
+                zorder=4,
+            )
+    else:
+        turbulence_set = ax.contourf(
             xx,
             yy,
             turbulence,
             levels=[0.5, 1.5, 2.5, 3.5],
             colors=[AVIATION.turbulence_soft] * 3,
-            alpha=0.60,
-            hatches=["//", "///", "////"],
+            alpha=0.30,
             zorder=4,
         )
-        ax.contour(xx, yy, turbulence_mask.astype(float), levels=[0.5], colors=[AVIATION.turbulence], linewidths=0.9, zorder=5)
+    _set_hatch_color(turbulence_set, AVIATION.turbulence, 0.48)
+    ax.contour(xx, yy, turbulence_mask.astype(float), levels=[0.5], colors=[AVIATION.turbulence], linewidths=0.9, zorder=5)
+    if not professional:
+        _annotate_zone_runs(
+            ax,
+            x,
+            levels,
+            turbulence_mask,
+            symbol="≈",
+            label="БОЛТ.",
+            color=AVIATION.turbulence,
+            fill="white",
+            fallback_y=820.0,
+        )
 
+
+def _draw_wind_layer(ax, data: RouteProfileData, x: np.ndarray, levels: np.ndarray, *, professional: bool) -> None:
     wind = np.ma.masked_invalid(data.wind_speed_ms)
-    if wind.count():
-        strong = np.ma.masked_where(wind < 20.0, wind)
-        if strong.count():
-            ax.contourf(
-                xx,
-                yy,
-                strong,
-                levels=[20.0, 30.0, 40.0, 80.0],
-                colors=[AVIATION.wind_soft, "#B9D2EE", "#86ACD5"],
-                alpha=0.36,
-                zorder=3,
-            )
-        min_wind = _finite_min(data.wind_speed_ms)
-        max_wind = _finite_max(data.wind_speed_ms)
-        contour_levels = [level for level in (20.0, 30.0, 40.0) if min_wind <= level <= max_wind]
-        if contour_levels:
-            contour = ax.contour(
-                xx,
-                yy,
-                data.wind_speed_ms,
-                levels=contour_levels,
-                colors=[AVIATION.wind] * len(contour_levels),
-                linewidths=[1.15, 1.55, 2.0][: len(contour_levels)],
-                zorder=7,
-            )
-            if professional:
-                ax.clabel(contour, fmt=lambda value: f"V{value:.0f}", fontsize=6.0, inline=True, inline_spacing=8)
+    if not wind.count():
+        return
+    xx, yy = np.meshgrid(x, levels)
+    strong = np.ma.masked_where(wind < 20.0, wind)
+    if strong.count():
+        ax.contourf(
+            xx,
+            yy,
+            strong,
+            levels=[20.0, 30.0, 40.0, 80.0],
+            colors=[AVIATION.wind_soft, "#BDD6F0", "#94B6DE"],
+            alpha=0.30 if professional else 0.24,
+            zorder=3,
+        )
+
+    min_wind = _finite_min(data.wind_speed_ms)
+    max_wind = _finite_max(data.wind_speed_ms)
+    contour_levels = [level for level in (20.0, 30.0, 40.0) if min_wind <= level <= max_wind]
+    if professional and contour_levels:
+        contour = ax.contour(
+            xx,
+            yy,
+            data.wind_speed_ms,
+            levels=contour_levels,
+            colors=[AVIATION.wind] * len(contour_levels),
+            linewidths=[0.95, 1.25, 1.65][: len(contour_levels)],
+            zorder=7,
+        )
+        ax.clabel(contour, fmt=lambda value: f"V{value:.0f} м/с", fontsize=5.8, inline=True, inline_spacing=8)
 
     if not professional:
-        _annotate_zone_runs(ax, x, levels, icing_mask, symbol="❄", label="ЛЁД", color=AVIATION.icing)
-        _annotate_zone_runs(ax, x, levels, turbulence_mask, symbol="≈", label="БОЛТ.", color=AVIATION.turbulence)
         strong_point_mask = np.any(data.wind_speed_ms >= 20.0, axis=0)
         for start, end in _mask_runs(strong_point_mask)[:4]:
             center_x = float(np.mean(x[start : end + 1]))
             local = data.wind_speed_ms[:, start : end + 1]
-            max_knots = _finite_max(local) * 1.94384
             local_mask = local >= 20.0
             center_y = _zone_pressure_center(local_mask, 0, local_mask.shape[1] - 1, levels, 650.0)
             ax.text(
                 center_x,
                 center_y,
-                f"➤ {max_knots:.0f} уз",
+                f"➤ {format_wind_speed_ms(_finite_max(local))}",
                 ha="center",
                 va="center",
                 fontsize=7.0,
                 fontweight="bold",
                 color="white",
-                zorder=10,
-                bbox={"boxstyle": "round,pad=0.22", "fc": AVIATION.wind, "ec": AVIATION.wind_extreme, "lw": 0.8, "alpha": 0.94},
+                zorder=11,
+                bbox={"boxstyle": "round,pad=0.22", "fc": AVIATION.wind, "ec": AVIATION.wind_extreme, "lw": 0.8, "alpha": 0.95},
             )
 
 
@@ -343,19 +430,18 @@ def _draw_professional_guides(ax, data: RouteProfileData, x: np.ndarray, levels:
     xx, yy = np.meshgrid(x, levels)
     finite_temp = data.temperature_c[np.isfinite(data.temperature_c)]
     if finite_temp.size:
-        colors = {0.0: METEO.freezing, -10.0: METEO.minus10, -20.0: METEO.minus20}
-        available = [level for level in (0.0, -10.0, -20.0) if float(np.min(finite_temp)) <= level <= float(np.max(finite_temp))]
-        if available:
+        available = [level for level in (-20.0, -10.0, 0.0) if float(np.min(finite_temp)) <= level <= float(np.max(finite_temp))]
+        for level in available:
             contour = ax.contour(
                 xx,
                 yy,
                 data.temperature_c,
-                levels=sorted(available),
-                colors=[colors[level] for level in sorted(available)],
-                linewidths=0.85,
-                zorder=6,
+                levels=[level],
+                colors=[_ISOTHERM_COLORS[level]],
+                linewidths=1.25 if level == 0.0 else 0.95,
+                zorder=8,
             )
-            ax.clabel(contour, fmt=lambda value: f"{value:.0f}°", fontsize=6.0, inline=True, inline_spacing=8)
+            ax.clabel(contour, fmt={level: f"{level:.0f}°"}, fontsize=6.2, inline=True, inline_spacing=10)
 
     finite_rh = data.humidity_pct[np.isfinite(data.humidity_pct)]
     rh_levels = [level for level in (80.0, 90.0) if finite_rh.size and float(np.min(finite_rh)) <= level <= float(np.max(finite_rh))]
@@ -365,12 +451,12 @@ def _draw_professional_guides(ax, data: RouteProfileData, x: np.ndarray, levels:
             yy,
             data.humidity_pct,
             levels=rh_levels,
-            colors=[METEO.humidity] * len(rh_levels),
-            linewidths=0.60,
+            colors=["#4F86B7"] * len(rh_levels),
+            linewidths=0.65,
             linestyles="dashed",
             zorder=6,
         )
-        ax.clabel(contour, fmt=lambda value: f"RH {value:.0f}%", fontsize=5.6, inline=True, inline_spacing=9)
+        ax.clabel(contour, fmt=lambda value: f"RH {value:.0f}%", fontsize=5.7, inline=True, inline_spacing=10)
 
     point_step = 1 if len(x) <= 10 else 2
     level_step = 2
@@ -386,8 +472,8 @@ def _draw_professional_guides(ax, data: RouteProfileData, x: np.ndarray, levels:
             length=4.3,
             linewidth=0.42,
             color=AVIATION.wind_extreme,
-            alpha=0.72,
-            zorder=8,
+            alpha=0.75,
+            zorder=9,
         )
 
 
@@ -399,8 +485,7 @@ def _draw_surface_symbols(ax, data: RouteProfileData, x: np.ndarray, *, professi
         (thunder_mask, "⚡", "ГРОЗА", AVIATION.convection, 960.0),
         (precip_mask, "●", "ОСАДКИ", "#3F73B8", 975.0),
     ):
-        runs = _mask_runs(mask)
-        for start, end in runs[:4]:
+        for start, end in _mask_runs(mask)[:4]:
             center_x = float(np.mean(x[start : end + 1]))
             text = f"{symbol} {label}" if professional else symbol
             ax.text(
@@ -412,74 +497,81 @@ def _draw_surface_symbols(ax, data: RouteProfileData, x: np.ndarray, *, professi
                 fontsize=8.0 if professional else 12.0,
                 fontweight="bold",
                 color=color,
-                zorder=10,
-                bbox={"boxstyle": "round,pad=0.20", "fc": "white", "ec": color, "lw": 0.8, "alpha": 0.90},
+                zorder=12,
+                bbox={"boxstyle": "round,pad=0.20", "fc": "white", "ec": color, "lw": 0.8, "alpha": 0.92},
             )
 
 
 def _draw_legend_band(ax, image, *, professional: bool) -> None:
-    from matplotlib.patches import FancyBboxPatch, Rectangle
+    from matplotlib.lines import Line2D
+    from matplotlib.patches import FancyBboxPatch, Patch
 
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
     ax.axis("off")
-    panel = FancyBboxPatch(
-        (0.002, 0.05),
-        0.996,
-        0.90,
-        transform=ax.transAxes,
-        boxstyle="round,pad=0.008,rounding_size=0.02",
-        facecolor="#F8FAFC",
-        edgecolor="#CAD6E2",
-        linewidth=0.8,
+    ax.add_patch(
+        FancyBboxPatch(
+            (0.002, 0.05),
+            0.996,
+            0.90,
+            transform=ax.transAxes,
+            boxstyle="round,pad=0.008,rounding_size=0.02",
+            facecolor="#F8FAFC",
+            edgecolor="#CAD6E2",
+            linewidth=0.8,
+        )
     )
-    ax.add_patch(panel)
 
     cax = ax.inset_axes([0.018, 0.28, 0.15, 0.42])
     colorbar = ax.figure.colorbar(image, cax=cax, orientation="horizontal")
-    colorbar.set_label("Фон: температура, °C", fontsize=6.8, labelpad=2)
+    colorbar.set_label("фон: температура, °C", fontsize=6.7, labelpad=2)
     colorbar.ax.tick_params(labelsize=6, pad=1)
     colorbar.outline.set_edgecolor("#AAB8C6")
     colorbar.outline.set_linewidth(0.6)
 
-    items = [
-        ("icing", "❄", "обледенение", AVIATION.icing, AVIATION.icing_soft, ".."),
-        ("turbulence", "≈", "болтанка", AVIATION.turbulence, AVIATION.turbulence_soft, "//"),
-        ("wind", "➤", "сильный ветер", AVIATION.wind, AVIATION.wind_soft, None),
-        ("thunder", "⚡", "гроза / конвекция", AVIATION.convection, AVIATION.convection_soft, None),
-        ("cloud", "☁", "облачность", AVIATION.cloud, AVIATION.cloud_soft, None),
+    handles = [
+        Patch(facecolor=AVIATION.cloud_soft, edgecolor=AVIATION.cloud, label="☁ облачность"),
+        Patch(facecolor=AVIATION.icing_soft, edgecolor=AVIATION.icing, hatch=".." if professional else None, label="❄ обледенение"),
+        Patch(facecolor=AVIATION.turbulence_soft, edgecolor=AVIATION.turbulence, hatch="//" if professional else None, label="≈ болтанка"),
+        Patch(facecolor=AVIATION.wind_soft, edgecolor=AVIATION.wind, label="➤ сильный ветер"),
+        Patch(facecolor=AVIATION.convection_soft, edgecolor=AVIATION.convection, label="⚡ гроза / конвекция"),
     ]
     if professional:
-        items.extend(
+        handles.extend(
             [
-                ("rh", "--", "RH 80/90%", METEO.humidity, "#F8FAFC", None),
-                ("temp", "—", "изотермы 0/-10/-20°", METEO.minus10, "#F8FAFC", None),
+                Line2D([0], [0], color="#D32F2F", linewidth=1.3, label="изотермы 0/-10/-20°"),
+                Line2D([0], [0], color="#4F86B7", linewidth=0.9, linestyle="--", label="RH 80/90%"),
+                Line2D([0], [0], color=AVIATION.wind, linewidth=1.2, label="V20/30/40 м/с + барбы"),
             ]
         )
+    ax.legend(
+        handles=handles,
+        loc="center left",
+        bbox_to_anchor=(0.19, 0.50),
+        ncol=4 if professional else 5,
+        fontsize=7.0,
+        frameon=False,
+        handlelength=2.6,
+        columnspacing=1.25,
+    )
 
-    start_x = 0.205
-    columns = 4
-    cell_w = (0.98 - start_x) / columns
-    for index, (_, symbol, label, color, fill, hatch) in enumerate(items):
-        row = index // columns
-        column = index % columns
-        x0 = start_x + column * cell_w
-        y0 = 0.66 - row * 0.40
-        if symbol in {"--", "—"}:
-            ax.plot([x0, x0 + 0.035], [y0, y0], transform=ax.transAxes, color=color, linewidth=1.4, linestyle="--" if symbol == "--" else "-")
-        else:
-            patch = Rectangle((x0, y0 - 0.10), 0.034, 0.20, transform=ax.transAxes, facecolor=fill, edgecolor=color, linewidth=0.8, hatch=hatch)
-            ax.add_patch(patch)
-            ax.text(x0 + 0.017, y0, symbol, transform=ax.transAxes, ha="center", va="center", fontsize=8.5, color=color, fontweight="bold")
-        ax.text(x0 + 0.043, y0, label, transform=ax.transAxes, ha="left", va="center", fontsize=6.9, color=METEO.axis_text)
+
+def _draw_token_row(ax, group: RouteDisplayGroup, tokens: tuple[HazardToken, ...], *, y: float, fontsize: float) -> None:
+    if not tokens:
+        ax.text(group.center_km, y, "✓", ha="center", va="center", fontsize=fontsize, color=AVIATION.safe, fontweight="bold")
+        return
+    width = max(1.0, group.end_km - group.start_km)
+    for index, token in enumerate(tokens):
+        x_value = group.start_km + width * (index + 1) / (len(tokens) + 1)
+        ax.text(x_value, y, token.symbol, ha="center", va="center", fontsize=fontsize, color=token.color, fontweight="bold")
 
 
 def _draw_route_cards(ax, data: RouteProfileData, *, professional: bool) -> None:
-    groups = _display_groups(data)
+    groups = _display_groups(data, max_cards=_MAX_PRO_CARDS if professional else _MAX_SIMPLE_CARDS)
     ax.set_xlim(0.0, max(1.0, data.total_distance_km))
     ax.set_ylim(0.0, 1.0)
     ax.axis("off")
-    ax.set_title("Оценка маршрута по участкам", loc="left", fontsize=9.2, fontweight="bold", pad=6)
+    ax.set_title("Профессиональная сводка участков" if professional else "Понятная оценка участков", loc="left", fontsize=9.3, fontweight="bold", pad=6)
 
     for group in groups:
         score = _group_risk(data, group)
@@ -500,10 +592,18 @@ def _draw_route_cards(ax, data: RouteProfileData, *, professional: bool) -> None
         status = risk_label(score)
         if status == "ВЫСОКИЙ РИСК":
             status = "ВЫСОКИЙ\nРИСК"
-        ax.text(group.center_km, 0.69 if professional else 0.66, status, ha="center", va="center", fontsize=7.1 if professional else 7.5, fontweight="bold", color=risk_color(score), linespacing=0.9)
-        icon_text = "  ".join(token.symbol for token in tokens) or "✓"
-        icon_color = tokens[0].color if tokens else AVIATION.safe
-        ax.text(group.center_km, 0.48 if professional else 0.42, icon_text, ha="center", va="center", fontsize=10.0 if professional else 12.0, fontweight="bold", color=icon_color)
+        ax.text(
+            group.center_km,
+            0.71 if professional else 0.67,
+            status,
+            ha="center",
+            va="center",
+            fontsize=7.2 if professional else 8.0,
+            fontweight="bold",
+            color=risk_color(score),
+            linespacing=0.9,
+        )
+        _draw_token_row(ax, group, tokens, y=0.50 if professional else 0.42, fontsize=9.5 if professional else 12.0)
 
         if professional:
             indices = group.point_indices
@@ -515,19 +615,13 @@ def _draw_route_cards(ax, data: RouteProfileData, *, professional: bool) -> None
             ceiling = min(ceiling_values) if ceiling_values else None
             line1 = f"Vmax {vmax:.0f} м/с · P {precip:.1f} мм"
             line2 = f"VIS {'—' if vis is None else f'{vis:.0f} км'} · ВНГО {'—' if ceiling is None else f'{ceiling:.0f} м'}"
-            ax.text(group.center_km, 0.29, line1 + "\n" + line2, ha="center", va="center", fontsize=5.5, color=METEO.muted_text, linespacing=1.12)
+            ax.text(group.center_km, 0.30, line1 + "\n" + line2, ha="center", va="center", fontsize=5.5, color=METEO.muted_text, linespacing=1.12)
             time_y = 0.08
         else:
-            time_y = 0.13
-        ax.text(
-            group.center_km,
-            time_y,
-            f"+{start_point.lead_hour} ч · {start_point.valid_time_utc:%d.%m %H}Z",
-            ha="center",
-            va="center",
-            fontsize=6.0,
-            color=METEO.axis_text,
-        )
+            summary = " · ".join(token.label for token in tokens[:2]) if tokens else "значимых рисков нет"
+            ax.text(group.center_km, 0.25, summary, ha="center", va="center", fontsize=5.9, color=METEO.muted_text)
+            time_y = 0.09
+        ax.text(group.center_km, time_y, f"+{start_point.lead_hour} ч · {start_point.valid_time_utc:%d.%m %H}Z", ha="center", va="center", fontsize=6.0, color=METEO.axis_text)
 
     ax.text(0.5, -0.08, "Расстояние по маршруту · срок и UTC-время в начале участка", transform=ax.transAxes, ha="center", va="top", fontsize=8.0, color=METEO.axis_text)
 
@@ -573,25 +667,27 @@ def write_route_profile_png(data: RouteProfileData) -> Path:
     fig = None
     try:
         fig_width = max(14.0, min(22.0, 10.0 + len(x) * 0.58))
-        fig_height = 10.2 if professional else 9.0
+        fig_height = 10.4 if professional else 8.8
         fig = plt.figure(figsize=(fig_width, fig_height), facecolor=METEO.figure_bg)
         grid = fig.add_gridspec(
             3,
             1,
-            height_ratios=[5.4, 0.72, 1.85 if professional else 1.55],
+            height_ratios=[5.5, 0.72, 1.95 if professional else 1.55],
             left=0.065,
             right=0.985,
             top=0.855,
             bottom=0.075,
-            hspace=0.19,
+            hspace=0.18,
         )
         ax = fig.add_subplot(grid[0])
         legend_ax = fig.add_subplot(grid[1])
         cards_ax = fig.add_subplot(grid[2])
 
         image = _draw_temperature_background(ax, data, x, levels, professional=professional)
-        _draw_cloud_layer(ax, data, x, levels)
-        _draw_hazard_fields(ax, data, x, levels, professional=professional)
+        _draw_cloud_layer(ax, data, x, levels, professional=professional)
+        _draw_wind_layer(ax, data, x, levels, professional=professional)
+        _draw_icing_layer(ax, data, x, levels, professional=professional)
+        _draw_turbulence_layer(ax, data, x, levels, professional=professional)
         if professional:
             _draw_professional_guides(ax, data, x, levels)
         _draw_surface_symbols(ax, data, x, professional=professional)
@@ -600,7 +696,13 @@ def write_route_profile_png(data: RouteProfileData) -> Path:
         ax.set_xlim(0.0, max(1.0, data.total_distance_km))
         _set_axis_ticks(ax, data, levels, x, professional=professional)
         style_axis(ax, grid=True)
-        ax.set_title("Вертикальный профиль по маршруту (1000–500 гПа)", loc="left", fontsize=10.0, fontweight="bold", pad=8)
+        ax.set_title(
+            "Профессиональный вертикальный разрез: T / RH / ветер / риски" if professional else "Простой разрез: где облака и опасные зоны",
+            loc="left",
+            fontsize=10.2,
+            fontweight="bold",
+            pad=8,
+        )
 
         origin = _short_label(data.origin.label)
         destination = _short_label(data.destination.label)

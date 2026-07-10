@@ -11,8 +11,13 @@ from cloudgram_product import CloudgramCell
 from geocode import GeoPoint
 from gfs_core import GfsRun
 from route_profile import ROUTE_LEVELS_HPA, RouteProfileData, RouteWaypoint
-from route_profile_metric_units import format_wind_speed_ms
-from route_profile_plot import _display_groups, _hazard_tokens_for_indices, write_route_profile_png
+from route_profile_plot import (
+    _ISOTHERM_COLORS,
+    _display_groups,
+    _hazard_tokens_for_indices,
+    format_wind_speed_ms,
+    write_route_profile_png,
+)
 from telegram_file_send import _png_dimensions
 
 
@@ -130,13 +135,24 @@ class RouteProfilePlotTests(unittest.TestCase):
         self.assertEqual(format_wind_speed_ms(25.4), "25 м/с")
         self.assertNotIn("уз", format_wind_speed_ms(25.4))
 
+    def test_professional_isotherms_are_red(self) -> None:
+        self.assertEqual(set(_ISOTHERM_COLORS), {0.0, -10.0, -20.0})
+        for color in _ISOTHERM_COLORS.values():
+            red = int(color[1:3], 16)
+            green = int(color[3:5], 16)
+            blue = int(color[5:7], 16)
+            self.assertGreater(red, green)
+            self.assertGreater(red, blue)
+
     def test_simple_and_professional_png_are_telegram_safe(self) -> None:
         paths: list[Path] = []
+        sizes: dict[str, int] = {}
         try:
             for mode in ("simple", "pro"):
                 path = write_route_profile_png(self._sample_data(mode))
                 paths.append(path)
                 payload = path.read_bytes()
+                sizes[mode] = len(payload)
                 self.assertGreater(len(payload), 10_000)
                 dimensions = _png_dimensions(payload)
                 self.assertIsNotNone(dimensions)
@@ -144,6 +160,7 @@ class RouteProfilePlotTests(unittest.TestCase):
                 self.assertGreater(width, height)
                 self.assertLessEqual(width + height, 10_000)
                 self.assertLessEqual(max(width, height) / min(width, height), 20.0)
+            self.assertNotEqual(sizes["simple"], sizes["pro"])
         finally:
             for path in paths:
                 path.unlink(missing_ok=True)
