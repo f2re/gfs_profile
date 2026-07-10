@@ -21,6 +21,7 @@ REQUIRED_MODULES = (
 
 OPTIONAL_RUNTIME_MODULES = (
     "plot_style",
+    "aviation_style",
     "profile_plot_ru",
     "gfs_subset",
     "aero_plot",
@@ -30,6 +31,8 @@ OPTIONAL_RUNTIME_MODULES = (
     "cloudgram_product",
     "cloudgram_plot",
     "weather_diagnostics",
+    "route_profile",
+    "route_profile_plot",
     "basemap_cache",
     "prepare_basemap_cache",
     "debug_map_overlay",
@@ -43,6 +46,8 @@ OPTIONAL_RUNTIME_MODULES = (
     "telegram_windgram",
     "telegram_cloudgram",
     "telegram_map",
+    "telegram_route",
+    "telegram_bot_core",
     "telegram_bot",
 )
 
@@ -68,7 +73,7 @@ def main() -> int:
     import matplotlib
 
     matplotlib.use("Agg", force=True)
-    print("Runtime check OK: dependencies, command definitions, map/cloudgram, wizard and bot modules import successfully")
+    print("Runtime check OK: dependencies, command definitions, route/map/cloudgram, wizard and bot modules import successfully")
     return 0
 
 

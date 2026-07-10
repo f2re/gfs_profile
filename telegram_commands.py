@@ -6,6 +6,7 @@ BOT_COMMANDS: tuple[BotCommand, ...] = (
     BotCommand("start", "🚀 Старт и геолокация"),
     BotCommand("help", "❓ Помощь и примеры"),
     BotCommand("profile", "📈 Профиль GFS"),
+    BotCommand("route", "✈️ Профиль по маршруту"),
     BotCommand("aero", "🧾 Аэродиаграмма"),
     BotCommand("skewt", "📉 Быстрая Skew-T"),
     BotCommand("windgram", "🟦 Срок×уровень V/T/RH"),
