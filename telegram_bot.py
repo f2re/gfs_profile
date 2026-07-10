@@ -14,6 +14,9 @@ try:
 finally:
     __name__ = _ENTRYPOINT_MODULE_NAME
 
+# Apply the simple-mode visual policy before telegram_route imports the renderer.
+# This fills cloud, icing and turbulence contours with repeated symbols.
+import route_profile_simple_overlay  # noqa: F401,E402
 from telegram_route import register_route_handlers
 
 _core_build_application = build_application
