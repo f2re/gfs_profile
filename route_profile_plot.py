@@ -46,12 +46,18 @@ def _draw_risk_strip(ax, data: RouteProfileData, *, show_details: bool) -> None:
         edges = np.concatenate(([x[0] - (mids[0] - x[0])], mids, [x[-1] + (x[-1] - mids[-1])]))
     for index, point in enumerate(data.waypoints):
         ax.axvspan(edges[index], edges[index + 1], color=risk_color(point.risk_score, soft=True), alpha=1.0, ec="#FFFFFF", lw=1.0)
-        ax.text(point.distance_km, 0.62, risk_label(point.risk_score, short=True), ha="center", va="center", fontsize=7.5, fontweight="bold", color=risk_color(point.risk_score))
+        ax.text(point.distance_km, 0.80 if show_details else 0.62, risk_label(point.risk_score, short=True), ha="center", va="center", fontsize=7.5, fontweight="bold", color=risk_color(point.risk_score))
         if show_details:
             phenomena = point.surface.phenomena if point.surface.phenomena != "—" else "без явлений"
             vis = "—" if point.surface.visibility_km is None else f"VIS {point.surface.visibility_km:.0f}км"
             ceil = "—" if point.surface.ceiling_m is None else f"ВНГО {point.surface.ceiling_m:.0f}м"
-            ax.text(point.distance_km, 0.25, f"{phenomena}\n{vis} · {ceil}", ha="center", va="center", fontsize=6.3, color=METEO.muted_text)
+            low = "—" if point.surface.low_cloud_pct is None else f"{point.surface.low_cloud_pct:.0f}"
+            mid = "—" if point.surface.mid_cloud_pct is None else f"{point.surface.mid_cloud_pct:.0f}"
+            high = "—" if point.surface.high_cloud_pct is None else f"{point.surface.high_cloud_pct:.0f}"
+            precip = "—" if point.surface.precip_mm is None else f"{point.surface.precip_mm:.1f}мм"
+            cape = "—" if point.surface.cape_jkg is None else f"{point.surface.cape_jkg:.0f}"
+            details = f"{phenomena} · P {precip}\nCLD L/M/H {low}/{mid}/{high}%\n{vis} · {ceil}\nCAPE {cape} · CB {point.surface.cb_score}"
+            ax.text(point.distance_km, 0.34, details, ha="center", va="center", fontsize=5.8, linespacing=1.05, color=METEO.muted_text)
     ax.set_ylim(0, 1)
     ax.set_yticks([])
     ax.set_xlim(edges[0], edges[-1])
@@ -75,6 +81,23 @@ def _draw_overlays(ax, data: RouteProfileData, x: np.ndarray, y: np.ndarray, *, 
         ax.contourf(xx, yy, turbulence, levels=[0.5, 1.5, 2.5, 3.5], colors=[AVIATION.turbulence] * 3, alpha=0.10, hatches=["xx", "xxx", "xxxx"])
 
     if professional:
+        finite_temp = np.isfinite(data.temperature_c)
+        if finite_temp.any():
+            for level, color in ((0.0, METEO.freezing), (-10.0, METEO.minus10), (-20.0, METEO.minus20)):
+                if float(np.nanmin(data.temperature_c)) <= level <= float(np.nanmax(data.temperature_c)):
+                    contour = ax.contour(xx, yy, data.temperature_c, levels=[level], colors=[color], linewidths=0.9)
+                    ax.clabel(contour, fmt={level: f"{level:.0f}°"}, fontsize=6, inline=True)
+        finite_rh = data.humidity_pct[np.isfinite(data.humidity_pct)]
+        rh_levels = [level for level in (80.0, 90.0) if finite_rh.size and float(np.min(finite_rh)) <= level <= float(np.max(finite_rh))]
+        if rh_levels:
+            rh_contour = ax.contour(xx, yy, data.humidity_pct, levels=rh_levels, colors=[METEO.humidity], linewidths=0.55, linestyles="dotted")
+            ax.clabel(rh_contour, fmt=lambda value: f"RH{value:.0f}", fontsize=5.6, inline=True)
+        finite_wind = data.wind_speed_ms[np.isfinite(data.wind_speed_ms)]
+        wind_levels = [level for level in (10.0, 20.0, 30.0) if finite_wind.size and float(np.min(finite_wind)) <= level <= float(np.max(finite_wind))]
+        if wind_levels:
+            wind_contour = ax.contour(xx, yy, data.wind_speed_ms, levels=wind_levels, colors=[AVIATION.wind], linewidths=0.55, linestyles="dashed")
+            ax.clabel(wind_contour, fmt=lambda value: f"V{value:.0f}", fontsize=5.6, inline=True)
+
         step = 1 if len(x) <= 10 else 2
         level_step = 2
         u = data.u_wind_ms[::level_step, ::step]
@@ -105,9 +128,9 @@ def write_route_profile_png(data: RouteProfileData) -> Path:
     try:
         professional = data.mode == "pro"
         fig_width = max(12.5, min(21.0, 8.0 + len(x) * 0.55))
-        fig_height = 10.0 if professional else 8.6
+        fig_height = 11.0 if professional else 8.6
         fig = plt.figure(figsize=(fig_width, fig_height), facecolor=METEO.figure_bg)
-        grid = fig.add_gridspec(2, 1, height_ratios=[5.2, 1.15 if professional else 1.45], hspace=0.16)
+        grid = fig.add_gridspec(2, 1, height_ratios=[5.2, 1.75 if professional else 1.45], hspace=0.16)
         ax = fig.add_subplot(grid[0])
         strip = fig.add_subplot(grid[1], sharex=ax)
 
@@ -142,7 +165,7 @@ def write_route_profile_png(data: RouteProfileData) -> Path:
             Patch(facecolor="none", edgecolor=AVIATION.turbulence, hatch="xxx", label="сдвиг ветра / турбулентность"),
         ]
         if professional:
-            legend_items.append(Patch(facecolor=AVIATION.wind, edgecolor=AVIATION.wind, label="ветер: барбы, м/с"))
+            legend_items.append(Patch(facecolor=AVIATION.wind, edgecolor=AVIATION.wind, label="ветер: барбы и изолинии V10/20/30 м/с"))
         ax.legend(handles=legend_items, loc="upper right", fontsize=7.5, ncol=2 if professional else 1)
 
         _draw_risk_strip(strip, data, show_details=professional)
