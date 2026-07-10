@@ -14,6 +14,9 @@ try:
 finally:
     __name__ = _ENTRYPOINT_MODULE_NAME
 
+# Route speed is shown in km/h, atmospheric wind in m/s. Import before
+# telegram_route so its renderer uses the metric drawing hook.
+import route_profile_metric_units  # noqa: F401,E402
 from telegram_route import register_route_handlers
 
 _core_build_application = build_application
