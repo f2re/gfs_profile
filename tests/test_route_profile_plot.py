@@ -11,6 +11,7 @@ from cloudgram_product import CloudgramCell
 from geocode import GeoPoint
 from gfs_core import GfsRun
 from route_profile import ROUTE_LEVELS_HPA, RouteProfileData, RouteWaypoint
+from route_profile_metric_units import format_wind_speed_ms
 from route_profile_plot import _display_groups, _hazard_tokens_for_indices, write_route_profile_png
 from telegram_file_send import _png_dimensions
 
@@ -124,6 +125,10 @@ class RouteProfilePlotTests(unittest.TestCase):
         self.assertIn("icing", keys)
         self.assertIn("turbulence", keys)
         self.assertIn("wind", keys)
+
+    def test_wind_speed_label_uses_si_units(self) -> None:
+        self.assertEqual(format_wind_speed_ms(25.4), "25 м/с")
+        self.assertNotIn("уз", format_wind_speed_ms(25.4))
 
     def test_simple_and_professional_png_are_telegram_safe(self) -> None:
         paths: list[Path] = []
