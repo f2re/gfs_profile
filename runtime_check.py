@@ -33,6 +33,7 @@ OPTIONAL_RUNTIME_MODULES = (
     "weather_diagnostics",
     "route_profile",
     "route_profile_plot",
+    "route_profile_metric_units",
     "basemap_cache",
     "prepare_basemap_cache",
     "debug_map_overlay",
