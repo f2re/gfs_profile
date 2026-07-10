@@ -1,29 +1,37 @@
 from __future__ import annotations
 
-# Composition entrypoint: the existing single-process bot implementation remains
-# in telegram_bot_core.py; optional products are registered here.
-import telegram_bot_core as _core
+# Keep the established telegram_bot module namespace intact for existing tests,
+# monkeypatches and deploy entrypoints, while moving the previous implementation
+# to a stable source file and composing optional products here.
+from pathlib import Path
 
-for _name in dir(_core):
-    if not _name.startswith("__"):
-        globals()[_name] = getattr(_core, _name)
+_ENTRYPOINT_MODULE_NAME = __name__
+_CORE_PATH = Path(__file__).with_name("telegram_bot_core.py")
+
+try:
+    __name__ = "telegram_bot_embedded_core"
+    exec(compile(_CORE_PATH.read_text(encoding="utf-8"), str(_CORE_PATH), "exec"), globals(), globals())
+finally:
+    __name__ = _ENTRYPOINT_MODULE_NAME
 
 from telegram_route import register_route_handlers
 
+_core_build_application = build_application
+
 
 def build_application():
-    application = _core.build_application()
+    application = _core_build_application()
     register_route_handlers(
         application,
-        gfs_semaphore=_core.GFS_SEMAPHORE,
-        geocode_semaphore=_core.GEOCODE_SEMAPHORE,
+        gfs_semaphore=GFS_SEMAPHORE,
+        geocode_semaphore=GEOCODE_SEMAPHORE,
     )
     return application
 
 
 def main() -> None:
-    build_application().run_polling(allowed_updates=_core.Update.ALL_TYPES)
+    build_application().run_polling(allowed_updates=Update.ALL_TYPES)
 
 
-if __name__ == "__main__":
+if _ENTRYPOINT_MODULE_NAME == "__main__":
     main()
