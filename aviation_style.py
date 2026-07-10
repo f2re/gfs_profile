@@ -6,19 +6,24 @@ from dataclasses import dataclass
 @dataclass(frozen=True)
 class AviationColors:
     safe: str = "#2E7D32"
-    safe_soft: str = "#DFF3E3"
-    caution: str = "#D6A800"
-    caution_soft: str = "#FFF2C2"
-    restricted: str = "#EA580C"
-    restricted_soft: str = "#FFE1CC"
+    safe_soft: str = "#E8F5E9"
+    caution: str = "#B77900"
+    caution_soft: str = "#FFF7D6"
+    restricted: str = "#D95F02"
+    restricted_soft: str = "#FFF0DF"
     high_risk: str = "#B91C1C"
-    high_risk_soft: str = "#FAD7D7"
-    cloud: str = "#8AA4B8"
-    cloud_soft: str = "#DCE7EF"
-    icing: str = "#16A6C9"
-    turbulence: str = "#F59E0B"
+    high_risk_soft: str = "#FDE8E8"
+    cloud: str = "#71879A"
+    cloud_soft: str = "#DDE5EC"
+    icing: str = "#1976D2"
+    icing_soft: str = "#DDEEFF"
+    turbulence: str = "#EF7D00"
+    turbulence_soft: str = "#FFF0D7"
     convection: str = "#7C3AED"
-    wind: str = "#27364A"
+    convection_soft: str = "#EEE5FF"
+    wind: str = "#173B67"
+    wind_soft: str = "#DCE9F7"
+    wind_extreme: str = "#0B2342"
     route: str = "#1F5D99"
     route_muted: str = "#73859A"
 
@@ -26,8 +31,8 @@ class AviationColors:
 AVIATION = AviationColors()
 RISK_COLORS = (AVIATION.safe, AVIATION.caution, AVIATION.restricted, AVIATION.high_risk)
 RISK_SOFT_COLORS = (AVIATION.safe_soft, AVIATION.caution_soft, AVIATION.restricted_soft, AVIATION.high_risk_soft)
-RISK_LABELS = ("МОЖНО ПО МОДЕЛИ", "ОСТОРОЖНО", "С ОГРАНИЧЕНИЯМИ", "НЕ РЕКОМЕНДУЕТСЯ")
-RISK_SHORT_LABELS = ("можно", "осторожно", "ограничения", "высокий риск")
+RISK_LABELS = ("СПОКОЙНО", "ВНИМАНИЕ", "СЛОЖНО", "ВЫСОКИЙ РИСК")
+RISK_SHORT_LABELS = ("спокойно", "внимание", "сложно", "высокий риск")
 
 
 def risk_color(score: int, *, soft: bool = False) -> str:
