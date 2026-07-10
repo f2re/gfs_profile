@@ -14,8 +14,10 @@ try:
 finally:
     __name__ = _ENTRYPOINT_MODULE_NAME
 
-# Apply the simple-mode visual policy before telegram_route imports the renderer.
-# This fills cloud, icing and turbulence contours with repeated symbols.
+# Apply the domain contract before telegram_route imports route functions:
+# same risk fields/card boundaries in simple/pro and route points every ~25 km.
+import route_profile_contract  # noqa: F401,E402
+# Then add repeated symbols inside simple-mode cloud/icing/turbulence zones.
 import route_profile_simple_overlay  # noqa: F401,E402
 from telegram_route import register_route_handlers
 
