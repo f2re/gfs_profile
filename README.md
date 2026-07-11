@@ -5,6 +5,7 @@ Telegram-бот и веб-интерфейс для модельных верт�
 ## Что умеет
 
 - 📍 Точка по координатам, городу или Telegram-геолокации.
+- 🇷🇺 DaData Suggestions — основной геокодер; локальный справочник и Nominatim — резерв.
 - ⏱️ Сроки GFS до `+384 ч` для профильных продуктов.
 - 🔄 Progress: публикация файла, загрузка GRIB2, чтение `cfgrib/eccodes`, построение PNG/CSV.
 - ⚡ NOMADS GRIB Filter: скачивается subset, а не глобальный GRIB.
@@ -19,21 +20,41 @@ Telegram-бот и веб-интерфейс для модельных верт�
 
 ## Быстрая установка
 
+Интерактивно:
+
 ```bash
 bash install_telegram_bot.sh
 ```
 
-Автоматически:
+Установщик запросит:
+
+```text
+TELEGRAM_BOT_TOKEN
+DADATA_API_KEY
+```
+
+Для DaData Suggestions нужен только **API-ключ**. `Secret Key` не требуется.
+
+Неинтерактивно:
 
 ```bash
-TELEGRAM_BOT_TOKEN='<BOT_TOKEN>' TELEGRAM_ADMIN_IDS='<TELEGRAM_USER_ID>' bash install_telegram_bot.sh --yes
+TELEGRAM_BOT_TOKEN='<BOT_TOKEN>' \
+DADATA_API_KEY='<DADATA_API_KEY>' \
+TELEGRAM_ADMIN_IDS='<TELEGRAM_USER_ID>' \
+bash install_telegram_bot.sh --yes
 ```
 
 Обновление после `git pull`:
 
 ```bash
 git pull
-bash deploy_telegram_bot.sh --yes
+bash deploy_telegram_bot.sh
+```
+
+Если старая установка ещё не содержит `DADATA_API_KEY`, интерактивный deploy запросит его и запишет в `/opt/gfs_profile/.env`. Для `--yes` передайте ключ через окружение:
+
+```bash
+DADATA_API_KEY='<DADATA_API_KEY>' bash deploy_telegram_bot.sh --yes
 ```
 
 Проверка:
@@ -43,6 +64,46 @@ python runtime_check.py
 python -m unittest discover -s tests
 sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
 ```
+
+## Геокодирование
+
+Каскад по умолчанию:
+
+```text
+координаты из строки
+→ кэш DaData
+→ DaData
+→ локальный справочник
+→ Nominatim fallback
+```
+
+Переменные:
+
+```text
+GEOCODER_PROVIDERS=dadata,local,nominatim
+DADATA_API_KEY=
+DADATA_SUGGEST_URL=https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest/address
+DADATA_TIMEOUT=12
+GEOCODE_CACHE_DIR=.cache_gfs/geocode
+GEOCODE_CACHE_TTL_SECONDS=2592000
+NOMINATIM_URL=https://nominatim.openstreetmap.org/search
+```
+
+Отключить внешний fallback:
+
+```text
+GEOCODER_PROVIDERS=dadata,local
+```
+
+Контрольный запрос перед запуском и перезапуском:
+
+```bash
+cd /opt/gfs_profile
+set -a && source .env && set +a
+.venv/bin/python geocoder_preflight.py
+```
+
+Подробно: [`docs/DADATA_GEOCODER.md`](docs/DADATA_GEOCODER.md).
 
 ## Telegram-команды
 
@@ -60,14 +121,6 @@ cycle - 🕒 Последний цикл GFS
 status - ⚙️ Статус и кэш
 admin - 🔐 Администрирование
 cancel - ✖️ Сброс выбора
-```
-
-Регистрация команд:
-
-```bash
-cd /opt/gfs_profile
-source .venv/bin/activate
-python register_telegram_commands.py
 ```
 
 ## Маршрутный профиль `/route`
@@ -96,16 +149,7 @@ python register_telegram_commands.py
 
 Если сетка создаёт 60 и более точек, бот предупреждает о длительном расчёте и показывает оценку числа точек для 25/50/100 км. Длинный прямой запрос без явного `step=` переводится на экран выбора детализации.
 
-Названия пунктов сохраняются как ввёл пользователь и используются в заголовке PNG, статусе, caption и repeat-команде. Геокодер получает координаты, но не заменяет название пункта координатами. Для координат выводится полная пара широта/долгота.
-
-Расчёт:
-
-- маршрут строится по дуге большого круга;
-- ETA точки = расстояние / средняя скорость;
-- срок точки = `lead вылета + ETA`;
-- шаг выборки выбирается пользователем;
-- каждая точка привязывается к ближайшему узлу GFS;
-- до 161 расчётной точки.
+Названия пунктов сохраняются как ввёл пользователь и используются в заголовке PNG, статусе, caption и repeat-команде. Геокодер получает координаты, но не заменяет название пункта координатами.
 
 Контракт риска:
 

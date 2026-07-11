@@ -1,166 +1,144 @@
-# 🔄 Обновление и автообновление Telegram-бота
+# 🔄 Установка и deploy Telegram-бота
 
-Проблема: `git pull` обновляет только рабочий git-каталог, но установленный бот работает из `/opt/gfs_profile`. Поэтому после pull нужно синхронизировать код в `/opt`, обновить зависимости и перезапустить systemd-сервис.
+Бот запускается из `/opt/gfs_profile`. Обычный `git pull` обновляет только checkout, поэтому после него нужен `deploy_telegram_bot.sh`.
 
-Для этого добавлены три скрипта:
+Основные эксплуатационные скрипты:
 
 ```text
-install_telegram_bot.sh   первичная установка: apt + venv + .env + systemd + старт
-install_git_hooks.sh      установка локальных git hooks для автообновления после git pull
-deploy_telegram_bot.sh    синхронизация git checkout → /opt + pip install + checks + restart
+install_telegram_bot.sh   первичная установка
+ deploy_telegram_bot.sh   обновление checkout → /opt и перезапуск
 ```
 
-## ✅ Рекомендуемая схема
-
-Первичная установка:
+## Первичная установка
 
 ```bash
 bash install_telegram_bot.sh
 ```
 
-`install_telegram_bot.sh` теперь ставит актуальный runtime-набор через `apt`, если не указан `--skip-apt`:
+Интерактивный установщик запросит:
 
 ```text
-python3 python3-venv python3-pip ca-certificates rsync
-fonts-dejavu-core fonts-dejavu-extra ffmpeg
-python3-dev build-essential pkg-config libeccodes0 libeccodes-dev
+TELEGRAM_BOT_TOKEN
+DADATA_API_KEY
 ```
 
-`ffmpeg` нужен для качественной MP4-анимации `/map ... mode=gif`. Без него бот остаётся совместимым и собирает GIF fallback, но качество ниже.
+DaData Suggestions требует только API-ключ. Secret Key не нужен.
 
-После первичной установки включить автообновление из этого же git checkout:
+Неинтерактивно:
 
 ```bash
-bash install_git_hooks.sh
+TELEGRAM_BOT_TOKEN='...' \
+DADATA_API_KEY='...' \
+GEOCODER_PROVIDERS='dadata,local,nominatim' \
+bash install_telegram_bot.sh --yes
 ```
 
-После этого обычный pull будет автоматически раскатывать изменения в `/opt/gfs_profile` и перезапускать сервис:
+Установщик:
+
+1. ставит системные пакеты;
+2. создаёт пользователя `gfsbot`;
+3. синхронизирует проект в `/opt/gfs_profile`;
+4. создаёт `.venv`;
+5. создаёт или дополняет `.env`;
+6. проверяет runtime-модули;
+7. выполняет контрольный запрос DaData `Москва`;
+8. готовит офлайн-подложку;
+9. создаёт и запускает systemd-сервис;
+10. регистрирует Telegram-команды.
+
+## Обновление после pull
 
 ```bash
-git pull
-```
-
-Что выполнит hook:
-
-1. Возьмёт текущий checkout после `git pull`.
-2. Вызовет `deploy_telegram_bot.sh --yes`.
-3. Скопирует код в `/opt/gfs_profile` через `rsync`.
-4. Сохранит `.env`, `.install-state`, `.venv`, кэш и локальные служебные файлы.
-5. Выполнит `pip install -r /opt/gfs_profile/requirements.txt`.
-6. Проверит runtime-импорты и наличие `ffmpeg`.
-7. Проверит офлайн-подложку Natural Earth и скачает недостающие слои, если кэш не готов.
-8. Выполнит `systemctl restart gfs-profile-bot.service`.
-9. Запишет лог в `.git/gfs-profile-deploy.log`.
-
-## 🛠️ Ручной deploy после pull
-
-Обычный deploy без apt:
-
-```bash
+git checkout telegram-bot
 git pull
 bash deploy_telegram_bot.sh
 ```
 
-Первый deploy после добавления новых системных зависимостей:
+Deploy сохраняет существующий `/opt/gfs_profile/.env`. Если установка старая и `DADATA_API_KEY` отсутствует, скрипт запросит ключ и запишет его до runtime-проверки и перезапуска.
+
+Неинтерактивно:
 
 ```bash
-git pull
-bash deploy_telegram_bot.sh --install-system-packages --yes
+DADATA_API_KEY='...' bash deploy_telegram_bot.sh --yes
 ```
 
-Неразговорный режим:
+При `--yes` отсутствие обязательного ключа является ошибкой. Сервис не перезапускается с неполной конфигурацией.
+
+## Проверка DaData
+
+Deploy до перезапуска выполняет:
 
 ```bash
-bash deploy_telegram_bot.sh --yes
+cd /opt/gfs_profile
+set -a
+source .env
+set +a
+.venv/bin/python geocoder_preflight.py
 ```
 
-Только проверить состояние:
-
-```bash
-bash deploy_telegram_bot.sh --status
-```
-
-Без перезапуска сервиса:
-
-```bash
-bash deploy_telegram_bot.sh --no-restart
-```
-
-Без обновления pip-зависимостей:
-
-```bash
-bash deploy_telegram_bot.sh --skip-pip
-```
-
-## ⚙️ Опции deploy
+Ожидается:
 
 ```text
---install-dir DIR             каталог установки, по умолчанию /opt/gfs_profile
---service-name NAME           имя systemd-сервиса, по умолчанию gfs-profile-bot
---service-user USER           системный пользователь, по умолчанию gfsbot
---python PATH                 Python для создания venv, если он отсутствует
---yes                         не задавать вопросов
---install-system-packages     поставить/обновить apt runtime-пакеты
---skip-pip                    не обновлять Python-зависимости
---skip-commands               не регистрировать Telegram slash-команды
---no-restart                  не перезапускать сервис
---status                      только показать состояние
+Geocoder providers: dadata,local,nominatim
+DaData OK: Москва -> 55...., 37....
 ```
 
-## 🔐 Важное про sudo
+Типовые причины отказа:
 
-Git hooks выполняются от пользователя, который запускает `git pull`. Для полностью автоматического режима этому пользователю нужен доступ к командам, которые требуют root-прав: `rsync` в `/opt`, `chown`, `systemctl restart`, иногда `pip install` в venv пользователя `gfsbot`.
+- ключ отсутствует;
+- ключ неверный;
+- почта DaData не подтверждена;
+- Suggestions отключены для ключа;
+- исчерпан дневной лимит;
+- превышена частота запросов.
 
-`deploy_telegram_bot.sh --yes` из hook не ставит apt-пакеты автоматически. Системные пакеты обновляются только явным флагом `--install-system-packages`, чтобы обычный `git pull` не зависал на `apt` и sudo.
+Подробности: [`docs/DADATA_GEOCODER.md`](docs/DADATA_GEOCODER.md).
 
-Если sudo требует пароль, hook может остановить `git pull` или завершиться ошибкой. В этом случае используйте ручной deploy:
+## Опции deploy
 
-```bash
-git pull
-bash deploy_telegram_bot.sh
+```text
+--install-dir DIR
+--service-name NAME
+--service-user USER
+--python PATH
+--yes
+--install-system-packages
+--skip-pip
+--skip-commands
+--no-restart
+--status
 ```
 
-Или настройте ограниченный passwordless sudo только для нужных команд.
-
-## 🧪 Проверка после обновления
+## Состояние
 
 ```bash
 bash deploy_telegram_bot.sh --status
 sudo systemctl status gfs-profile-bot.service
-sudo journalctl -u gfs-profile-bot.service -n 80 --no-pager
-ffmpeg -version | head -n 1
+sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
 ```
 
-Проверка ядра без Telegram:
+`--status` показывает:
+
+- checkout и revision;
+- каталог `/opt`;
+- наличие `.env` и `.venv`;
+- `GEOCODER_PROVIDERS`;
+- маскированный `DADATA_API_KEY`;
+- admin DB;
+- состояние systemd.
+
+## Проверка проекта
 
 ```bash
-sudo -u gfsbot /opt/gfs_profile/.venv/bin/python -m gfs_core --lat 55.75 --lon 37.62 --lead 24
-sudo -u gfsbot /opt/gfs_profile/.venv/bin/python -m gfs_core --lat 55.75 --lon 37.62 --lead 384
+bash -n install_telegram_bot.sh
+bash -n deploy_telegram_bot.sh
+python -m unittest discover -s tests
+python runtime_check.py
+python -m gfs_core --lat 45.0355 --lon 38.9753 --lead 24
+python -m gfs_core --lat 55.75 --lon 37.62 --lead 384
 ```
 
-Проверка офлайн-подложки карт:
-
-```bash
-sudo -u gfsbot /opt/gfs_profile/.venv/bin/python /opt/gfs_profile/prepare_basemap_cache.py --check
-sudo -u gfsbot /opt/gfs_profile/.venv/bin/python /opt/gfs_profile/prepare_basemap_cache.py --resolution 10m
-```
-
-Проверка MP4-анимации карты:
-
-```text
-/map Москва from=0 to=24 step=3 mode=gif
-```
-
-Команда исторически называется `mode=gif`, но при наличии `ffmpeg` бот отправляет silent H.264/MP4 через Telegram animation. Это отображается в чате как анимация, а не как файл.
-
-Проверка в Telegram:
-
-```text
-/status
-Москва +24
-```
-
-## 📁 Что сохраняется при deploy
+## Что сохраняется
 
 Deploy не удаляет:
 
@@ -172,17 +150,23 @@ Deploy не удаляет:
 /opt/gfs_profile/data/basemap/
 ```
 
-Это важно: токен Telegram, состояние установки, виртуальное окружение, GRIB-кэш и офлайн-векторная подложка не теряются при обновлении.
+Перед `rsync --delete` отдельно сохраняется custom/default SQLite admin DB, после синхронизации она восстанавливается при необходимости.
 
-## 🧯 Где смотреть ошибки hook
+## Переменные геокодера
 
-```bash
-cat .git/gfs-profile-deploy.log
-tail -f .git/gfs-profile-deploy.log
+```text
+GEOCODER_PROVIDERS=dadata,local,nominatim
+DADATA_API_KEY=
+DADATA_SUGGEST_URL=https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest/address
+DADATA_TIMEOUT=12
+GEOCODE_CACHE_DIR=.cache_gfs/geocode
+GEOCODE_CACHE_TTL_SECONDS=2592000
+NOMINATIM_URL=https://nominatim.openstreetmap.org/search
+GEOCODER_USER_AGENT=gfs-profile-telegram-bot/0.1
 ```
 
-Если сервис не стартует:
+Отключить Nominatim:
 
-```bash
-sudo journalctl -u gfs-profile-bot.service -n 120 --no-pager
+```text
+GEOCODER_PROVIDERS=dadata,local
 ```

@@ -31,6 +31,10 @@ OPTIONAL_RUNTIME_MODULES = (
     "cloudgram_product",
     "cloudgram_plot",
     "weather_diagnostics",
+    "geocode",
+    "dadata_geocoder",
+    "geocode_choices",
+    "geocoder_preflight",
     "route_profile",
     "route_profile_plot",
     "route_profile_contract",
@@ -76,7 +80,7 @@ def main() -> int:
     import matplotlib
 
     matplotlib.use("Agg", force=True)
-    print("Runtime check OK: dependencies, point-wise route risk, vertical persistence, command definitions and bot modules import successfully")
+    print("Runtime check OK: dependencies, DaData geocoder, route risk, products and bot modules import successfully")
     return 0
 
 
