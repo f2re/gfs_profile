@@ -21,6 +21,7 @@ SKIP_COMMANDS=0
 INSTALL_SYSTEM_PACKAGES=0
 ADMIN_DB_BACKUP=""
 ADMIN_DB_BACKUP_DIR=""
+DEPLOY_LOCK=""
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$SCRIPT_DIR"
@@ -28,7 +29,6 @@ ENV_FILE="$INSTALL_DIR/.env"
 VENV_DIR="$INSTALL_DIR/.venv"
 UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 STATE_FILE="$INSTALL_DIR/.install-state"
-DEPLOY_LOCK="/tmp/${SERVICE_NAME}.deploy.lock"
 
 if [[ -t 2 ]]; then
   C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'; C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_BLUE=$'\033[34m'; C_CYAN=$'\033[36m'
@@ -62,6 +62,9 @@ usage() {
   --status
   -h, --help
 
+Переменные:
+  DEPLOY_LOCK_PATH              явный путь lock-файла; обычно не требуется
+
 При миграции старой установки deploy запросит DADATA_API_KEY и сохранит его в .env.
 Для неинтерактивного deploy передайте DADATA_API_KEY через окружение.
 EOF
@@ -88,7 +91,6 @@ ENV_FILE="$INSTALL_DIR/.env"
 VENV_DIR="$INSTALL_DIR/.venv"
 UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"
 STATE_FILE="$INSTALL_DIR/.install-state"
-DEPLOY_LOCK="/tmp/${SERVICE_NAME}.deploy.lock"
 
 if [[ "$(id -u)" -eq 0 ]]; then SUDO=""; else SUDO="sudo"; fi
 run_root() { if [[ -n "$SUDO" ]]; then sudo "$@"; else "$@"; fi; }
@@ -126,6 +128,54 @@ git_rev() { git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || printf unk
 admin_db_path() {
   local raw; raw="$(read_env_value TELEGRAM_ADMIN_DB)"; raw="${raw:-$DEFAULT_ADMIN_DB_RELATIVE}"
   [[ "$raw" = /* ]] && printf '%s' "$raw" || printf '%s/%s' "$INSTALL_DIR" "$raw"
+}
+resolve_deploy_lock() {
+  local explicit git_dir runtime_dir cache_root lock_dir
+  explicit="${DEPLOY_LOCK_PATH:-}"
+  if [[ -n "$explicit" ]]; then
+    printf '%s' "$explicit"
+    return 0
+  fi
+
+  git_dir="$(git -C "$REPO_ROOT" rev-parse --git-dir 2>/dev/null || true)"
+  if [[ -n "$git_dir" ]]; then
+    [[ "$git_dir" = /* ]] || git_dir="$REPO_ROOT/$git_dir"
+    if [[ -d "$git_dir" && -w "$git_dir" ]]; then
+      printf '%s/%s.deploy.lock' "$git_dir" "$SERVICE_NAME"
+      return 0
+    fi
+  fi
+
+  runtime_dir="${XDG_RUNTIME_DIR:-}"
+  if [[ -n "$runtime_dir" && -d "$runtime_dir" && -w "$runtime_dir" ]]; then
+    printf '%s/%s.deploy.lock' "$runtime_dir" "$SERVICE_NAME"
+    return 0
+  fi
+
+  cache_root="${XDG_CACHE_HOME:-${HOME:-}/.cache}"
+  [[ -n "$cache_root" ]] || fail "Не удалось выбрать безопасный каталог deploy lock"
+  lock_dir="$cache_root/gfs-profile"
+  mkdir -p "$lock_dir" 2>/dev/null || fail "Не удалось создать каталог deploy lock: $lock_dir"
+  printf '%s/%s.deploy.lock' "$lock_dir" "$SERVICE_NAME"
+}
+acquire_deploy_lock() {
+  local lock_dir legacy_lock
+  DEPLOY_LOCK="$(resolve_deploy_lock)"
+  lock_dir="$(dirname "$DEPLOY_LOCK")"
+  mkdir -p "$lock_dir" 2>/dev/null || fail "Не удалось создать каталог lock: $lock_dir"
+
+  if [[ -e "$DEPLOY_LOCK" && ! -f "$DEPLOY_LOCK" ]]; then
+    fail "Путь deploy lock занят не файлом: $DEPLOY_LOCK"
+  fi
+  touch "$DEPLOY_LOCK" 2>/dev/null || fail "Нет доступа к deploy lock: $DEPLOY_LOCK"
+  exec 9>"$DEPLOY_LOCK"
+  flock -n 9 || fail "Другой deploy уже выполняется (lock: $DEPLOY_LOCK)"
+
+  legacy_lock="/tmp/${SERVICE_NAME}.deploy.lock"
+  if [[ -e "$legacy_lock" && "$legacy_lock" != "$DEPLOY_LOCK" ]]; then
+    warn "Старый lock в /tmp больше не используется: $legacy_lock"
+  fi
+  success "Deploy lock: $DEPLOY_LOCK"
 }
 cleanup() { [[ -z "$ADMIN_DB_BACKUP_DIR" ]] || run_root rm -rf "$ADMIN_DB_BACKUP_DIR" 2>/dev/null || true; }
 trap cleanup EXIT
@@ -246,6 +296,7 @@ service_user=$SERVICE_USER
 admin_db=$(admin_db_path)
 geocoder_providers=$(read_env_value GEOCODER_PROVIDERS)
 dadata=validated
+deploy_lock=$DEPLOY_LOCK
 runtime_check=ok
 EOF
   run_root chown "$SERVICE_USER:$SERVICE_USER" "$STATE_FILE"
@@ -257,7 +308,7 @@ main() {
   [[ "$STATUS_ONLY" -eq 0 ]] || exit 0
   require_ready_install
   confirm "Обновить $INSTALL_DIR и перезапустить ${SERVICE_NAME}.service?" || fail "Отменено"
-  exec 9>"$DEPLOY_LOCK"; flock -n 9 || fail "Другой deploy уже выполняется"
+  acquire_deploy_lock
   install_system_packages
   ensure_geocoder_config
   backup_admin_db
