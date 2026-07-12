@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import subprocess
 import unittest
 from pathlib import Path
@@ -34,7 +35,33 @@ class DadataInstallDeployTests(unittest.TestCase):
         self.assertIn("acquire_deploy_lock", text)
         self.assertIn("rev-parse --git-dir", text)
         self.assertIn("DEPLOY_LOCK_PATH", text)
+        self.assertIn("/run/lock/", text)
         self.assertIn("Старый lock в /tmp больше не используется", text)
+
+    def test_optional_stages_do_not_return_previous_failure_status(self) -> None:
+        text = Path("deploy_telegram_bot.sh").read_text(encoding="utf-8")
+        # `condition || return` returns status 1 and, under `set -e`, silently
+        # terminates main. Every optional stage must return zero explicitly.
+        self.assertIsNone(re.search(r"\|\|\s*return(?:\s*;|\s*\n)", text))
+        self.assertIn('if [[ "$INSTALL_SYSTEM_PACKAGES" -ne 1 ]]; then\n    return 0', text)
+        self.assertIn('if [[ "$SKIP_PIP" -eq 1 ]]; then', text)
+        self.assertIn('if [[ "$SKIP_TESTS" -eq 1 ]]; then', text)
+        self.assertIn('if [[ "$SKIP_COMMANDS" -eq 1 ]]; then', text)
+
+    def test_deploy_has_visible_stages_sync_verification_and_restart_check(self) -> None:
+        text = Path("deploy_telegram_bot.sh").read_text(encoding="utf-8")
+        self.assertIn("Этап: копирование кода", text)
+        self.assertIn("verify_sync", text)
+        self.assertIn("--checksum --dry-run --itemize-changes", text)
+        self.assertIn('systemctl restart "${SERVICE_NAME}.service"', text)
+        self.assertIn("PID сервиса не изменился", text)
+        self.assertIn("Deploy завершён", text)
+
+    def test_deploy_requires_root_instead_of_printing_env_permission_errors(self) -> None:
+        text = Path("deploy_telegram_bot.sh").read_text(encoding="utf-8")
+        self.assertIn('if [[ "$(id -u)" -ne 0 ]]', text)
+        self.assertIn("Deploy изменяет /opt и systemd", text)
+        self.assertNotIn('SUDO="sudo"', text)
 
     def test_env_example_uses_dadata_primary_with_explicit_fallback(self) -> None:
         text = Path(".env.telegram.example").read_text(encoding="utf-8")
