@@ -12,7 +12,9 @@ class CloudgramHazardTests(unittest.TestCase):
         self.assertIsNone(_visibility_km(None))
 
     def test_phenomena_codes(self) -> None:
-        self.assertEqual(_phenomena(1.0, "R", 2, 8.0), "TSRA")
+        # score=2 is convective potential, not a confirmed thunderstorm.
+        self.assertEqual(_phenomena(1.0, "R", 2, 8.0), "RA")
+        self.assertEqual(_phenomena(1.0, "R", 3, 8.0), "TSRA")
         self.assertEqual(_phenomena(0.0, "—", 0, 0.5), "FG")
         self.assertEqual(_phenomena(1.0, "S", 0, 8.0), "SN")
         self.assertEqual(_phenomena(1.0, "FZ", 0, 8.0), "FZRA")
@@ -31,9 +33,13 @@ class CloudgramHazardTests(unittest.TestCase):
         self.assertEqual(score, 2)
         self.assertTrue(text)
 
-        score, text = _hazard_score(2, 0.5, 1500.0, 10.0, "TSRA")
+        score, text = _hazard_score(2, 0.5, 1500.0, 10.0, "RA")
+        self.assertEqual(score, 3)
+        self.assertIn("конвекция", text)
+
+        score, text = _hazard_score(3, 0.5, 1500.0, 10.0, "TSRA")
         self.assertEqual(score, 4)
-        self.assertTrue(text)
+        self.assertIn("гроза", text)
 
 
 if __name__ == "__main__":
