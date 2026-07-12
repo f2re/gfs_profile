@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 
 import numpy as np
 import pandas as pd
+from scipy.ndimage import label
 
 from cloudgram_product import CloudgramCell
 from geocode import GeoPoint
@@ -25,8 +26,10 @@ class RouteProfileSmoothingTests(unittest.TestCase):
         humidity[3:8, 2:7] = 94.0
         wind = np.full(shape, 15.0)
         wind[6:10, 3:8] = 28.0
-        icing = np.zeros(shape, dtype=int); icing[4:8, 2:6] = 2
-        turbulence = np.zeros(shape, dtype=int); turbulence[7:11, 4:8] = 2
+        icing = np.zeros(shape, dtype=int)
+        icing[4:8, 2:6] = 2
+        turbulence = np.zeros(shape, dtype=int)
+        turbulence[7:11, 4:8] = 2
         height = np.repeat(np.linspace(100.0, 5800.0, len(levels))[:, None], count, axis=1)
         waypoints = []
         for index, distance in enumerate(x):
@@ -52,7 +55,27 @@ class RouteProfileSmoothingTests(unittest.TestCase):
             )
             waypoints.append(RouteWaypoint(index, index / (count - 1), 55.0 + index * 0.05, 37.0 + index * 0.12, float(distance), float(index), 6 + index, surface.valid_time_utc, 55.0, 37.0, pd.DataFrame(), surface, 1, ("test",)))
         return RouteProfileData(
-            run=GfsRun("20260710", "00"), origin=GeoPoint(55.75, 37.62, "Москва", "test"), destination=GeoPoint(59.94, 30.31, "Санкт-Петербург", "test"), departure_lead=6, speed_kmh=300, mode=mode, total_distance_km=800.0, duration_hours=2.7, levels_hpa=levels, waypoints=tuple(waypoints), temperature_c=temperature, humidity_pct=humidity, wind_speed_ms=wind, wind_dir_deg=np.zeros(shape), u_wind_ms=wind * 0.8, v_wind_ms=wind * 0.3, height_m=height, icing_score=icing, turbulence_score=turbulence, cloud_mask=humidity >= 80.0, point_risk=np.ones(count, dtype=int)
+            run=GfsRun("20260710", "00"),
+            origin=GeoPoint(55.75, 37.62, "Москва", "test"),
+            destination=GeoPoint(59.94, 30.31, "Санкт-Петербург", "test"),
+            departure_lead=6,
+            speed_kmh=300,
+            mode=mode,
+            total_distance_km=800.0,
+            duration_hours=2.7,
+            levels_hpa=levels,
+            waypoints=tuple(waypoints),
+            temperature_c=temperature,
+            humidity_pct=humidity,
+            wind_speed_ms=wind,
+            wind_dir_deg=np.zeros(shape),
+            u_wind_ms=wind * 0.8,
+            v_wind_ms=wind * 0.3,
+            height_m=height,
+            icing_score=icing,
+            turbulence_score=turbulence,
+            cloud_mask=humidity >= 80.0,
+            point_risk=np.ones(count, dtype=int),
         )
 
     def test_simple_display_grid_is_denser_than_professional(self) -> None:
@@ -75,6 +98,15 @@ class RouteProfileSmoothingTests(unittest.TestCase):
         source_roughness = float(np.mean(np.abs(np.diff(source, n=2))))
         display_roughness = float(np.mean(np.abs(np.diff(smoothed, n=2))))
         self.assertLess(display_roughness, source_roughness)
+
+    def test_disconnected_hazard_areas_are_not_bridged(self) -> None:
+        data = self._data()
+        data.icing_score[:, :] = 0
+        data.icing_score[4:7, 1:3] = 2
+        data.icing_score[4:7, 6:8] = 2
+        grid = build_route_display_grid(data, "simple")
+        _, count = label(grid.icing_intensity >= 0.48, structure=np.ones((3, 3), dtype=int))
+        self.assertGreaterEqual(count, 2)
 
     def test_display_grid_does_not_mutate_objective_risk(self) -> None:
         data = self._data()

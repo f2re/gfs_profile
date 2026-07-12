@@ -43,6 +43,7 @@ OPTIONAL_RUNTIME_MODULES = (
     "route_profile_smoothing",
     "route_profile_icons",
     "route_profile_render_common",
+    "route_profile_card_policy",
     "route_profile_render_simple",
     "route_profile_render_professional",
     "route_profile_rendering",
@@ -86,7 +87,7 @@ def main() -> int:
     import matplotlib
 
     matplotlib.use("Agg", force=True)
-    print("Runtime check OK: dependencies, DaData, route risk, smoothing and simple/pro renderers import successfully")
+    print("Runtime check OK: dependencies, DaData, calibrated route risk, topology-preserving smoothing and robust cards import successfully")
     return 0
 
 

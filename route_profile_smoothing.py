@@ -2,8 +2,8 @@ from __future__ import annotations
 
 """Display-only resampling for the route profile.
 
-The objective risk and all exported values remain on the source GFS grid.
-This module creates a separate display grid used only by the PNG renderer.
+The objective risk and all exported values remain on the source GFS grid. This
+module creates a separate display grid used only by the PNG renderer.
 """
 
 from dataclasses import dataclass
@@ -11,7 +11,7 @@ import math
 
 import numpy as np
 from scipy.interpolate import PchipInterpolator
-from scipy.ndimage import binary_closing, binary_opening, gaussian_filter
+from scipy.ndimage import gaussian_filter, label
 
 from route_profile import RouteProfileData
 
@@ -32,18 +32,18 @@ class RouteDisplayGrid:
 
     @property
     def cloud_mask(self) -> np.ndarray:
-        return self.cloud_intensity >= 0.38
+        return self.cloud_intensity >= 0.40
 
     @property
     def icing_mask(self) -> np.ndarray:
-        return self.icing_intensity >= 0.38
+        return self.icing_intensity >= 0.48
 
     @property
     def turbulence_mask(self) -> np.ndarray:
-        return self.turbulence_intensity >= 0.38
+        return self.turbulence_intensity >= 0.52
 
 
-def _interpolate_rows(values: np.ndarray, src: np.ndarray, dst: np.ndarray) -> np.ndarray:
+def _interpolate_rows(values: np.ndarray, src: np.ndarray, dst: np.ndarray, *, method: str) -> np.ndarray:
     src = np.asarray(src, dtype=float)
     dst = np.asarray(dst, dtype=float)
     array = np.asarray(values, dtype=float)
@@ -62,10 +62,13 @@ def _interpolate_rows(values: np.ndarray, src: np.ndarray, dst: np.ndarray) -> n
             continue
         x_valid = src_sorted[valid]
         y_valid = row_sorted[valid]
-        interpolator = PchipInterpolator(x_valid, y_valid, extrapolate=False)
-        interpolated = np.asarray(interpolator(dst), dtype=float)
-        interpolated[dst < x_valid[0]] = y_valid[0]
-        interpolated[dst > x_valid[-1]] = y_valid[-1]
+        if method == "linear":
+            interpolated = np.interp(dst, x_valid, y_valid)
+        else:
+            interpolator = PchipInterpolator(x_valid, y_valid, extrapolate=False)
+            interpolated = np.asarray(interpolator(dst), dtype=float)
+            interpolated[dst < x_valid[0]] = y_valid[0]
+            interpolated[dst > x_valid[-1]] = y_valid[-1]
         result[row_index, :] = interpolated
     return result
 
@@ -76,9 +79,11 @@ def _resample_field(
     x_target: np.ndarray,
     pressure_source: np.ndarray,
     pressure_target: np.ndarray,
+    *,
+    method: str = "pchip",
 ) -> np.ndarray:
-    horizontal = _interpolate_rows(np.asarray(values, dtype=float), x_source, x_target)
-    vertical = _interpolate_rows(horizontal.T, pressure_source, pressure_target).T
+    horizontal = _interpolate_rows(np.asarray(values, dtype=float), x_source, x_target, method=method)
+    vertical = _interpolate_rows(horizontal.T, pressure_source, pressure_target, method=method).T
     return vertical
 
 
@@ -92,19 +97,32 @@ def _smooth_nan(values: np.ndarray, sigma: tuple[float, float]) -> np.ndarray:
     return np.divide(numerator, denominator, out=np.full_like(array, np.nan), where=denominator > 1e-5)
 
 
-def _clean_probability(values: np.ndarray, *, sigma: tuple[float, float], close_iterations: int) -> np.ndarray:
-    smoothed = _smooth_nan(np.asarray(values, dtype=float), sigma)
-    smoothed = np.nan_to_num(smoothed, nan=0.0)
-    initial = smoothed >= 0.34
-    if close_iterations > 0:
-        structure = np.ones((3, 3), dtype=bool)
-        initial = binary_closing(initial, structure=structure, iterations=close_iterations)
-        initial = binary_opening(initial, structure=structure, iterations=1)
-        smoothed = np.maximum(
-            smoothed,
-            gaussian_filter(initial.astype(float), sigma=(0.8, 1.2), mode="nearest") * 0.72,
-        )
-    return np.clip(smoothed, 0.0, 1.0)
+def _remove_small_components(mask: np.ndarray, minimum_pixels: int) -> np.ndarray:
+    values = np.asarray(mask, dtype=bool)
+    labels, count = label(values, structure=np.ones((3, 3), dtype=int))
+    result = np.zeros_like(values, dtype=bool)
+    for component in range(1, count + 1):
+        selected = labels == component
+        if int(np.sum(selected)) >= int(minimum_pixels):
+            result |= selected
+    return result
+
+
+def _clean_probability(
+    values: np.ndarray,
+    *,
+    sigma: tuple[float, float],
+    support_threshold: float,
+    minimum_pixels: int,
+) -> np.ndarray:
+    """Smooth without morphological closing that bridges unrelated zones."""
+
+    smoothed = np.clip(np.nan_to_num(_smooth_nan(values, sigma), nan=0.0), 0.0, 1.0)
+    support = _remove_small_components(smoothed >= support_threshold, minimum_pixels)
+    # Keep a narrow antialiased fringe around retained components, but never
+    # invent a bridge between disconnected source regions.
+    fringe = gaussian_filter(support.astype(float), sigma=(0.35, 0.65), mode="nearest")
+    return np.where(fringe >= 0.08, smoothed, 0.0)
 
 
 def _forward_bearing_deg(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
@@ -147,8 +165,8 @@ def route_bearings_deg(data: RouteProfileData) -> np.ndarray:
 def _display_shape(data: RouteProfileData, mode: str) -> tuple[int, int]:
     distance = max(1.0, float(data.total_distance_km))
     if mode == "simple":
-        x_count = int(np.clip(math.ceil(distance / 5.0) + 1, 180, 480))
-        pressure_count = 101
+        x_count = int(np.clip(math.ceil(distance / 6.0) + 1, 150, 420))
+        pressure_count = 91
     else:
         x_count = max(
             len(data.waypoints),
@@ -167,11 +185,7 @@ def build_route_display_grid(data: RouteProfileData, mode: str | None = None) ->
     pressure_source = np.asarray(data.levels_hpa, dtype=float)
     x_count, pressure_count = _display_shape(data, mode_name)
     x_target = np.linspace(0.0, max(1.0, float(data.total_distance_km)), x_count)
-    pressure_target = np.linspace(
-        float(np.max(pressure_source)),
-        float(np.min(pressure_source)),
-        pressure_count,
-    )
+    pressure_target = np.linspace(float(np.max(pressure_source)), float(np.min(pressure_source)), pressure_count)
 
     fields = {
         "temperature": _resample_field(data.temperature_c, x_source, x_target, pressure_source, pressure_target),
@@ -179,44 +193,27 @@ def build_route_display_grid(data: RouteProfileData, mode: str | None = None) ->
         "wind": _resample_field(data.wind_speed_ms, x_source, x_target, pressure_source, pressure_target),
         "u": _resample_field(data.u_wind_ms, x_source, x_target, pressure_source, pressure_target),
         "v": _resample_field(data.v_wind_ms, x_source, x_target, pressure_source, pressure_target),
-        "cloud_source": _resample_field(
-            data.cloud_mask.astype(float), x_source, x_target, pressure_source, pressure_target
-        ),
-        "icing_source": _resample_field(
-            np.asarray(data.icing_score, dtype=float) / 3.0,
-            x_source,
-            x_target,
-            pressure_source,
-            pressure_target,
-        ),
-        "turbulence_source": _resample_field(
-            np.asarray(data.turbulence_score, dtype=float) / 3.0,
-            x_source,
-            x_target,
-            pressure_source,
-            pressure_target,
-        ),
+        # Categorical fields use linear interpolation; PCHIP is intentionally
+        # reserved for continuous physical variables.
+        "cloud_source": _resample_field(data.cloud_mask.astype(float), x_source, x_target, pressure_source, pressure_target, method="linear"),
+        "icing_source": _resample_field(np.asarray(data.icing_score, dtype=float) / 3.0, x_source, x_target, pressure_source, pressure_target, method="linear"),
+        "turbulence_source": _resample_field(np.asarray(data.turbulence_score, dtype=float) / 3.0, x_source, x_target, pressure_source, pressure_target, method="linear"),
     }
 
     bearings = np.radians(route_bearings_deg(data))
-    along_source = (
-        data.u_wind_ms * np.sin(bearings)[None, :]
-        + data.v_wind_ms * np.cos(bearings)[None, :]
-    )
-    fields["along"] = _resample_field(
-        along_source, x_source, x_target, pressure_source, pressure_target
-    )
+    along_source = data.u_wind_ms * np.sin(bearings)[None, :] + data.v_wind_ms * np.cos(bearings)[None, :]
+    fields["along"] = _resample_field(along_source, x_source, x_target, pressure_source, pressure_target)
 
     if mode_name == "simple":
-        scalar_sigma = (1.25, 2.4)
-        wind_sigma = (0.9, 1.8)
-        probability_sigma = (1.35, 2.8)
-        close_iterations = 2
+        scalar_sigma = (0.65, 1.35)
+        wind_sigma = (0.45, 0.95)
+        probability_sigma = (0.65, 1.45)
+        minimum_pixels = 10
     else:
-        scalar_sigma = (0.35, 0.75)
-        wind_sigma = (0.3, 0.6)
-        probability_sigma = (0.45, 0.85)
-        close_iterations = 0
+        scalar_sigma = (0.30, 0.65)
+        wind_sigma = (0.25, 0.55)
+        probability_sigma = (0.35, 0.70)
+        minimum_pixels = 3
 
     temperature = _smooth_nan(fields["temperature"], scalar_sigma)
     humidity = np.clip(_smooth_nan(fields["humidity"], scalar_sigma), 0.0, 100.0)
@@ -225,23 +222,11 @@ def build_route_display_grid(data: RouteProfileData, mode: str | None = None) ->
     v_wind = _smooth_nan(fields["v"], wind_sigma)
     along_wind = _smooth_nan(fields["along"], wind_sigma)
 
-    rh_cloud = np.clip((humidity - 74.0) / 22.0, 0.0, 1.0)
-    cloud_seed = np.maximum(fields["cloud_source"] * 0.82, rh_cloud)
-    cloud_intensity = _clean_probability(
-        cloud_seed,
-        sigma=probability_sigma,
-        close_iterations=close_iterations,
-    )
-    icing_intensity = _clean_probability(
-        fields["icing_source"],
-        sigma=probability_sigma,
-        close_iterations=close_iterations,
-    )
-    turbulence_intensity = _clean_probability(
-        fields["turbulence_source"],
-        sigma=probability_sigma,
-        close_iterations=close_iterations,
-    )
+    rh_cloud = np.clip((humidity - 78.0) / 18.0, 0.0, 1.0)
+    cloud_seed = np.maximum(fields["cloud_source"] * 0.90, rh_cloud * 0.76)
+    cloud_intensity = _clean_probability(cloud_seed, sigma=probability_sigma, support_threshold=0.22, minimum_pixels=minimum_pixels)
+    icing_intensity = _clean_probability(fields["icing_source"], sigma=probability_sigma, support_threshold=0.18, minimum_pixels=minimum_pixels)
+    turbulence_intensity = _clean_probability(fields["turbulence_source"], sigma=probability_sigma, support_threshold=0.18, minimum_pixels=minimum_pixels)
 
     return RouteDisplayGrid(
         x_km=x_target,
