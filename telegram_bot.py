@@ -14,13 +14,11 @@ try:
 finally:
     __name__ = _ENTRYPOINT_MODULE_NAME
 
-# Domain contract: identical source data and card risk in simple/pro,
-# route points every ~25 km and objective point-wise risk.
+# Objective data/risk are loaded first. Rendering is a separate presentation
+# layer: simple is smooth and illustrative; pro is restrained and academic.
 import route_profile_contract  # noqa: F401,E402
-# A single noisy pressure level is not enough for the highest vertical category.
 import route_profile_vertical_policy  # noqa: F401,E402
-# Repeated pictograms are a presentation layer for simple mode only.
-import route_profile_simple_overlay  # noqa: F401,E402
+import route_profile_rendering  # noqa: F401,E402
 from telegram_route import register_route_handlers
 
 _core_build_application = build_application

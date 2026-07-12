@@ -58,7 +58,6 @@ def route_waypoint_specs(
     if distance < 5.0:
         raise GfsProfileError("Начало и конец маршрута почти совпадают; задайте маршрут длиннее 5 км")
     duration = distance / float(speed_kmh)
-
     requested_segments = max(1, int(math.ceil(distance / step)))
     segment_count = min(requested_segments, max(1, int(max_points) - 1))
 
@@ -67,13 +66,7 @@ def route_waypoint_specs(
         fraction = segment_index / float(segment_count)
         distance_km = distance * fraction
         elapsed_hours = distance_km / float(speed_kmh)
-        lat, lon = _route.great_circle_point(
-            origin.lat,
-            origin.lon,
-            destination.lat,
-            destination.lon,
-            fraction,
-        )
+        lat, lon = _route.great_circle_point(origin.lat, origin.lon, destination.lat, destination.lon, fraction)
         lead = _route.normalize_eta_lead(float(departure_lead) + elapsed_hours)
         specs.append((fraction, lat, lon, distance_km, lead))
     return distance, duration, specs
@@ -143,7 +136,6 @@ def point_risk_reasons(data: Any, point_index: int) -> tuple[str, ...]:
         reasons.append("гроза")
     elif int(getattr(surface, "cb_score", 0) or 0) >= 2:
         reasons.append("конвективный риск")
-
     phenomena = str(getattr(surface, "phenomena", "—") or "—")
     if phenomena not in {"—", "TSRA"}:
         reasons.append(phenomena)
@@ -240,7 +232,7 @@ def route_summary(data) -> str:
     return text.replace(needle, replacement, 1)
 
 
-def _hazard_tokens_for_indices(data: Any, indices: Iterable[int], limit: int = 3):
+def _strict_hazard_tokens(data: Any, indices: Iterable[int], limit: int = 3):
     selected = tuple(sorted(set(int(index) for index in indices)))
     if not selected:
         return ()
@@ -267,29 +259,6 @@ def _hazard_tokens_for_indices(data: Any, indices: Iterable[int], limit: int = 3
     return tuple(tokens)
 
 
-def _draw_surface_symbols(ax, data: Any, x: np.ndarray, *, professional: bool) -> None:
-    thunder_mask = np.asarray([confirmed_thunder(point.surface) for point in data.waypoints], dtype=bool)
-    precip_mask = np.asarray([(point.surface.precip_mm or 0.0) >= 0.2 for point in data.waypoints], dtype=bool) & ~thunder_mask
-    for mask, symbol, label, color, y in (
-        (thunder_mask, "⚡", "ГРОЗА", _plot.AVIATION.convection, 960.0),
-        (precip_mask, "●", "ОСАДКИ", "#3F73B8", 975.0),
-    ):
-        for start, end in _plot._mask_runs(mask)[:4]:
-            center_x = float(np.mean(x[start : end + 1]))
-            ax.text(
-                center_x,
-                y,
-                f"{symbol} {label}" if professional else symbol,
-                ha="center",
-                va="center",
-                fontsize=8.0 if professional else 12.0,
-                fontweight="bold",
-                color=color,
-                zorder=12,
-                bbox={"boxstyle": "round,pad=0.20", "fc": "white", "ec": color, "lw": 0.8, "alpha": 0.92},
-            )
-
-
 _route.ROUTE_SPATIAL_STEP_KM = ROUTE_SPATIAL_STEP_KM
 _route.ROUTE_MAX_POINTS = ROUTE_MAX_POINTS
 _route.route_waypoint_specs = route_waypoint_specs
@@ -301,9 +270,10 @@ if not hasattr(_route.RouteProfileData, "spatial_step_km"):
 if not hasattr(_route.RouteProfileData, "risk_signature"):
     _route.RouteProfileData.risk_signature = property(risk_signature)  # type: ignore[attr-defined]
 
+# Compatibility helper remains strict for tests and older callers. The new
+# renderer derives the same tokens without changing objective risk.
 _plot._MAX_SIMPLE_CARDS = ROUTE_RISK_CARD_LIMIT
 _plot._MAX_PRO_CARDS = ROUTE_RISK_CARD_LIMIT
-_plot._hazard_tokens_for_indices = _hazard_tokens_for_indices
-_plot._draw_surface_symbols = _draw_surface_symbols
+_plot._hazard_tokens_for_indices = _strict_hazard_tokens
 
 assert inspect.signature(build_route_profile_data).parameters["max_points"].default == ROUTE_MAX_POINTS

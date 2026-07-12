@@ -39,7 +39,13 @@ OPTIONAL_RUNTIME_MODULES = (
     "route_profile_plot",
     "route_profile_contract",
     "route_profile_vertical_policy",
-    "route_profile_simple_overlay",
+    "route_profile_visual_style",
+    "route_profile_smoothing",
+    "route_profile_icons",
+    "route_profile_render_common",
+    "route_profile_render_simple",
+    "route_profile_render_professional",
+    "route_profile_rendering",
     "basemap_cache",
     "prepare_basemap_cache",
     "debug_map_overlay",
@@ -80,7 +86,7 @@ def main() -> int:
     import matplotlib
 
     matplotlib.use("Agg", force=True)
-    print("Runtime check OK: dependencies, DaData geocoder, route risk, products and bot modules import successfully")
+    print("Runtime check OK: dependencies, DaData, route risk, smoothing and simple/pro renderers import successfully")
     return 0
 
 
