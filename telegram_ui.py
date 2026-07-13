@@ -42,8 +42,8 @@ def lead_keyboard(page: int = 0) -> InlineKeyboardMarkup:
             [
                 buttons[:3],
                 buttons[3:],
-                [InlineKeyboardButton("Все сроки до +384 ч →", callback_data="leadpage:1")],
-                [InlineKeyboardButton("Макс. +384 ч", callback_data="lead:384")],
+                [InlineKeyboardButton("Все сроки →", callback_data="leadpage:1")],
+                [InlineKeyboardButton("Максимум +384 ч", callback_data="lead:384")],
             ]
         )
 
@@ -63,14 +63,14 @@ def lead_keyboard(page: int = 0) -> InlineKeyboardMarkup:
     if page < total_pages:
         nav.append(InlineKeyboardButton("→", callback_data=f"leadpage:{page + 1}"))
     rows.append(nav)
-    rows.append([InlineKeyboardButton("Популярные сроки", callback_data="leadpage:0"), InlineKeyboardButton("Макс. +384 ч", callback_data="lead:384")])
+    rows.append([InlineKeyboardButton("Популярные", callback_data="leadpage:0"), InlineKeyboardButton("+384 ч", callback_data="lead:384")])
     return InlineKeyboardMarkup(rows)
 
 
 def lead_page_text(page: int = 0) -> str:
     if page <= 0:
-        return "Выберите срок прогноза. Сначала показаны самые частые сроки; полный диапазон GFS — до +384 ч."
-    return f"Выберите срок прогноза: страница {max(1, min(page, lead_page_count()))}/{lead_page_count()}, доступен полный диапазон до +384 ч."
+        return "Выберите срок."
+    return f"Все сроки: страница {max(1, min(page, lead_page_count()))}/{lead_page_count()}."
 
 
 def place_keyboard(labels: list[str]) -> InlineKeyboardMarkup:
@@ -78,22 +78,24 @@ def place_keyboard(labels: list[str]) -> InlineKeyboardMarkup:
     for index, label in enumerate(labels[:3]):
         if len(label) > 54:
             label = label[:51] + "…"
-        rows.append([InlineKeyboardButton(f"{index + 1}. {label}", callback_data=f"place:{index}")])
-    rows.append([InlineKeyboardButton("✖️ Отменить", callback_data="cancel")])
+        rows.append([InlineKeyboardButton(label, callback_data=f"place:{index}")])
+    rows.append([InlineKeyboardButton("Отмена", callback_data="cancel")])
     return InlineKeyboardMarkup(rows)
 
 
 def location_keyboard(recent_locations: list[GeoPoint] | None = None) -> ReplyKeyboardMarkup:
-    rows: list[list[KeyboardButton]] = [[KeyboardButton("📍 Отправить геолокацию", request_location=True)]]
+    """Temporary keyboard shown only while a point is requested."""
+
+    rows: list[list[KeyboardButton]] = [[KeyboardButton("📍 Моя геолокация", request_location=True)]]
     recent_buttons = [KeyboardButton(recent_location_button_label(point)) for point in (recent_locations or [])[:4]]
-    if len(recent_buttons) == 1:
-        rows.append([recent_buttons[0]])
-    else:
-        for index in range(0, len(recent_buttons), 2):
-            rows.append(recent_buttons[index : index + 2])
+    for index in range(0, len(recent_buttons), 2):
+        rows.append(recent_buttons[index : index + 2])
+    rows.append([KeyboardButton("✖ Отмена")])
     return ReplyKeyboardMarkup(
         rows,
         resize_keyboard=True,
-        one_time_keyboard=False,
-        input_field_placeholder="Город, координаты или /profile Москва +24",
+        one_time_keyboard=True,
+        selective=True,
+        is_persistent=False,
+        input_field_placeholder="Город или координаты",
     )

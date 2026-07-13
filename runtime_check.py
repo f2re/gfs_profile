@@ -55,6 +55,7 @@ OPTIONAL_RUNTIME_MODULES = (
     "map_animation_overlay",
     "map_animation",
     "telegram_commands",
+    "telegram_ui",
     "telegram_product_wizard",
     "telegram_aero",
     "telegram_windgram",
@@ -62,6 +63,8 @@ OPTIONAL_RUNTIME_MODULES = (
     "telegram_map",
     "telegram_route",
     "telegram_bot_core",
+    "telegram_concise_ux",
+    "telegram_result_copy",
     "telegram_bot",
 )
 
@@ -87,7 +90,7 @@ def main() -> int:
     import matplotlib
 
     matplotlib.use("Agg", force=True)
-    print("Runtime check OK: dependencies, DaData, calibrated route risk, topology-preserving smoothing and robust cards import successfully")
+    print("Runtime check OK: dependencies, DaData, route products and stage-aware Telegram UX import successfully")
     return 0
 
 

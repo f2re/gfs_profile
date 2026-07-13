@@ -3,19 +3,19 @@ from __future__ import annotations
 from telegram import BotCommand
 
 BOT_COMMANDS: tuple[BotCommand, ...] = (
-    BotCommand("start", "🚀 Старт и геолокация"),
-    BotCommand("help", "❓ Помощь и примеры"),
-    BotCommand("profile", "📈 Профиль GFS"),
+    BotCommand("start", "🌦 Главное меню"),
+    BotCommand("help", "❓ Краткая инструкция"),
+    BotCommand("profile", "📈 Вертикальный профиль"),
     BotCommand("route", "✈️ Профиль по маршруту"),
     BotCommand("aero", "🧾 Аэродиаграмма"),
     BotCommand("skewt", "📉 Быстрая Skew-T"),
-    BotCommand("windgram", "🟦 Срок×уровень V/T/RH"),
+    BotCommand("windgram", "🟦 Срок × уровень"),
     BotCommand("cloudgram", "☁️ Облака, осадки, грозы"),
-    BotCommand("map", "🗺️ Карта: PNG-серия/GIF"),
+    BotCommand("map", "🗺️ Карта, серия, анимация"),
     BotCommand("cycle", "🕒 Последний цикл GFS"),
-    BotCommand("status", "⚙️ Статус и кэш"),
+    BotCommand("status", "⚙️ Доступность и кэш"),
     BotCommand("admin", "🔐 Администрирование"),
-    BotCommand("cancel", "✖️ Сброс выбора"),
+    BotCommand("cancel", "✖ Сброс сценария"),
 )
 
 BOT_COMMAND_LINES: tuple[str, ...] = tuple(f"/{command.command} — {command.description}" for command in BOT_COMMANDS)

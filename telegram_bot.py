@@ -19,6 +19,32 @@ finally:
 import route_profile_contract  # noqa: F401,E402
 import route_profile_vertical_policy  # noqa: F401,E402
 import route_profile_rendering  # noqa: F401,E402
+import telegram_concise_ux  # noqa: E402
+import telegram_result_copy  # noqa: E402
+
+# Replace verbose copy and persistent location keyboard before handlers are built.
+telegram_concise_ux.install(globals())
+telegram_result_copy.install()
+
+# A callback message is authored by the bot, so message.from_user cannot identify
+# the person who opened a product from the inline home menu. Capture the actual
+# callback user for the point-selection keyboard and recent locations.
+_concise_start_product_wizard = _start_product_wizard
+
+
+async def _start_product_wizard(message, context, state):
+    user_id = int(context.user_data.pop("_ux_home_user_id", 0) or 0)
+    if user_id <= 0:
+        await _concise_start_product_wizard(message, context, state)
+        return
+    _clear_pending(context)
+    context.user_data[PRODUCT_WIZARD_KEY] = state
+    await message.reply_text(
+        telegram_concise_ux.point_prompt_text(state),
+        reply_markup=telegram_concise_ux.point_keyboard(get_recent_locations(user_id)),
+    )
+
+
 from telegram_route import register_route_handlers
 
 _core_build_application = build_application
@@ -26,6 +52,19 @@ _core_build_application = build_application
 
 def build_application():
     application = _core_build_application()
+
+    async def capture_home_user(update, context):
+        if update.effective_user:
+            context.user_data["_ux_home_user_id"] = int(update.effective_user.id)
+
+    application.add_handler(
+        CallbackQueryHandler(
+            capture_home_user,
+            pattern=r"^home:(aero|windgram|cloudgram|map)$",
+        ),
+        group=-3,
+    )
+    telegram_concise_ux.register(application, globals())
     register_route_handlers(
         application,
         gfs_semaphore=GFS_SEMAPHORE,
