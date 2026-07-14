@@ -10,10 +10,13 @@ def _button_texts(markup) -> list[str]:
 
 
 class ProductWizardTests(unittest.TestCase):
-    def test_aero_copy_command_uses_coordinates_and_params(self) -> None:
-        state = start_aero_wizard_state(24, "skewt")
+    def test_aero_copy_command_has_no_type_selector(self) -> None:
+        state = start_aero_wizard_state(24, "stuve")
         state = set_point(state, {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
-        self.assertEqual(copy_command(state), "/aero 45.0000 39.0000 +24 type=skewt")
+        self.assertEqual(state["diagram_type"], "skewt")
+        self.assertEqual(copy_command(state), "/aero 45.0000 39.0000 +24")
+        texts = _button_texts(params_keyboard(state))
+        self.assertFalse(any(text in {"STUVE", "EMAGRAM", "SKEWT"} or "STUVE" in text or "EMAGRAM" in text for text in texts))
 
     def test_windgram_copy_command_uses_coordinates_and_params(self) -> None:
         state = start_windgram_wizard_state()
@@ -82,24 +85,21 @@ class ProductWizardTests(unittest.TestCase):
         self.assertEqual(copy_command(state), "/map 45.0000 39.0000 from=0 to=12 step=1 mode=gif")
 
     def test_map_copy_command_can_use_png_series(self) -> None:
-        state = start_map_wizard_state(24)
-        state = set_point(state, {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
+        state = set_point(start_map_wizard_state(24), {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
         state["mode"] = "series"
         state["to"] = 48
         state["time_step"] = 6
         self.assertEqual(copy_command(state), "/map 45.0000 39.0000 from=0 to=48 step=6 mode=series")
 
     def test_map_copy_command_can_use_animation(self) -> None:
-        state = start_map_wizard_state(24)
-        state = set_point(state, {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
+        state = set_point(start_map_wizard_state(24), {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
         state["mode"] = "gif"
         state["to"] = 48
         state["time_step"] = 6
         self.assertEqual(copy_command(state), "/map 45.0000 39.0000 from=0 to=48 step=6 mode=gif")
 
     def test_map_copy_command_can_set_basic_basemap(self) -> None:
-        state = start_map_wizard_state(24)
-        state = set_point(state, {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
+        state = set_point(start_map_wizard_state(24), {"lat": 45.0, "lon": 39.0, "label": "Краснодар", "source": "test"})
         state["basemap"] = "basic"
         self.assertEqual(copy_command(state), "/map 45.0000 39.0000 +24 basemap=basic")
 

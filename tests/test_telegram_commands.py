@@ -16,7 +16,6 @@ class TelegramCommandTests(unittest.TestCase):
                 "profile",
                 "route",
                 "aero",
-                "skewt",
                 "windgram",
                 "cloudgram",
                 "map",
@@ -26,6 +25,7 @@ class TelegramCommandTests(unittest.TestCase):
                 "cancel",
             ],
         )
+        self.assertNotIn("skewt", names)
 
     def test_command_descriptions_are_present(self) -> None:
         for command in BOT_COMMANDS:

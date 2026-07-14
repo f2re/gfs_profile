@@ -14,17 +14,19 @@ try:
 finally:
     __name__ = _ENTRYPOINT_MODULE_NAME
 
-# Objective data/risk are loaded first. Rendering is a separate presentation
-# layer: simple is smooth and illustrative; pro is restrained and academic.
+import admin_product_policy  # noqa: E402
+import aero_single_mode  # noqa: E402
 import route_profile_contract  # noqa: F401,E402
 import route_profile_vertical_policy  # noqa: F401,E402
 import route_profile_rendering  # noqa: F401,E402
 import telegram_concise_ux  # noqa: E402
 import telegram_result_copy  # noqa: E402
 
-# Replace verbose copy and persistent location keyboard before handlers are built.
+# Presentation and product policies are applied before handlers are built.
 telegram_concise_ux.install(globals())
 telegram_result_copy.install()
+aero_single_mode.install(globals())
+admin_product_policy.install(globals())
 
 # A callback message is authored by the bot, so message.from_user cannot identify
 # the person who opened a product from the inline home menu. Capture the actual
@@ -70,6 +72,7 @@ def build_application():
         gfs_semaphore=GFS_SEMAPHORE,
         geocode_semaphore=GEOCODE_SEMAPHORE,
     )
+    aero_single_mode.configure_application(application)
     return application
 
 

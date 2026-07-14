@@ -5,7 +5,6 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 PRODUCT_WIZARD_KEY = "product_wizard"
 
 AERO_LEADS = (12, 24, 48, 72, 120)
-AERO_TYPES = ("stuve", "emagram", "skewt")
 WINDGRAM_PARAMS = (("wind", "Ветер"), ("temp", "Температура"), ("rh", "Влажность"))
 WINDGRAM_TO_HOURS = (120, 240, 384)
 WINDGRAM_STEPS = (3, 6, 12)
@@ -21,8 +20,8 @@ MAP_MODES = (("single", "Одна карта"), ("series", "Серия PNG"), ("
 MAP_BASEMAPS = (("places", "Полная"), ("basic", "Базовая"))
 
 
-def start_aero_wizard_state(default_lead: int, diagram_type: str = "stuve") -> dict[str, object]:
-    return {"product": "aero", "step": "await_point", "lead": int(default_lead), "diagram_type": diagram_type}
+def start_aero_wizard_state(default_lead: int, diagram_type: str = "skewt") -> dict[str, object]:
+    return {"product": "aero", "step": "await_point", "lead": int(default_lead), "diagram_type": "skewt"}
 
 
 def start_windgram_wizard_state() -> dict[str, object]:
@@ -39,7 +38,7 @@ def start_map_wizard_state(default_lead: int = 24) -> dict[str, object]:
 
 def product_title(product: str) -> str:
     if product == "aero":
-        return "Аэродиаграмма GFS"
+        return "Аэрологическая диаграмма GFS"
     if product == "windgram":
         return "Windgram GFS"
     if product == "cloudgram":
@@ -58,18 +57,13 @@ def point_prompt_text(state: dict[str, object]) -> str:
         "• отправьте текущую геолокацию;\n"
         "• нажмите одну из последних локаций;\n"
         "• или введите город/координаты текстом.\n\n"
-        "Примеры:\n"
-        "Москва\n"
-        "55.75 37.62\n"
-        "Краснодар"
+        "Примеры:\nМосква\n55.75 37.62\nКраснодар"
     )
 
 
 def _short_label(label: str, max_chars: int = 56) -> str:
     value = " ".join(str(label or "").split())
-    if len(value) <= max_chars:
-        return value
-    return value[: max(1, max_chars - 1)] + "…"
+    return value if len(value) <= max_chars else value[: max(1, max_chars - 1)] + "…"
 
 
 def place_keyboard(labels: list[str]) -> InlineKeyboardMarkup:
@@ -136,7 +130,7 @@ def copy_command(state: dict[str, object]) -> str | None:
     lon = float(point.get("lon", 0.0))
     product = str(state.get("product", ""))
     if product == "aero":
-        return f"/aero {lat:.4f} {lon:.4f} +{int(state.get('lead', 24))} type={str(state.get('diagram_type', 'stuve'))}"
+        return f"/aero {lat:.4f} {lon:.4f} +{int(state.get('lead', 24))}"
     if product == "windgram":
         return (
             f"/windgram {lat:.4f} {lon:.4f} "
@@ -183,17 +177,14 @@ def params_text(state: dict[str, object]) -> str:
             f"{product_title(product)}\n"
             "Шаг 2/3 — параметры\n\n"
             f"{_point_line(state)}\n\n"
-            f"Тип: {str(state.get('diagram_type', 'stuve')).upper()}\n"
             f"Срок: +{int(state.get('lead', 24))} ч"
             f"{_command_block(state)}\n\n"
-            "Измените параметр кнопкой или нажмите «Построить»."
+            "Диаграмма Skew-T log-P с годографом, облачными и опасными слоями."
         )
     if product == "windgram":
         param = str(state.get("param", "wind"))
         return (
-            f"{product_title(product)}\n"
-            "Шаг 2/3 — параметры\n\n"
-            f"{_point_line(state)}\n\n"
+            f"{product_title(product)}\nШаг 2/3 — параметры\n\n{_point_line(state)}\n\n"
             f"Параметр: {_param_label(param)}\n"
             f"Диапазон: +{int(state.get('from', 0))}…+{int(state.get('to', 120))} ч\n"
             f"Шаг: {int(state.get('time_step', 6))} ч\n"
@@ -205,9 +196,7 @@ def params_text(state: dict[str, object]) -> str:
         mode = str(state.get("mode", "pro"))
         mode_hint = "детальная таблица" if mode == "pro" else "простая схема"
         return (
-            f"{product_title(product)}\n"
-            "Шаг 2/3 — параметры\n\n"
-            f"{_point_line(state)}\n\n"
+            f"{product_title(product)}\nШаг 2/3 — параметры\n\n{_point_line(state)}\n\n"
             f"Режим: {_cloud_mode_label(mode)} ({mode_hint})\n"
             f"Диапазон: +{int(state.get('from', 0))}…+{int(state.get('to', 72))} ч\n"
             f"Шаг: {int(state.get('time_step', 3))} ч"
@@ -225,15 +214,11 @@ def params_text(state: dict[str, object]) -> str:
             time_line = f"Серия PNG: от +{int(state.get('from', 0))} до +{int(state.get('to', 24))} ч, шаг {int(state.get('time_step', 6))} ч"
         basemap_label = _map_basemap_label(str(state.get("basemap", "places")))
         return (
-            f"{product_title(product)}\n"
-            "Шаг 2/3 — параметры\n\n"
-            f"{_point_line(state)}\n\n"
-            f"Режим: {mode_label}\n"
-            f"{time_line}\n"
-            f"Подложка: {basemap_label}\n"
+            f"{product_title(product)}\nШаг 2/3 — параметры\n\n{_point_line(state)}\n\n"
+            f"Режим: {mode_label}\n{time_line}\nПодложка: {basemap_label}\n"
             f"Радиус: {int(state.get('radius', 100))} км"
             f"{_command_block(state)}\n\n"
-            "Композит GFS: осадки, облачность, грозовой риск, явления, видимость и ветер AT500. Серия PNG — отдельные карты; GIF — анимация."
+            "Композит GFS: осадки, облачность, грозовой риск, явления, видимость и ветер AT500."
         )
     return "Параметры продукта"
 
@@ -242,8 +227,6 @@ def params_keyboard(state: dict[str, object]) -> InlineKeyboardMarkup:
     product = str(state.get("product", ""))
     rows: list[list[InlineKeyboardButton]] = []
     if product == "aero":
-        current_type = str(state.get("diagram_type", "stuve"))
-        rows.append([InlineKeyboardButton(("✓ " if current_type == item else "") + item.upper(), callback_data=f"wiz:aero:type:{item}") for item in AERO_TYPES])
         current_lead = int(state.get("lead", 24))
         rows.append([InlineKeyboardButton(("✓ " if current_lead == lead else "") + f"+{lead}ч", callback_data=f"wiz:aero:lead:{lead}") for lead in AERO_LEADS[:3]])
         rows.append([InlineKeyboardButton(("✓ " if current_lead == lead else "") + f"+{lead}ч", callback_data=f"wiz:aero:lead:{lead}") for lead in AERO_LEADS[3:]])
@@ -271,11 +254,9 @@ def params_keyboard(state: dict[str, object]) -> InlineKeyboardMarkup:
             current_from = int(state.get("from", 0))
             rows.append([InlineKeyboardButton(("✓ " if current_from == value else "") + f"от +{value}", callback_data=f"wiz:map:from:{value}") for value in MAP_FROM_HOURS])
             current_to = int(state.get("to", 24))
-            to_options = _map_to_options(state)
-            rows.append([InlineKeyboardButton(("✓ " if current_to == value else "") + f"до +{value}", callback_data=f"wiz:map:to:{value}") for value in to_options])
+            rows.append([InlineKeyboardButton(("✓ " if current_to == value else "") + f"до +{value}", callback_data=f"wiz:map:to:{value}") for value in _map_to_options(state)])
             current_step = int(state.get("time_step", 6))
-            step_options = _map_step_options(state)
-            rows.append([InlineKeyboardButton(("✓ " if current_step == value else "") + f"шаг {value}ч", callback_data=f"wiz:map:step:{value}") for value in step_options])
+            rows.append([InlineKeyboardButton(("✓ " if current_step == value else "") + f"шаг {value}ч", callback_data=f"wiz:map:step:{value}") for value in _map_step_options(state)])
         current_basemap = str(state.get("basemap", "places"))
         rows.append([InlineKeyboardButton(("✓ " if current_basemap == key else "") + label, callback_data=f"wiz:map:basemap:{key}") for key, label in MAP_BASEMAPS])
 

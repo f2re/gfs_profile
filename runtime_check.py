@@ -26,6 +26,8 @@ OPTIONAL_RUNTIME_MODULES = (
     "gfs_subset",
     "aero_plot",
     "aero_product",
+    "aero_single_mode",
+    "admin_product_policy",
     "windgram_product",
     "windgram_plot",
     "cloudgram_product",
@@ -90,7 +92,7 @@ def main() -> int:
     import matplotlib
 
     matplotlib.use("Agg", force=True)
-    print("Runtime check OK: dependencies, DaData, route products and stage-aware Telegram UX import successfully")
+    print("Runtime check OK: DaData, single Skew-T aerological product with hodograph, route products and Telegram UX import successfully")
     return 0
 
 
