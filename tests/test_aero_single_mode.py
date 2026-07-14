@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import os
 import unittest
 from unittest.mock import patch
@@ -13,6 +14,15 @@ from aero_plot import (
     MAIN_CURVE_COLORS,
     SUPPORTED_AERO_DIAGRAMS,
     _frost_point_curve,
+)
+from aero_plot_layout import (
+    AERO_LAYOUT,
+    BARB_MAX_COUNT,
+    BARB_XLOC,
+    HODOGRAPH_LABEL_OFFSETS,
+    _barb_indices,
+    _plot_metpy_diagram,
+    rectangles_overlap,
 )
 
 
@@ -38,6 +48,45 @@ class AeroSingleModeTests(unittest.TestCase):
                     x + width <= ox or ox + ow <= x or y + height <= oy or oy + oh <= y
                 )
                 self.assertFalse(overlap)
+
+    def test_figure_panels_are_inside_canvas_and_do_not_overlap(self) -> None:
+        items = list(AERO_LAYOUT.items())
+        for name, (x, y, width, height) in items:
+            with self.subTest(panel=name):
+                self.assertGreaterEqual(x, 0.0)
+                self.assertGreaterEqual(y, 0.0)
+                self.assertGreater(width, 0.0)
+                self.assertGreater(height, 0.0)
+                self.assertLessEqual(x + width, 1.0)
+                self.assertLessEqual(y + height, 1.0)
+        for index, (name, rect) in enumerate(items):
+            for other_name, other_rect in items[index + 1 :]:
+                with self.subTest(first=name, second=other_name):
+                    self.assertFalse(rectangles_overlap(rect, other_rect))
+
+    def test_right_column_has_real_vertical_gutters(self) -> None:
+        cards_bottom = AERO_LAYOUT["cards"][1]
+        middle_top = AERO_LAYOUT["hazards"][1] + AERO_LAYOUT["hazards"][3]
+        middle_bottom = AERO_LAYOUT["hazards"][1]
+        lower_top = AERO_LAYOUT["hodograph"][1] + AERO_LAYOUT["hodograph"][3]
+        self.assertGreaterEqual(cards_bottom - middle_top, 0.05)
+        self.assertGreaterEqual(middle_bottom - lower_top, 0.05)
+
+    def test_wind_barbs_stay_inside_main_axis_and_are_thinned(self) -> None:
+        self.assertGreater(BARB_XLOC, 0.9)
+        self.assertLessEqual(BARB_XLOC, 1.0)
+        frame = pd.DataFrame({"pressure_hpa": np.linspace(1050.0, 50.0, 60)})
+        indices = _barb_indices(frame)
+        self.assertLessEqual(len(indices), BARB_MAX_COUNT)
+        selected = frame.iloc[indices]["pressure_hpa"]
+        self.assertTrue(((selected >= 100.0) & (selected <= 1000.0)).all())
+
+    def test_hodograph_label_offsets_are_distinct(self) -> None:
+        self.assertEqual(set(HODOGRAPH_LABEL_OFFSETS), {0, 1, 3, 6, 8})
+        self.assertEqual(len(set(HODOGRAPH_LABEL_OFFSETS.values())), 5)
+
+    def test_renderer_does_not_reflow_manual_layout_with_tight_bbox(self) -> None:
+        self.assertNotIn('bbox_inches="tight"', inspect.getsource(_plot_metpy_diagram))
 
     def test_ice_saturation_curve_is_only_below_freezing(self) -> None:
         frame = pd.DataFrame(
