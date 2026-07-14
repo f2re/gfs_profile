@@ -13,7 +13,6 @@ BOT_COMMANDS: tuple[BotCommand, ...] = (
     BotCommand("map", "🗺️ Карта, серия, анимация"),
     BotCommand("cycle", "🕒 Последний цикл GFS"),
     BotCommand("status", "⚙️ Доступность и кэш"),
-    BotCommand("admin", "🔐 Администрирование"),
     BotCommand("cancel", "✖ Сброс сценария"),
 )
 
