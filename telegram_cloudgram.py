@@ -134,17 +134,19 @@ def format_repeat_cloudgram_message(point: GeoPoint, parsed: ParsedCloudgramRequ
     )
 
 
-async def run_cloudgram_product(message, point: GeoPoint, parsed: ParsedCloudgramRequest, gfs_semaphore) -> None:
-    leads = cloudgram_leads(parsed.lead_from, parsed.lead_to, parsed.step)
-    selected_run = parsed.run or await asyncio.to_thread(latest_available_run_for_lead, max(leads))
+async def run_cloudgram_product(message, point: GeoPoint, parsed: ParsedCloudgramRequest, gfs_semaphore) -> bool:
     status = await message.reply_text(
         f"⏳ Cloudgram {_mode_title(parsed.mode)}\n"
         f"📍 {point.label}\n"
-        f"🕒 GFS +{leads[0]}…+{leads[-1]} ч, шаг {parsed.step} ч\n"
+        f"🕒 GFS +{parsed.lead_from}…+{parsed.lead_to} ч, шаг {parsed.step} ч\n"
         "1/6 выбираю опубликованный цикл GFS…"
     )
     png_path: Path | None = None
+    selected_run: GfsRun | None = None
+    success = False
     try:
+        leads = cloudgram_leads(parsed.lead_from, parsed.lead_to, parsed.step)
+        selected_run = parsed.run or await asyncio.to_thread(latest_available_run_for_lead, max(leads))
         async with gfs_semaphore:
             header = (
                 f"☁️ CLOUDGRAM {_mode_title(parsed.mode)}\n"
@@ -172,6 +174,7 @@ async def run_cloudgram_product(message, point: GeoPoint, parsed: ParsedCloudgra
         if png_path:
             await reply_png_file(message, png_path, caption=format_cloudgram_file_caption(data, parsed.mode), prefer_photo=len(leads) <= 12)
         await message.reply_text(format_repeat_cloudgram_message(point, parsed, selected_run), parse_mode=ParseMode.HTML)
+        success = True
     except (GfsProfileError, GeocodeError, ValueError) as exc:
         await status.edit_text(f"Ошибка: {exc}")
     except Exception as exc:
@@ -179,20 +182,21 @@ async def run_cloudgram_product(message, point: GeoPoint, parsed: ParsedCloudgra
     finally:
         if png_path:
             png_path.unlink(missing_ok=True)
+    return success
 
 
-async def resolve_cloudgram_request(message, raw: str, gfs_semaphore, geocode_semaphore, user_id: int = 0) -> None:
+async def resolve_cloudgram_request(message, raw: str, gfs_semaphore, geocode_semaphore, user_id: int = 0) -> bool:
     try:
         parsed = parse_cloudgram_request(raw)
         async with geocode_semaphore:
             candidates = await asyncio.to_thread(search_location_candidates, parsed.location_query, 3)
     except (GeocodeError, ValueError, GfsProfileError) as exc:
         await message.reply_text(f"Ошибка: {exc}")
-        return
+        return False
 
     if not candidates:
         await message.reply_text("Точка не найдена. Пришлите координаты, город или геолокацию Telegram.")
-        return
+        return False
     if len(candidates) > 1:
         labels = "\n".join(f"{i + 1}. {point.label}" for i, point in enumerate(candidates[:3]))
         await message.reply_text(
@@ -200,7 +204,7 @@ async def resolve_cloudgram_request(message, raw: str, gfs_semaphore, geocode_se
             f"Пример:\n/cloudgram {candidates[0].label} to={parsed.lead_to} step={parsed.step} mode={parsed.mode}\n\n"
             f"Варианты:\n{labels}"
         )
-        return
+        return False
 
     remember_location(user_id, candidates[0])
-    await run_cloudgram_product(message, candidates[0], parsed, gfs_semaphore)
+    return await run_cloudgram_product(message, candidates[0], parsed, gfs_semaphore)
