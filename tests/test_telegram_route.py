@@ -80,8 +80,13 @@ class TelegramRouteTests(unittest.TestCase):
         }
         text = route_settings_text(state)
         self.assertIn("Москва → Новосибирск", text)
-        self.assertIn("Расчёт может занять", text)
+        self.assertIn("2813 км", text)
         self.assertIn("25 км", text)
+        self.assertIn("114", text)
+        self.assertTrue(
+            "Долгий расчёт" in text or "Расчёт может занять" in text,
+            msg=f"Нет предупреждения о длительном расчёте:\n{text}",
+        )
         self.assertIn("50 км", text)
         self.assertIn("100 км", text)
 
