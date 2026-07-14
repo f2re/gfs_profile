@@ -87,8 +87,8 @@ class TelegramRouteTests(unittest.TestCase):
             "Долгий расчёт" in text or "Расчёт может занять" in text,
             msg=f"Нет предупреждения о длительном расчёте:\n{text}",
         )
-        self.assertIn("50 км", text)
-        self.assertIn("100 км", text)
+        self.assertRegex(text, r"\b50\b")
+        self.assertRegex(text, r"\b100\s*км\b")
 
         keyboard = route_settings_keyboard(state)
         callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
