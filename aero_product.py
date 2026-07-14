@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from aero_plot import AERO_LEVELS_HPA, DEFAULT_AERO_DIAGRAM, write_aero_png
+from aero_plot import AERO_LEVELS_HPA, DEFAULT_AERO_DIAGRAM
+from aero_plot_layout import write_aero_png
 from gfs_core import GfsRun, ProfileResult, ProgressCallback
 from gfs_product_core import build_profile_for_levels
 
