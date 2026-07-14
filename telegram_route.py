@@ -235,7 +235,6 @@ def _repeat_command(data: RouteProfileData, parsed: ParsedRouteRequest) -> str:
 async def run_route_product(message, origin: GeoPoint, destination: GeoPoint, parsed: ParsedRouteRequest, user=None) -> bool:
     distance, duration, specs = _route_plan(origin, destination, parsed.departure_lead, parsed.speed_kmh, parsed.spatial_step_km)
     max_lead = max(item[4] for item in specs)
-    selected_run = parsed.run or await asyncio.to_thread(latest_available_run_for_lead, max_lead)
     warning = _long_route_warning(len(specs), parsed.spatial_step_km)
     status = await message.reply_text(
         "⏳ Маршрутный профиль GFS\n"
@@ -243,10 +242,11 @@ async def run_route_product(message, origin: GeoPoint, destination: GeoPoint, pa
         f"📏 {distance:.0f} км · {duration:.1f} ч · {parsed.speed_kmh} км/ч\n"
         f"🧩 сетка {parsed.spatial_step_km} км · {len(specs)} точек\n"
         f"🕒 вылет +{parsed.departure_lead} ч · до +{max_lead} ч\n"
-        f"{warning}Подготавливаю точки маршрута…"
+        f"{warning}Выбираю опубликованный цикл GFS…"
     )
     png_path: Path | None = None
     csv_path: Path | None = None
+    selected_run: GfsRun | None = None
     user_id = int(getattr(user or getattr(message, "from_user", None), "id", 0) or 0) or None
     username = getattr(user or getattr(message, "from_user", None), "username", None)
     started = time.perf_counter()
@@ -258,10 +258,11 @@ async def run_route_product(message, origin: GeoPoint, destination: GeoPoint, pa
         request_text=f"/route {parsed.origin_query} -> {parsed.destination_query} +{parsed.departure_lead} speed={parsed.speed_kmh} step={parsed.spatial_step_km} mode={parsed.mode}",
         lead_from=parsed.departure_lead,
         lead_to=max_lead,
-        run_date=selected_run.date,
-        run_cycle=selected_run.cycle,
+        run_date=parsed.run.date if parsed.run else None,
+        run_cycle=parsed.run.cycle if parsed.run else None,
     )
     try:
+        selected_run = parsed.run or await asyncio.to_thread(latest_available_run_for_lead, max_lead)
         header = (
             f"✈️ ROUTE · {parsed.mode}\n"
             f"GFS {selected_run.date} {selected_run.cycle}Z · {origin.label} → {destination.label}\n"
@@ -350,6 +351,8 @@ async def route_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await run_route_product(message, origin, destination, parsed, user=update.effective_user)
     except (ValueError, GeocodeError, GfsProfileError) as exc:
         await message.reply_text(f"Ошибка: {exc}")
+    except Exception as exc:
+        await message.reply_text(f"Непредвиденная ошибка: {exc}")
 
 
 async def route_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -371,6 +374,8 @@ async def route_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await message.reply_text(route_settings_text(state), reply_markup=route_settings_keyboard(state))
     except (ValueError, GeocodeError, GfsProfileError) as exc:
         await message.reply_text(f"Ошибка: {exc}\nПовторите маршрут: Москва -> Санкт-Петербург")
+    except Exception as exc:
+        await message.reply_text(f"Непредвиденная ошибка: {exc}\nПовторите маршрут: Москва -> Санкт-Петербург")
     raise ApplicationHandlerStop
 
 
@@ -394,33 +399,47 @@ async def route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.edit_message_text("Сценарий маршрута устарел. Начните заново: /route")
         return
     state = dict(state)
-    if callback_data.startswith("route:lead:"):
-        state["lead"] = int(callback_data.rsplit(":", 1)[1])
-    elif callback_data.startswith("route:speed:"):
-        state["speed"] = int(callback_data.rsplit(":", 1)[1])
-    elif callback_data.startswith("route:grid:"):
-        state["spatial_step"] = validate_spatial_step(int(callback_data.rsplit(":", 1)[1]))
-    elif callback_data.startswith("route:mode:"):
-        state["mode"] = callback_data.rsplit(":", 1)[1]
-    elif callback_data == "route:run":
-        origin = _unpack_point(state["origin"])
-        destination = _unpack_point(state["destination"])
-        parsed = ParsedRouteRequest(
-            origin_query=origin.label,
-            destination_query=destination.label,
-            departure_lead=int(state.get("lead", 24)),
-            speed_kmh=int(state.get("speed", ROUTE_DEFAULT_SPEED_KMH)),
-            mode=str(state.get("mode", "simple")),
-            run=None,
-            spatial_step_km=validate_spatial_step(int(state.get("spatial_step", ROUTE_SPATIAL_STEP_KM))),
-            step_explicit=True,
-        )
+    try:
+        if callback_data.startswith("route:lead:"):
+            value = int(callback_data.rsplit(":", 1)[1])
+            if value not in ROUTE_LEADS:
+                raise ValueError("Недопустимый срок")
+            state["lead"] = value
+        elif callback_data.startswith("route:speed:"):
+            value = int(callback_data.rsplit(":", 1)[1])
+            if value not in ROUTE_SPEEDS:
+                raise ValueError("Недопустимая скорость")
+            state["speed"] = value
+        elif callback_data.startswith("route:grid:"):
+            state["spatial_step"] = validate_spatial_step(int(callback_data.rsplit(":", 1)[1]))
+        elif callback_data.startswith("route:mode:"):
+            value = callback_data.rsplit(":", 1)[1]
+            if value not in {key for key, _ in ROUTE_MODES}:
+                raise ValueError("Недопустимый режим")
+            state["mode"] = value
+        elif callback_data == "route:run":
+            origin = _unpack_point(state["origin"])
+            destination = _unpack_point(state["destination"])
+            parsed = ParsedRouteRequest(
+                origin_query=origin.label,
+                destination_query=destination.label,
+                departure_lead=int(state.get("lead", 24)),
+                speed_kmh=int(state.get("speed", ROUTE_DEFAULT_SPEED_KMH)),
+                mode=str(state.get("mode", "simple")),
+                run=None,
+                spatial_step_km=validate_spatial_step(int(state.get("spatial_step", ROUTE_SPATIAL_STEP_KM))),
+                step_explicit=True,
+            )
+            context.user_data.pop(ROUTE_SESSION_KEY, None)
+            if query.message:
+                await query.edit_message_text("Параметры выбраны. Запускаю маршрутный расчёт…")
+                await run_route_product(query.message, origin, destination, parsed, user=update.effective_user)
+            return
+        else:
+            return
+    except (ValueError, KeyError, TypeError) as exc:
         context.user_data.pop(ROUTE_SESSION_KEY, None)
-        if query.message:
-            await query.edit_message_text("Параметры выбраны. Запускаю маршрутный расчёт…")
-            await run_route_product(query.message, origin, destination, parsed, user=update.effective_user)
-        return
-    else:
+        await query.edit_message_text(f"Параметры маршрута устарели или повреждены: {exc}. Начните заново: /route")
         return
     context.user_data[ROUTE_SESSION_KEY] = state
     await query.edit_message_text(route_settings_text(state), reply_markup=route_settings_keyboard(state))

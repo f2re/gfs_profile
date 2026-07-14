@@ -71,7 +71,7 @@ def format_repeat_aero_message(point: GeoPoint, parsed: ParsedAeroRequest, run: 
     return f"📋 <code>{html.escape(repeat_aero_command(point, parsed, run))}</code>"
 
 
-async def run_aero_product(message, point: GeoPoint, parsed: ParsedAeroRequest, gfs_semaphore) -> None:
+async def run_aero_product(message, point: GeoPoint, parsed: ParsedAeroRequest, gfs_semaphore) -> bool:
     status = await message.reply_text(
         "⏳ Аэрологическая диаграмма\n"
         f"📍 {point.label}\n"
@@ -79,6 +79,8 @@ async def run_aero_product(message, point: GeoPoint, parsed: ParsedAeroRequest, 
         "Выбираю цикл GFS…"
     )
     png_path: Path | None = None
+    selected_run: GfsRun | None = None
+    success = False
     try:
         async with gfs_semaphore:
             selected_run = parsed.run or await asyncio.to_thread(latest_available_run_for_lead, parsed.lead_hour)
@@ -107,6 +109,7 @@ async def run_aero_product(message, point: GeoPoint, parsed: ParsedAeroRequest, 
                     caption=format_aero_file_caption(selected_run, parsed.lead_hour),
                 )
         await message.reply_text(format_repeat_aero_message(point, parsed, selected_run), parse_mode=ParseMode.HTML)
+        success = True
     except (GfsProfileError, GeocodeError, ValueError) as exc:
         await status.edit_text(f"Ошибка: {exc}")
     except Exception as exc:
@@ -114,6 +117,7 @@ async def run_aero_product(message, point: GeoPoint, parsed: ParsedAeroRequest, 
     finally:
         if png_path:
             png_path.unlink(missing_ok=True)
+    return success
 
 
 async def resolve_aero_request(
@@ -124,18 +128,18 @@ async def resolve_aero_request(
     geocode_semaphore,
     default_diagram_type: str = AERO_DIAGRAM_TYPE,
     user_id: int = 0,
-) -> None:
+) -> bool:
     try:
         parsed = parse_aero_request(raw, default_lead=default_lead)
         async with geocode_semaphore:
             candidates = await asyncio.to_thread(search_location_candidates, parsed.location_query, 3)
     except (GeocodeError, ValueError, GfsProfileError) as exc:
         await message.reply_text(f"Ошибка: {exc}")
-        return
+        return False
 
     if not candidates:
         await message.reply_text("Точка не найдена. Укажите город, координаты или отправьте геолокацию.")
-        return
+        return False
 
     if len(candidates) > 1:
         labels = "\n".join(f"{index + 1}. {point.label}" for index, point in enumerate(candidates[:3]))
@@ -143,7 +147,7 @@ async def resolve_aero_request(
             "Найдено несколько точек. Уточните название или используйте координаты.\n\n"
             f"Варианты:\n{labels}"
         )
-        return
+        return False
 
     remember_location(user_id, candidates[0])
-    await run_aero_product(message, candidates[0], parsed, gfs_semaphore)
+    return await run_aero_product(message, candidates[0], parsed, gfs_semaphore)

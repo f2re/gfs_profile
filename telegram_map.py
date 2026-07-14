@@ -300,10 +300,8 @@ def _animation_format(path: Path) -> str:
     return "MP4-анимация" if path.suffix.lower() == ".mp4" else "GIF"
 
 
-async def run_map_product(message, point: GeoPoint, parsed: ParsedMapRequest, gfs_semaphore) -> None:
-    leads = _lead_list(parsed)
-    selected_run = parsed.run or await asyncio.to_thread(latest_available_run_for_lead, max(leads))
-    lead_text = f"+{leads[0]} ч" if parsed.mode == "single" else f"+{leads[0]}…+{leads[-1]} ч, шаг {parsed.step} ч"
+async def run_map_product(message, point: GeoPoint, parsed: ParsedMapRequest, gfs_semaphore) -> bool:
+    lead_text = f"+{parsed.lead_from} ч" if parsed.mode == "single" else f"+{parsed.lead_from}…+{parsed.lead_to} ч, шаг {parsed.step} ч"
     mode_text = _mode_title(parsed)
     status = await message.reply_text(
         f"⏳ {mode_text}: композитная карта GFS\n"
@@ -313,7 +311,11 @@ async def run_map_product(message, point: GeoPoint, parsed: ParsedMapRequest, gf
     )
     out_paths: list[Path] = []
     first_data: dict | None = None
+    selected_run: GfsRun | None = None
+    success = False
     try:
+        leads = _lead_list(parsed)
+        selected_run = parsed.run or await asyncio.to_thread(latest_available_run_for_lead, max(leads))
         async with gfs_semaphore:
             header = (
                 f"🗺️ MAP · {mode_text}\n"
@@ -360,6 +362,7 @@ async def run_map_product(message, point: GeoPoint, parsed: ParsedMapRequest, gf
                 with out_path.open("rb") as file_obj:
                     await message.reply_photo(photo=InputFile(file_obj, filename=out_path.name), caption=caption)
         await message.reply_text(format_repeat_map_message(point, parsed, selected_run), parse_mode=ParseMode.HTML)
+        success = True
     except (GfsProfileError, GeocodeError, ValueError) as exc:
         await status.edit_text(f"Ошибка: {exc}")
     except Exception as exc:
@@ -367,20 +370,21 @@ async def run_map_product(message, point: GeoPoint, parsed: ParsedMapRequest, gf
     finally:
         for out_path in out_paths:
             out_path.unlink(missing_ok=True)
+    return success
 
 
-async def resolve_map_request(message, raw: str, gfs_semaphore, geocode_semaphore, default_lead: int = 24, user_id: int = 0) -> None:
+async def resolve_map_request(message, raw: str, gfs_semaphore, geocode_semaphore, default_lead: int = 24, user_id: int = 0) -> bool:
     try:
         parsed = parse_map_request(raw, default_lead=default_lead)
         async with geocode_semaphore:
             candidates = await asyncio.to_thread(search_location_candidates, parsed.location_query, 3)
     except (GeocodeError, ValueError, GfsProfileError) as exc:
         await message.reply_text(f"Ошибка: {exc}")
-        return
+        return False
 
     if not candidates:
         await message.reply_text("Точка не найдена. Пришлите координаты, город или геолокацию Telegram.")
-        return
+        return False
     if len(candidates) > 1:
         labels = "\n".join(f"{i + 1}. {point.label}" for i, point in enumerate(candidates[:3]))
         await message.reply_text(
@@ -388,6 +392,6 @@ async def resolve_map_request(message, raw: str, gfs_semaphore, geocode_semaphor
             f"Пример:\n/map {candidates[0].label} from={parsed.lead_from} to={parsed.lead_to} step={parsed.step} mode={parsed.mode}\n\n"
             f"Варианты:\n{labels}"
         )
-        return
+        return False
     remember_location(user_id, candidates[0])
-    await run_map_product(message, candidates[0], parsed, gfs_semaphore)
+    return await run_map_product(message, candidates[0], parsed, gfs_semaphore)

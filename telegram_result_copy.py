@@ -18,9 +18,9 @@ def install() -> None:
     if getattr(map_module, "_RESULT_COPY_PATCHED", False):
         return
 
-    def aero_caption(result, diagram_type: str) -> str:
+    def aero_caption(result) -> str:
         return (
-            f"🧾 GFS · {aero._diagram_name(diagram_type)}\n"
+            "🧾 GFS · аэрологическая диаграмма\n"
             f"{result.run.date} {result.run.cycle}Z · +{result.lead_hour} ч · {result.valid_time_utc:%d.%m %H:%M UTC}\n"
             f"Узел {result.grid_lat:.3f}, {result.grid_lon:.3f}"
         )

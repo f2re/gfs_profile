@@ -21,7 +21,7 @@ class TelegramResultCopyTests(unittest.TestCase):
             grid_lat=55.75,
             grid_lon=37.62,
         )
-        text = telegram_aero.format_aero_caption(result, "skewt")
+        text = telegram_aero.format_aero_caption(result)
         self.assertIn("GFS", text)
         self.assertNotIn("не радиозонд", text.lower())
 

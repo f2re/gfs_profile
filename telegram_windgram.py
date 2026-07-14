@@ -114,17 +114,19 @@ def format_repeat_windgram_message(point: GeoPoint, parsed: ParsedWindgramReques
     return "📋 Повторить этот расчёт:\n" f"<code>{command}</code>\n\n" "Нажмите на строку команды и скопируйте её целиком."
 
 
-async def run_windgram_product(message, point: GeoPoint, parsed: ParsedWindgramRequest, gfs_semaphore) -> None:
-    leads = windgram_leads(lead_from=parsed.lead_from, lead_to=parsed.lead_to, step=parsed.step)
-    selected_run = parsed.run or await asyncio.to_thread(latest_available_run_for_lead, max(leads))
+async def run_windgram_product(message, point: GeoPoint, parsed: ParsedWindgramRequest, gfs_semaphore) -> bool:
     status = await message.reply_text(
         f"⏳ Windgram · {PARAM_NAMES.get(parsed.param, parsed.param)}\n"
         f"📍 {point.label}\n"
-        f"🕒 GFS +{leads[0]}…+{leads[-1]} ч, шаг {parsed.step} ч\n"
+        f"🕒 GFS +{parsed.lead_from}…+{parsed.lead_to} ч, шаг {parsed.step} ч\n"
         "1/6 выбираю опубликованный цикл GFS…"
     )
     png_path: Path | None = None
+    selected_run: GfsRun | None = None
+    success = False
     try:
+        leads = windgram_leads(lead_from=parsed.lead_from, lead_to=parsed.lead_to, step=parsed.step)
+        selected_run = parsed.run or await asyncio.to_thread(latest_available_run_for_lead, max(leads))
         async with gfs_semaphore:
             header = (
                 f"🟦 WINDGRAM · {PARAM_NAMES.get(parsed.param, parsed.param)}\n"
@@ -154,6 +156,7 @@ async def run_windgram_product(message, point: GeoPoint, parsed: ParsedWindgramR
         if png_path:
             await reply_png_file(message, png_path, caption=format_windgram_file_caption(data), prefer_photo=len(leads) <= 12)
         await message.reply_text(format_repeat_windgram_message(point, parsed, selected_run), parse_mode=ParseMode.HTML)
+        success = True
     except (GfsProfileError, GeocodeError, ValueError) as exc:
         await status.edit_text(f"Ошибка: {exc}")
     except Exception as exc:
@@ -161,20 +164,21 @@ async def run_windgram_product(message, point: GeoPoint, parsed: ParsedWindgramR
     finally:
         if png_path:
             png_path.unlink(missing_ok=True)
+    return success
 
 
-async def resolve_windgram_request(message, raw: str, gfs_semaphore, geocode_semaphore, user_id: int = 0) -> None:
+async def resolve_windgram_request(message, raw: str, gfs_semaphore, geocode_semaphore, user_id: int = 0) -> bool:
     try:
         parsed = parse_windgram_request(raw)
         async with geocode_semaphore:
             candidates = await asyncio.to_thread(search_location_candidates, parsed.location_query, 3)
     except (GeocodeError, ValueError, GfsProfileError) as exc:
         await message.reply_text(f"Ошибка: {exc}")
-        return
+        return False
 
     if not candidates:
         await message.reply_text("Точка не найдена. Пришлите координаты, город или геолокацию Telegram.")
-        return
+        return False
     if len(candidates) > 1:
         labels = "\n".join(f"{i + 1}. {point.label}" for i, point in enumerate(candidates[:3]))
         await message.reply_text(
@@ -182,7 +186,7 @@ async def resolve_windgram_request(message, raw: str, gfs_semaphore, geocode_sem
             f"Пример:\n/windgram {candidates[0].label} to={parsed.lead_to} step={parsed.step} param={parsed.param}\n\n"
             f"Варианты:\n{labels}"
         )
-        return
+        return False
 
     remember_location(user_id, candidates[0])
-    await run_windgram_product(message, candidates[0], parsed, gfs_semaphore)
+    return await run_windgram_product(message, candidates[0], parsed, gfs_semaphore)
