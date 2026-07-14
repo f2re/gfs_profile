@@ -53,12 +53,14 @@ class TelegramWindgramTests(unittest.TestCase):
         ]
         return WindgramData(run, 55.75, 37.5, 55.75, 37.5, [0, 3], [1000], cells, param="temp")
 
-    def test_windgram_caption_is_informative(self) -> None:
+    def test_windgram_caption_keeps_compact_product_contract(self) -> None:
         caption = format_windgram_caption(self._data())
-        self.assertIn("Windgram GFS 0.25", caption)
-        self.assertIn("UTC", caption)
-        self.assertIn("Узел GFS", caption)
+        self.assertIn("GFS", caption)
+        self.assertIn("Windgram", caption)
         self.assertIn("температура", caption)
+        self.assertIn("20260701 12Z", caption)
+        self.assertIn("+0…+3 ч", caption)
+        self.assertIn("55.750, 37.500", caption)
 
     def test_windgram_file_caption_is_compact(self) -> None:
         caption = format_windgram_file_caption(self._data())
