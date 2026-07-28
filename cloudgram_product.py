@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -9,9 +10,11 @@ from gfs_core import GfsProfileError, GfsRun, ProgressCallback, canonical_leads
 from gfs_subset import bool_from_datasets, download_gfs_subset_to_disk, open_grib_datasets, scalar_from_datasets
 from weather_diagnostics import precipitation_code, thunder_score, visibility_km as diagnostic_visibility_km, weather_code
 
+
 CLOUDGRAM_DEFAULT_TO = 72
 CLOUDGRAM_DEFAULT_STEP = 3
 CLOUDGRAM_MAX_TO = 120
+CAPE_LAYER_PA = 18000.0
 
 CLOUDGRAM_VARIABLES = (
     "LCDC",
@@ -31,7 +34,6 @@ CLOUDGRAM_VARIABLES = (
     "CIN",
     "VIS",
 )
-
 CLOUDGRAM_LEVEL_TOKENS = (
     "lev_low_cloud_layer",
     "lev_middle_cloud_layer",
@@ -41,8 +43,6 @@ CLOUDGRAM_LEVEL_TOKENS = (
     "lev_surface",
     "lev_convective_cloud_layer",
     "lev_180-0_mb_above_ground",
-    "lev_90-0_mb_above_ground",
-    "lev_255-0_mb_above_ground",
 )
 
 
@@ -66,6 +66,12 @@ class CloudgramCell:
     phenomena: str
     hazard_score: int
     hazard_text: str
+    ceiling_msl_gpm: float | None = None
+    surface_elevation_gpm: float | None = None
+    convective_cloud_pct: float | None = None
+    conv_precip_rate_mmh: float | None = None
+    cape_layer: str = "180–0 hPa AGL"
+    precip_interval_hours: float | None = None
 
 
 @dataclass(frozen=True)
@@ -95,19 +101,19 @@ def cloudgram_leads(lead_from: int = 0, lead_to: int = CLOUDGRAM_DEFAULT_TO, ste
 
 
 def _clip_pct(value: float | None) -> float | None:
-    if value is None:
+    if value is None or not math.isfinite(float(value)):
         return None
     return max(0.0, min(100.0, float(value)))
 
 
 def _mm_from_kgm2(value: float | None) -> float | None:
-    if value is None:
+    if value is None or not math.isfinite(float(value)):
         return None
     return max(0.0, float(value))
 
 
 def _mmh_from_prate(value: float | None) -> float | None:
-    if value is None:
+    if value is None or not math.isfinite(float(value)):
         return None
     return max(0.0, float(value) * 3600.0)
 
@@ -128,8 +134,8 @@ def _precip_type_from_flags(rain: bool, snow: bool, freezing: bool, ice_pellets:
     return precipitation_code(rain, snow, freezing, ice_pellets)
 
 
-def _cb_score(cape: float | None, cin: float | None, conv_precip_mm: float | None, conv_cloud_pct: float | None, precip_rate_mmh: float | None) -> int:
-    return thunder_score(cape, cin, conv_precip_mm, conv_cloud_pct, precip_rate_mmh)
+def _cb_score(cape: float | None, cin: float | None, conv_precip_mm: float | None, conv_cloud_pct: float | None, conv_precip_rate_mmh: float | None) -> int:
+    return thunder_score(cape, cin, conv_precip_mm, conv_cloud_pct, conv_precip_rate_mmh)
 
 
 def _phenomena(precip_mm: float | None, precip_type: str, cb_score: int, visibility_km: float | None) -> str:
@@ -149,10 +155,10 @@ def _hazard_score(cb_score: int, precip_mm: float | None, ceiling_m: float | Non
 
     if ceiling_m is not None and ceiling_m < 1000:
         score = max(score, 2)
-        reasons.append("низкий ВНГО")
+        reasons.append("низкий ВНГО AGL")
     if ceiling_m is not None and ceiling_m < 300:
         score = max(score, 3)
-        reasons.append("очень низкий ВНГО")
+        reasons.append("очень низкий ВНГО AGL")
 
     if visibility_km is not None and visibility_km < 5:
         score = max(score, 2)
@@ -162,16 +168,81 @@ def _hazard_score(cb_score: int, precip_mm: float | None, ceiling_m: float | Non
         reasons.append("плохая видимость")
 
     if cb_score >= 2:
-        score = max(score, 3)
-        reasons.append("конвекция")
-    if phenomena == "TSRA" or cb_score >= 3:
+        score = max(score, 2)
+        reasons.append("конвективный потенциал")
+    if phenomena == "TSRA":
         score = max(score, 4)
-        reasons.append("гроза")
+        reasons.append("модельная гроза")
 
     return score, ", ".join(dict.fromkeys(reasons)) if reasons else "спокойно"
 
 
-def _read_cloudgram_cell(run: GfsRun, lead_hour: int, lat: float, lon: float, progress_callback: ProgressCallback | None = None, duration_hours: int = CLOUDGRAM_DEFAULT_STEP) -> tuple[CloudgramCell, float, float, set[str]]:
+def _instant_or_average(datasets, names: tuple[str, ...], type_of_level: tuple[str, ...], duration_hours: int) -> float | None:
+    value = scalar_from_datasets(datasets, names, type_of_level=type_of_level, step_types=("instant",))
+    if value is not None:
+        return value
+    return scalar_from_datasets(
+        datasets,
+        names,
+        type_of_level=type_of_level,
+        step_types=("avg", "average"),
+        interval_hours=float(duration_hours),
+    )
+
+
+def _cape_cin_180(datasets) -> tuple[float | None, float | None, str]:
+    cape = scalar_from_datasets(
+        datasets,
+        ("cape",),
+        type_of_level=("pressureFromGroundLayer",),
+        level=CAPE_LAYER_PA,
+        step_types=("instant",),
+    )
+    cin = scalar_from_datasets(
+        datasets,
+        ("cin",),
+        type_of_level=("pressureFromGroundLayer",),
+        level=CAPE_LAYER_PA,
+        step_types=("instant",),
+    )
+    if cape is not None or cin is not None:
+        return cape, cin, "180–0 hPa AGL"
+
+    surface_cape = scalar_from_datasets(datasets, ("cape",), type_of_level=("surface",), step_types=("instant",))
+    surface_cin = scalar_from_datasets(datasets, ("cin",), type_of_level=("surface",), step_types=("instant",))
+    if surface_cape is not None and surface_cin is not None:
+        return surface_cape, surface_cin, "surface fallback"
+    return None, None, "unavailable"
+
+
+def _ceiling_agl(datasets) -> tuple[float | None, float | None, float | None]:
+    ceiling_msl = scalar_from_datasets(
+        datasets,
+        ("gh", "h", "hgt"),
+        type_of_level=("cloudCeiling",),
+        step_types=("instant",),
+    )
+    surface = scalar_from_datasets(
+        datasets,
+        ("gh", "h", "hgt"),
+        type_of_level=("surface",),
+        step_types=("instant",),
+    )
+    if ceiling_msl is None or surface is None:
+        return None, ceiling_msl, surface
+    if not math.isfinite(float(ceiling_msl)) or not math.isfinite(float(surface)) or abs(float(ceiling_msl)) > 1e8:
+        return None, ceiling_msl, surface
+    return max(0.0, float(ceiling_msl) - float(surface)), float(ceiling_msl), float(surface)
+
+
+def _read_cloudgram_cell(
+    run: GfsRun,
+    lead_hour: int,
+    lat: float,
+    lon: float,
+    progress_callback: ProgressCallback | None = None,
+    duration_hours: int = CLOUDGRAM_DEFAULT_STEP,
+) -> tuple[CloudgramCell, float, float, set[str]]:
     path, grid_lat, grid_lon = download_gfs_subset_to_disk(
         run.date,
         run.cycle,
@@ -180,30 +251,60 @@ def _read_cloudgram_cell(run: GfsRun, lead_hour: int, lat: float, lon: float, pr
         lon,
         CLOUDGRAM_VARIABLES,
         CLOUDGRAM_LEVEL_TOKENS,
-        product_key="cloudgram",
+        product_key="cloudgram_strict_v2",
         progress_callback=progress_callback,
     )
     missing: set[str] = set()
     with tempfile.TemporaryDirectory() as tmp:
         datasets = open_grib_datasets(path, Path(tmp))
-        low = _clip_pct(scalar_from_datasets(datasets, ("lcc", "lcdc")))
-        mid = _clip_pct(scalar_from_datasets(datasets, ("mcc", "mcdc")))
-        high = _clip_pct(scalar_from_datasets(datasets, ("hcc", "hcdc")))
-        total = _clip_pct(scalar_from_datasets(datasets, ("tcc", "tcdc")))
-        ceiling = scalar_from_datasets(datasets, ("gh", "h", "hgt"))
-        apcp_total = _mm_from_kgm2(scalar_from_datasets(datasets, ("tp", "apcp")))
-        prate = _mmh_from_prate(scalar_from_datasets(datasets, ("prate",)))
+        low = _clip_pct(_instant_or_average(datasets, ("lcc", "lcdc"), ("lowCloudLayer",), duration_hours))
+        mid = _clip_pct(_instant_or_average(datasets, ("mcc", "mcdc"), ("middleCloudLayer",), duration_hours))
+        high = _clip_pct(_instant_or_average(datasets, ("hcc", "hcdc"), ("highCloudLayer",), duration_hours))
+        total = _clip_pct(_instant_or_average(datasets, ("tcc", "tcdc"), ("atmosphere", "entireAtmosphere"), duration_hours))
+        conv_cloud = _clip_pct(
+            scalar_from_datasets(
+                datasets,
+                ("tcc", "tcdc"),
+                type_of_level=("convectiveCloudLayer",),
+                step_types=("instant",),
+            )
+        )
+        ceiling, ceiling_msl, surface_elevation = _ceiling_agl(datasets)
+
+        apcp_total = _mm_from_kgm2(
+            scalar_from_datasets(
+                datasets,
+                ("tp", "apcp"),
+                type_of_level=("surface",),
+                step_types=("accum",),
+                interval_hours=float(duration_hours),
+            )
+        )
+        prate = _mmh_from_prate(
+            scalar_from_datasets(datasets, ("prate",), type_of_level=("surface",), step_types=("instant",))
+        )
         apcp = _precip_from_total_or_rate(apcp_total, prate, duration_hours)
-        acpcp = _mm_from_kgm2(scalar_from_datasets(datasets, ("acpcp",)))
-        cprat = _mmh_from_prate(scalar_from_datasets(datasets, ("cprat",)))
-        cape = scalar_from_datasets(datasets, ("cape",))
-        cin = scalar_from_datasets(datasets, ("cin",))
-        visibility = _visibility_km(scalar_from_datasets(datasets, ("vis", "visibility")))
+        acpcp = _mm_from_kgm2(
+            scalar_from_datasets(
+                datasets,
+                ("acpcp",),
+                type_of_level=("surface",),
+                step_types=("accum",),
+                interval_hours=float(duration_hours),
+            )
+        )
+        cprat = _mmh_from_prate(
+            scalar_from_datasets(datasets, ("cprat",), type_of_level=("surface",), step_types=("instant",))
+        )
+        cape, cin, cape_layer = _cape_cin_180(datasets)
+        visibility = _visibility_km(
+            scalar_from_datasets(datasets, ("vis", "visibility"), type_of_level=("surface",), step_types=("instant",))
+        )
         precip_type = _precip_type_from_flags(
-            bool_from_datasets(datasets, ("crain",)),
-            bool_from_datasets(datasets, ("csnow",)),
-            bool_from_datasets(datasets, ("cfrzr",)),
-            bool_from_datasets(datasets, ("cicep",)),
+            bool_from_datasets(datasets, ("crain",), type_of_level=("surface",), step_types=("instant",)),
+            bool_from_datasets(datasets, ("csnow",), type_of_level=("surface",), step_types=("instant",)),
+            bool_from_datasets(datasets, ("cfrzr",), type_of_level=("surface",), step_types=("instant",)),
+            bool_from_datasets(datasets, ("cicep",), type_of_level=("surface",), step_types=("instant",)),
         )
 
     for name, value in {
@@ -211,14 +312,17 @@ def _read_cloudgram_cell(run: GfsRun, lead_hour: int, lat: float, lon: float, pr
         "mid_cloud": mid,
         "high_cloud": high,
         "total_cloud": total,
-        "ceiling": ceiling,
+        "convective_cloud": conv_cloud,
+        "ceiling_agl": ceiling,
         "precip": apcp,
         "visibility": visibility,
+        "cape_180_0": cape if cape_layer == "180–0 hPa AGL" else None,
+        "cin_180_0": cin if cape_layer == "180–0 hPa AGL" else None,
     }.items():
         if value is None:
             missing.add(name)
 
-    cb = _cb_score(cape, cin, acpcp, total, cprat or prate)
+    cb = _cb_score(cape, cin, acpcp, conv_cloud, cprat)
     phenomena = _phenomena(apcp, precip_type, cb, visibility)
     hazard, hazard_text = _hazard_score(cb, apcp, ceiling, visibility, phenomena)
     valid_time = run.run_datetime_utc + timedelta(hours=lead_hour)
@@ -243,6 +347,12 @@ def _read_cloudgram_cell(run: GfsRun, lead_hour: int, lat: float, lon: float, pr
             phenomena=phenomena,
             hazard_score=hazard,
             hazard_text=hazard_text,
+            ceiling_msl_gpm=ceiling_msl,
+            surface_elevation_gpm=surface_elevation,
+            convective_cloud_pct=conv_cloud,
+            conv_precip_rate_mmh=cprat,
+            cape_layer=cape_layer,
+            precip_interval_hours=float(duration_hours),
         ),
         grid_lat,
         grid_lon,
@@ -268,7 +378,14 @@ def build_cloudgram_data(
     for index, lead in enumerate(leads, start=1):
         if progress_callback:
             progress_callback({"stage": "cloudgram_step", "message": "готовлю cloudgram", "index": index, "total": total, "lead_hour": lead})
-        cell, grid_lat, grid_lon, cell_missing = _read_cloudgram_cell(run, lead, lat, lon, progress_callback=progress_callback, duration_hours=step)
+        cell, grid_lat, grid_lon, cell_missing = _read_cloudgram_cell(
+            run,
+            lead,
+            lat,
+            lon,
+            progress_callback=progress_callback,
+            duration_hours=step,
+        )
         cells.append(cell)
         missing.update(cell_missing)
     return CloudgramData(run, lat, lon, grid_lat, grid_lon, leads, cells, tuple(sorted(missing)))
