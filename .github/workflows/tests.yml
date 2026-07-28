@@ -28,4 +28,13 @@ jobs:
       - name: Run unit tests
         env:
           MPLBACKEND: Agg
-        run: python -m unittest discover -s tests
+        run: |
+          set +e
+          python -m unittest discover -s tests > unittest.log 2>&1
+          status=$?
+          if [ "$status" -ne 0 ]; then
+            echo "===== UNIT TEST FAILURE (tail) ====="
+            tail -n 160 unittest.log
+            exit "$status"
+          fi
+          tail -n 20 unittest.log
