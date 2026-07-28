@@ -61,6 +61,12 @@ class CloudgramProductTests(unittest.TestCase):
     def test_cb_score_without_signals_is_zero(self) -> None:
         self.assertEqual(_cb_score(None, None, None, None, None), 0)
 
+    def test_cb_score_normalizes_convective_accumulation_interval(self) -> None:
+        one_hour = _cb_score(700.0, -80.0, 0.3, 40.0, 0.0, 1.0)
+        three_hour = _cb_score(700.0, -80.0, 0.9, 40.0, 0.0, 3.0)
+        self.assertEqual(one_hour, three_hour)
+        self.assertEqual(one_hour, 2)
+
     def test_ceiling_is_converted_from_msl_to_agl(self) -> None:
         datasets = [
             _scalar_dataset("gh_ceiling", 850.0, short_name="gh", type_of_level="cloudCeiling"),
@@ -91,13 +97,19 @@ class CloudgramProductTests(unittest.TestCase):
         self.assertEqual(layer, "180–0 hPa AGL")
 
     def test_convective_potential_is_not_labelled_as_high_thunder_risk(self) -> None:
-        score, text = _hazard_score(2, 0.5, 1500.0, 10.0, "RA")
+        score, text = _hazard_score(2, 0.5, 1500.0, 10.0, "RA", 1.0)
         self.assertEqual(score, 2)
         self.assertIn("конвективный потенциал", text)
         self.assertNotIn("гроза", text)
 
+    def test_precipitation_hazard_is_interval_independent(self) -> None:
+        one_hour, _ = _hazard_score(0, 3.5, 1500.0, 10.0, "RA", 1.0)
+        three_hour, _ = _hazard_score(0, 10.5, 1500.0, 10.0, "RA", 3.0)
+        self.assertEqual(one_hour, 2)
+        self.assertEqual(three_hour, 2)
+
     def test_tsra_has_highest_local_cloudgram_score(self) -> None:
-        score, text = _hazard_score(3, 2.0, 1500.0, 10.0, "TSRA")
+        score, text = _hazard_score(3, 2.0, 1500.0, 10.0, "TSRA", 1.0)
         self.assertEqual(score, 4)
         self.assertIn("модельная гроза", text)
 
