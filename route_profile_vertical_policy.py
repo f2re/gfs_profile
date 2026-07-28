@@ -1,17 +1,21 @@
 from __future__ import annotations
 
-"""Устойчивый расчёт риска маршрутной точки.
+"""Meteorologically constrained route icing/turbulence diagnostics.
 
-Слабый сдвиг и одиночный шумный слой не должны окрашивать весь маршрут как
-«высокий риск». Диагностика остаётся прокси по вертикальному сдвигу GFS и не
-подменяет специализированную оценку турбулентности.
+The resulting 0..3 values are transparent GFS proxies. They are not certified
+icing categories and not EDR/GTG turbulence. ``install()`` is explicit because
+``route_profile`` historically imports this module during a circular import.
 """
 
+from dataclasses import replace
 from typing import Any
 
 import numpy as np
 
-import route_profile_contract as _contract
+from diagnostic_profile import add_profile_diagnostics, build_diagnostic_profile
+
+
+_INSTALLED = False
 
 
 def _has_run(values: np.ndarray, threshold: int, minimum_length: int) -> bool:
@@ -25,7 +29,7 @@ def _has_run(values: np.ndarray, threshold: int, minimum_length: int) -> bool:
 
 
 def shear_severity(shear_ms_per_km: float) -> int:
-    """Conservative display/risk bands for the vertical-shear proxy."""
+    """Fallback shear-only bands; the final diagnosis also requires Ri."""
 
     value = max(0.0, float(shear_ms_per_km))
     if value >= 15.0:
@@ -47,10 +51,9 @@ def vertical_risk_for_point(data: Any, point_index: int) -> int:
     max_icing = float(np.nanmax(icing)) if icing.size else 0.0
     max_turbulence = float(np.nanmax(turbulence)) if turbulence.size else 0.0
 
-    # Icing values are diagnosed independently at each pressure level, so two
-    # adjacent severe levels are meaningful. A single shear layer is written to
-    # both of its boundary levels by route_profile.py; therefore severe
-    # turbulence needs three consecutive nodes (two adjacent shear layers).
+    # Icing is evaluated at pressure levels; two adjacent high values indicate a
+    # layer. Turbulence is a derivative/layer quantity and needs three nodes
+    # (two adjacent intervals) before it is promoted to R3.
     severe_persistent = _has_run(icing, 3, 2) or _has_run(turbulence, 3, 3)
     moderate_persistent = _has_run(icing, 2, 2) or _has_run(turbulence, 2, 3)
 
@@ -74,28 +77,83 @@ def surface_risk(surface: Any) -> int:
         score = max(score, 1)
     if precip is not None and float(precip) >= 7.0:
         score = max(score, 2)
-
     if ceiling is not None and float(ceiling) < 1000.0:
         score = max(score, 2)
     if ceiling is not None and float(ceiling) < 300.0:
         score = max(score, 3)
-
     if visibility is not None and float(visibility) < 5.0:
         score = max(score, 2)
     if visibility is not None and float(visibility) < 1.0:
         score = max(score, 3)
 
-    # cb_score == 1 is weak instability only; cb_score == 2 is convective
-    # potential. Confirmed TSRA remains the only convective R3 condition.
+    # score 2 is potential only. R3 is reserved for a TSRA code produced from
+    # strong convection plus precipitation.
     if cb_score >= 2:
         score = max(score, 2)
-    if _contract.confirmed_thunder(surface):
+    if str(getattr(surface, "phenomena", "")) == "TSRA":
         score = 3
     return score
 
 
-_contract.vertical_risk_for_point = vertical_risk_for_point
-_contract.surface_risk = surface_risk
-# The original builder resolves this global at execution time, so the same
-# calibrated thresholds feed both the objective risk and the rendered fields.
-_contract._route._shear_severity = shear_severity
+def _nearest_row(profile, level_hpa: int):
+    if profile.empty:
+        return None
+    index = (profile["pressure_hpa"] - float(level_hpa)).abs().idxmin()
+    row = profile.loc[index]
+    return row if abs(float(row["pressure_hpa"]) - float(level_hpa)) <= 30.0 else None
+
+
+def _diagnostic_arrays(data, levels_hpa: tuple[int, ...]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    n_levels = len(levels_hpa)
+    n_points = len(data.waypoints)
+    icing = np.zeros((n_levels, n_points), dtype=int)
+    turbulence = np.zeros((n_levels, n_points), dtype=int)
+    cloud = np.zeros((n_levels, n_points), dtype=bool)
+
+    for point_index, point in enumerate(data.waypoints):
+        profile = point.profile
+        if "icing_proxy_score" not in profile or "turbulence_proxy_score" not in profile:
+            profile = add_profile_diagnostics(profile)
+        for level_index, level in enumerate(levels_hpa):
+            row = _nearest_row(profile, level)
+            if row is None:
+                continue
+            icing[level_index, point_index] = int(row.get("icing_proxy_score", 0) or 0)
+            turbulence[level_index, point_index] = int(row.get("turbulence_proxy_score", 0) or 0)
+            cloud[level_index, point_index] = bool(row.get("cloud_proxy", False))
+    return icing, turbulence, cloud
+
+
+def install() -> None:
+    global _INSTALLED
+    if _INSTALLED:
+        return
+
+    import route_profile as route
+    import route_profile_contract as contract
+
+    original_contract_builder = contract.build_route_profile_data
+
+    def diagnostic_route_profile(run, lead_hour, lat, lon, progress_callback=None):
+        return build_diagnostic_profile(
+            run,
+            lead_hour,
+            lat,
+            lon,
+            levels_hpa=tuple(route.ROUTE_LEVELS_HPA),
+            include_surface_row=False,
+            progress_callback=progress_callback,
+        )
+
+    def build_route_profile_data(*args, **kwargs):
+        data = original_contract_builder(*args, **kwargs)
+        icing, turbulence, cloud = _diagnostic_arrays(data, tuple(data.levels_hpa))
+        enriched = replace(data, icing_score=icing, turbulence_score=turbulence, cloud_mask=cloud)
+        return contract.recompute_objective_risk(enriched)
+
+    route.build_profile = diagnostic_route_profile
+    route._shear_severity = shear_severity
+    contract.build_route_profile_data = build_route_profile_data
+    contract.vertical_risk_for_point = vertical_risk_for_point
+    contract.surface_risk = surface_risk
+    _INSTALLED = True
