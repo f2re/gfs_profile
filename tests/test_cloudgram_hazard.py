@@ -8,7 +8,8 @@ from cloudgram_product import _hazard_score, _phenomena, _visibility_km
 class CloudgramHazardTests(unittest.TestCase):
     def test_visibility_units(self) -> None:
         self.assertEqual(_visibility_km(10000.0), 10.0)
-        self.assertEqual(_visibility_km(8.0), 8.0)
+        self.assertEqual(_visibility_km(8000.0), 8.0)
+        self.assertEqual(_visibility_km(100.0), 0.1)
         self.assertIsNone(_visibility_km(None))
 
     def test_phenomena_codes(self) -> None:
@@ -34,12 +35,13 @@ class CloudgramHazardTests(unittest.TestCase):
         self.assertTrue(text)
 
         score, text = _hazard_score(2, 0.5, 1500.0, 10.0, "RA")
-        self.assertEqual(score, 3)
-        self.assertIn("конвекция", text)
+        self.assertEqual(score, 2)
+        self.assertIn("конвективный потенциал", text)
+        self.assertNotIn("модельная гроза", text)
 
         score, text = _hazard_score(3, 0.5, 1500.0, 10.0, "TSRA")
         self.assertEqual(score, 4)
-        self.assertIn("гроза", text)
+        self.assertIn("модельная гроза", text)
 
 
 if __name__ == "__main__":
