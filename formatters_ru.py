@@ -88,12 +88,12 @@ def _format_isotherms(result: ProfileResult) -> str:
     for target in ISOTHERM_TARGETS_C:
         height_m = _isotherm_height_m(result.dataframe, target)
         values.append("н/д" if height_m is None else f"{height_m / 1000.0:.1f}")
-    return f"❄ 0/-10/-20°C: {'/'.join(values)} км"
+    return f"❄ 0/-10/-20°C: {'/'.join(values)} км MSL"
 
 
 def _compact_table(result: ProfileResult) -> str:
     df = result.dataframe
-    rows = ["pгПа zкм  T/Td°C     RH  Ветер", "---- ---- ----------- --- -------"]
+    rows = ["pгПа Zgкм T/Td°C     RH  Ветер", "---- ---- ----------- --- -------"]
     seen_pressures: set[int] = set()
     for level in PROFILE_LEVELS_HPA:
         row = _nearest_level_row(df, level)
@@ -127,12 +127,12 @@ def format_profile_summary(result: ProfileResult) -> str:
         lines.extend(
             [
                 _format_isotherms(result),
-                f"🌬 max: {max_wind:.1f} м/с @ {max_wind_level} гПа ({max_wind_height_km:.1f} км)",
+                f"🌬 max: {max_wind:.1f} м/с @ {max_wind_level} гПа ({max_wind_height_km:.1f} км MSL)",
                 f"📄 уровней: {len(df)}",
             ]
         )
 
-    lines.append("ℹ NOMADS subset • GFS grid, не радиозонд")
+    lines.append("ℹ Zg — геопотенциальная высота MSL • GFS grid, не радиозонд")
     return "\n".join(lines)
 
 
