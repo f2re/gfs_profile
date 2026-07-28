@@ -48,8 +48,8 @@ class WindgramPlotTest(unittest.TestCase):
 
         labels = _height_labels_by_level(data)
 
-        self.assertEqual(labels[850], "850\nZср 1.6 км")
-        self.assertEqual(labels[700], "700\nZср 3.1 км")
+        self.assertEqual(labels[850], "850\nZgср 1.6 км")
+        self.assertEqual(labels[700], "700\nZgср 3.1 км")
 
     def test_day_guides_use_one_item_per_lead_not_per_level_cell(self) -> None:
         data = WindgramData(
