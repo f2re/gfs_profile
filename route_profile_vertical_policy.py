@@ -145,8 +145,28 @@ def install() -> None:
             progress_callback=progress_callback,
         )
 
-    def build_route_profile_data(*args, **kwargs):
-        data = original_contract_builder(*args, **kwargs)
+    def build_route_profile_data(
+        run,
+        origin,
+        destination,
+        departure_lead: int,
+        speed_kmh: int = route.ROUTE_DEFAULT_SPEED_KMH,
+        mode: str = "simple",
+        progress_callback=None,
+        max_points: int = contract.ROUTE_MAX_POINTS,
+        spatial_step_km: int = int(contract.ROUTE_SPATIAL_STEP_KM),
+    ):
+        data = original_contract_builder(
+            run,
+            origin,
+            destination,
+            departure_lead,
+            speed_kmh=speed_kmh,
+            mode=mode,
+            progress_callback=progress_callback,
+            max_points=max_points,
+            spatial_step_km=spatial_step_km,
+        )
         icing, turbulence, cloud = _diagnostic_arrays(data, tuple(data.levels_hpa))
         enriched = replace(data, icing_score=icing, turbulence_score=turbulence, cloud_mask=cloud)
         return contract.recompute_objective_risk(enriched)
