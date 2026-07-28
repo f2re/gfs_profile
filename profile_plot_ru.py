@@ -91,7 +91,7 @@ def write_profile_png(result: ProfileResult) -> Path:
             axes[0].plot(df["dewpoint_c"], pressure, label="Td — точка росы", color=METEO.dewpoint, linewidth=2.15)
         axes[0].axvline(0, linewidth=1.0, color=METEO.freezing, linestyle="--", alpha=0.82)
         axes[0].set_xlabel("T / Td, °C")
-        axes[0].set_ylabel("p, гПа / Z, км")
+        axes[0].set_ylabel("p, гПа / Zg, км MSL")
         axes[0].set_title("Температура и точка росы")
         axes[0].legend(loc="best", fontsize=8)
 
@@ -117,14 +117,14 @@ def write_profile_png(result: ProfileResult) -> Path:
                 axes[3].text(
                     0.66,
                     float(row["pressure_hpa"]),
-                    f"{_height_km(row):.1f} км  {int(round(float(row['wind_dir_deg']))) % 360:03d}° / {float(row['wind_speed_ms']):.1f}",
+                    f"{_height_km(row):.1f} км MSL  {int(round(float(row['wind_dir_deg']))) % 360:03d}° / {float(row['wind_speed_ms']):.1f}",
                     va="center",
                     fontsize=8,
                     color=METEO.axis_text,
                 )
-        axes[3].set_xlim(0, 1.35)
+        axes[3].set_xlim(0, 1.55)
         axes[3].set_xticks([])
-        axes[3].set_xlabel("Z км · dd° / V м/с")
+        axes[3].set_xlabel("Zg MSL · dd° / V м/с")
         axes[3].set_title("Ветер")
         axes[3].text(
             0.05,
@@ -141,7 +141,7 @@ def write_profile_png(result: ProfileResult) -> Path:
         for axis in axes:
             _setup_pressure_axis(axis, df)
 
-        add_footer(fig, "Модельный профиль GFS 0.25; высоты Z — геопотенциальные, интерполированные по изобарическим уровням.")
+        add_footer(fig, "Модельный профиль GFS 0.25; Zg — геопотенциальная высота над средним уровнем моря (MSL), не AGL.")
         fig.tight_layout(rect=(0, 0.045, 1, 0.94))
         fig.savefig(out_path, dpi=170, bbox_inches="tight")
     except Exception:
