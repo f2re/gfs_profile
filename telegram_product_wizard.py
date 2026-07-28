@@ -1,0 +1,273 @@
+from __future__ import annotations
+
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+PRODUCT_WIZARD_KEY = "product_wizard"
+
+AERO_LEADS = (12, 24, 48, 72, 120)
+WINDGRAM_PARAMS = (("wind", "Ветер"), ("temp", "Температура"), ("rh", "Влажность"))
+WINDGRAM_TO_HOURS = (120, 240, 384)
+WINDGRAM_STEPS = (3, 6, 12)
+CLOUDGRAM_TO_HOURS = (24, 48, 72, 120)
+CLOUDGRAM_STEPS = (3, 6)
+CLOUDGRAM_MODES = (("pro", "Профи"), ("simple", "Упрощённо"))
+MAP_LEADS = (24, 48, 72, 96)
+MAP_FROM_HOURS = (0, 6, 12, 24)
+MAP_TO_HOURS = (12, 24, 48, 72, 96)
+MAP_STEPS = (1, 3, 6)
+MAP_MENU_MAX_FRAMES = 18
+MAP_MODES = (("single", "Одна карта"), ("series", "Серия PNG"), ("gif", "GIF"))
+MAP_BASEMAPS = (("places", "Полная"), ("basic", "Базовая"))
+
+
+def start_aero_wizard_state(default_lead: int, diagram_type: str = "skewt") -> dict[str, object]:
+    return {"product": "aero", "step": "await_point", "lead": int(default_lead), "diagram_type": "skewt"}
+
+
+def start_windgram_wizard_state() -> dict[str, object]:
+    return {"product": "windgram", "step": "await_point", "from": 0, "to": 120, "time_step": 6, "top": 500, "param": "wind"}
+
+
+def start_cloudgram_wizard_state() -> dict[str, object]:
+    return {"product": "cloudgram", "step": "await_point", "from": 0, "to": 72, "time_step": 3, "mode": "pro"}
+
+
+def start_map_wizard_state(default_lead: int = 24) -> dict[str, object]:
+    return {"product": "map", "step": "await_point", "mode": "single", "lead": int(default_lead), "from": 0, "to": 24, "time_step": 6, "basemap": "places", "radius": 100}
+
+
+def product_title(product: str) -> str:
+    if product == "aero":
+        return "Аэрологическая диаграмма GFS"
+    if product == "windgram":
+        return "Windgram GFS"
+    if product == "cloudgram":
+        return "Cloudgram GFS"
+    if product == "map":
+        return "Карта GFS"
+    return "Продукт GFS"
+
+
+def point_prompt_text(state: dict[str, object]) -> str:
+    product = str(state.get("product", ""))
+    return (
+        f"{product_title(product)}\n"
+        "Шаг 1/3 — точка\n\n"
+        "Выберите точку:\n"
+        "• отправьте текущую геолокацию;\n"
+        "• нажмите одну из последних локаций;\n"
+        "• или введите город/координаты текстом.\n\n"
+        "Примеры:\nМосква\n55.75 37.62\nКраснодар"
+    )
+
+
+def _short_label(label: str, max_chars: int = 56) -> str:
+    value = " ".join(str(label or "").split())
+    return value if len(value) <= max_chars else value[: max(1, max_chars - 1)] + "…"
+
+
+def place_keyboard(labels: list[str]) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(_short_label(label, 58), callback_data=f"wiz:place:{index}")] for index, label in enumerate(labels[:5])]
+    rows.append([InlineKeyboardButton("Отмена", callback_data="wiz:cancel")])
+    return InlineKeyboardMarkup(rows)
+
+
+def _point_line(state: dict[str, object]) -> str:
+    point = state.get("point")
+    if not isinstance(point, dict):
+        return "Точка: не выбрана"
+    label = _short_label(str(point.get("label", "точка")))
+    lat = float(point.get("lat", 0.0))
+    lon = float(point.get("lon", 0.0))
+    return f"Точка: {label}\n{lat:.4f}, {lon:.4f}"
+
+
+def _param_label(param: str) -> str:
+    return {"wind": "ветер", "temp": "температура", "rh": "влажность"}.get(param, param)
+
+
+def _cloud_mode_label(mode: str) -> str:
+    return "упрощённо" if mode == "simple" else "профи"
+
+
+def _map_basemap_label(basemap: str) -> str:
+    return {
+        "basic": "базовая",
+        "water": "вода",
+        "places": "полная: вода, города и границы",
+        "roads": "полная с дорогами, если слой доступен",
+    }.get(basemap, basemap)
+
+
+def _map_frame_count(lead_from: int, lead_to: int, step: int) -> int:
+    if step <= 0 or lead_to < lead_from:
+        return 10**9
+    count = ((lead_to - lead_from) // step) + 1
+    if (lead_to - lead_from) % step:
+        count += 1
+    return count
+
+
+def _map_step_options(state: dict[str, object]) -> tuple[int, ...]:
+    lead_from = int(state.get("from", 0))
+    lead_to = int(state.get("to", 24))
+    options = tuple(step for step in MAP_STEPS if _map_frame_count(lead_from, lead_to, step) <= MAP_MENU_MAX_FRAMES)
+    return options or (6,)
+
+
+def _map_to_options(state: dict[str, object]) -> tuple[int, ...]:
+    lead_from = int(state.get("from", 0))
+    step = int(state.get("time_step", 6))
+    options = tuple(value for value in MAP_TO_HOURS if value >= lead_from and _map_frame_count(lead_from, value, step) <= MAP_MENU_MAX_FRAMES)
+    return options or (max(lead_from, 12),)
+
+
+def copy_command(state: dict[str, object]) -> str | None:
+    point = state.get("point")
+    if not isinstance(point, dict):
+        return None
+    lat = float(point.get("lat", 0.0))
+    lon = float(point.get("lon", 0.0))
+    product = str(state.get("product", ""))
+    if product == "aero":
+        return f"/aero {lat:.4f} {lon:.4f} +{int(state.get('lead', 24))}"
+    if product == "windgram":
+        return (
+            f"/windgram {lat:.4f} {lon:.4f} "
+            f"from={int(state.get('from', 0))} to={int(state.get('to', 120))} "
+            f"step={int(state.get('time_step', 6))} top={int(state.get('top', 500))} param={str(state.get('param', 'wind'))}"
+        )
+    if product == "cloudgram":
+        return (
+            f"/cloudgram {lat:.4f} {lon:.4f} "
+            f"from={int(state.get('from', 0))} to={int(state.get('to', 72))} "
+            f"step={int(state.get('time_step', 3))} mode={str(state.get('mode', 'pro'))}"
+        )
+    if product == "map":
+        radius = int(state.get("radius", 100))
+        radius_part = "" if radius == 100 else f" radius={radius}"
+        basemap = str(state.get("basemap", "places"))
+        basemap_part = "" if basemap == "places" else f" basemap={basemap}"
+        mode = str(state.get("mode", "single"))
+        if mode == "gif":
+            return (
+                f"/map {lat:.4f} {lon:.4f} "
+                f"from={int(state.get('from', 0))} to={int(state.get('to', 24))} "
+                f"step={int(state.get('time_step', 6))} mode=gif{radius_part}{basemap_part}"
+            )
+        if mode == "series":
+            return (
+                f"/map {lat:.4f} {lon:.4f} "
+                f"from={int(state.get('from', 0))} to={int(state.get('to', 24))} "
+                f"step={int(state.get('time_step', 6))} mode=series{radius_part}{basemap_part}"
+            )
+        return f"/map {lat:.4f} {lon:.4f} +{int(state.get('lead', 24))}{radius_part}{basemap_part}"
+    return None
+
+
+def _command_block(state: dict[str, object]) -> str:
+    command = copy_command(state)
+    return f"\n\nКоманда:\n{command}" if command else ""
+
+
+def params_text(state: dict[str, object]) -> str:
+    product = str(state.get("product", ""))
+    if product == "aero":
+        return (
+            f"{product_title(product)}\n"
+            "Шаг 2/3 — параметры\n\n"
+            f"{_point_line(state)}\n\n"
+            f"Срок: +{int(state.get('lead', 24))} ч"
+            f"{_command_block(state)}\n\n"
+            "Диаграмма Skew-T log-P с годографом, облачными и опасными слоями."
+        )
+    if product == "windgram":
+        param = str(state.get("param", "wind"))
+        return (
+            f"{product_title(product)}\nШаг 2/3 — параметры\n\n{_point_line(state)}\n\n"
+            f"Параметр: {_param_label(param)}\n"
+            f"Диапазон: +{int(state.get('from', 0))}…+{int(state.get('to', 120))} ч\n"
+            f"Шаг: {int(state.get('time_step', 6))} ч\n"
+            f"Уровни: до {int(state.get('top', 500))} гПа"
+            f"{_command_block(state)}\n\n"
+            "Цвет/число — выбранный параметр; стрелка — направление ветра."
+        )
+    if product == "cloudgram":
+        mode = str(state.get("mode", "pro"))
+        mode_hint = "детальная таблица" if mode == "pro" else "простая схема"
+        return (
+            f"{product_title(product)}\nШаг 2/3 — параметры\n\n{_point_line(state)}\n\n"
+            f"Режим: {_cloud_mode_label(mode)} ({mode_hint})\n"
+            f"Диапазон: +{int(state.get('from', 0))}…+{int(state.get('to', 72))} ч\n"
+            f"Шаг: {int(state.get('time_step', 3))} ч"
+            f"{_command_block(state)}\n\n"
+            "Профи — больше параметров; упрощённо — для быстрого чтения."
+        )
+    if product == "map":
+        mode = str(state.get("mode", "single"))
+        mode_label = {"single": "Одна карта", "series": "Серия PNG", "gif": "GIF-анимация"}.get(mode, mode)
+        if mode == "single":
+            time_line = f"Одна карта: срок +{int(state.get('lead', 24))} ч"
+        elif mode == "gif":
+            time_line = f"GIF-анимация: от +{int(state.get('from', 0))} до +{int(state.get('to', 24))} ч, шаг {int(state.get('time_step', 6))} ч"
+        else:
+            time_line = f"Серия PNG: от +{int(state.get('from', 0))} до +{int(state.get('to', 24))} ч, шаг {int(state.get('time_step', 6))} ч"
+        basemap_label = _map_basemap_label(str(state.get("basemap", "places")))
+        return (
+            f"{product_title(product)}\nШаг 2/3 — параметры\n\n{_point_line(state)}\n\n"
+            f"Режим: {mode_label}\n{time_line}\nПодложка: {basemap_label}\n"
+            f"Радиус: {int(state.get('radius', 100))} км"
+            f"{_command_block(state)}\n\n"
+            "Композит GFS: осадки, облачность, грозовой риск, явления, видимость и ветер AT500."
+        )
+    return "Параметры продукта"
+
+
+def params_keyboard(state: dict[str, object]) -> InlineKeyboardMarkup:
+    product = str(state.get("product", ""))
+    rows: list[list[InlineKeyboardButton]] = []
+    if product == "aero":
+        current_lead = int(state.get("lead", 24))
+        rows.append([InlineKeyboardButton(("✓ " if current_lead == lead else "") + f"+{lead}ч", callback_data=f"wiz:aero:lead:{lead}") for lead in AERO_LEADS[:3]])
+        rows.append([InlineKeyboardButton(("✓ " if current_lead == lead else "") + f"+{lead}ч", callback_data=f"wiz:aero:lead:{lead}") for lead in AERO_LEADS[3:]])
+    elif product == "windgram":
+        current_param = str(state.get("param", "wind"))
+        rows.append([InlineKeyboardButton(("✓ " if current_param == key else "") + label, callback_data=f"wiz:wind:param:{key}") for key, label in WINDGRAM_PARAMS])
+        current_to = int(state.get("to", 120))
+        rows.append([InlineKeyboardButton(("✓ " if current_to == value else "") + f"до +{value}", callback_data=f"wiz:wind:to:{value}") for value in WINDGRAM_TO_HOURS])
+        current_step = int(state.get("time_step", 6))
+        rows.append([InlineKeyboardButton(("✓ " if current_step == value else "") + f"шаг {value}ч", callback_data=f"wiz:wind:step:{value}") for value in WINDGRAM_STEPS])
+    elif product == "cloudgram":
+        current_mode = str(state.get("mode", "pro"))
+        rows.append([InlineKeyboardButton(("✓ " if current_mode == key else "") + label, callback_data=f"wiz:cloud:mode:{key}") for key, label in CLOUDGRAM_MODES])
+        current_to = int(state.get("to", 72))
+        rows.append([InlineKeyboardButton(("✓ " if current_to == value else "") + f"до +{value}", callback_data=f"wiz:cloud:to:{value}") for value in CLOUDGRAM_TO_HOURS])
+        current_step = int(state.get("time_step", 3))
+        rows.append([InlineKeyboardButton(("✓ " if current_step == value else "") + f"шаг {value}ч", callback_data=f"wiz:cloud:step:{value}") for value in CLOUDGRAM_STEPS])
+    elif product == "map":
+        current_mode = str(state.get("mode", "single"))
+        rows.append([InlineKeyboardButton(("✓ " if current_mode == key else "") + label, callback_data=f"wiz:map:mode:{key}") for key, label in MAP_MODES])
+        if current_mode == "single":
+            current_lead = int(state.get("lead", 24))
+            rows.append([InlineKeyboardButton(("✓ " if current_lead == lead else "") + f"+{lead}ч", callback_data=f"wiz:map:lead:{lead}") for lead in MAP_LEADS])
+        else:
+            current_from = int(state.get("from", 0))
+            rows.append([InlineKeyboardButton(("✓ " if current_from == value else "") + f"от +{value}", callback_data=f"wiz:map:from:{value}") for value in MAP_FROM_HOURS])
+            current_to = int(state.get("to", 24))
+            rows.append([InlineKeyboardButton(("✓ " if current_to == value else "") + f"до +{value}", callback_data=f"wiz:map:to:{value}") for value in _map_to_options(state)])
+            current_step = int(state.get("time_step", 6))
+            rows.append([InlineKeyboardButton(("✓ " if current_step == value else "") + f"шаг {value}ч", callback_data=f"wiz:map:step:{value}") for value in _map_step_options(state)])
+        current_basemap = str(state.get("basemap", "places"))
+        rows.append([InlineKeyboardButton(("✓ " if current_basemap == key else "") + label, callback_data=f"wiz:map:basemap:{key}") for key, label in MAP_BASEMAPS])
+
+    rows.append([InlineKeyboardButton("Построить", callback_data="wiz:run")])
+    rows.append([InlineKeyboardButton("Другая точка", callback_data="wiz:point"), InlineKeyboardButton("Отмена", callback_data="wiz:cancel")])
+    return InlineKeyboardMarkup(rows)
+
+
+def set_point(state: dict[str, object], point: dict[str, object]) -> dict[str, object]:
+    new_state = dict(state)
+    new_state["point"] = point
+    new_state["step"] = "params"
+    new_state.pop("candidates", None)
+    return new_state

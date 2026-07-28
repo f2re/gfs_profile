@@ -1,0 +1,681 @@
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+import sys
+import tempfile
+import threading
+import time
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from functools import lru_cache
+from pathlib import Path
+from typing import Any, Sequence
+from urllib.parse import urlencode
+
+import numpy as np
+import pandas as pd
+import requests
+from requests import RequestException
+
+NOMADS_BASE = os.getenv("NOMADS_BASE", "https://nomads.ncep.noaa.gov")
+REQUEST_TIMEOUT = int(os.getenv("GFS_REQUEST_TIMEOUT", os.getenv("REQUEST_TIMEOUT", "35")))
+CACHE_TTL_SECONDS = int(os.getenv("GFS_CACHE_TTL_SECONDS", str(24 * 3600)))
+AVAILABILITY_CACHE_TTL_SECONDS = int(os.getenv("GFS_AVAILABILITY_CACHE_TTL_SECONDS", "300"))
+CACHE_DIR = Path(os.getenv("GFS_CACHE_DIR", os.getenv("CACHE_DIR", ".cache_gfs")))
+CACHE_DIR.mkdir(parents=True, exist_ok=True)
+GRID_STEP_DEG = 0.25
+ProgressCallback = Callable[[dict[str, Any]], None]
+
+
+@dataclass
+class _DownloadLock:
+    lock: threading.Lock
+    refs: int = 0
+
+
+_DOWNLOAD_LOCKS: dict[str, _DownloadLock] = {}
+_DOWNLOAD_LOCKS_LOCK = threading.Lock()
+
+DEFAULT_PROFILE_LEVELS_HPA = (
+    1000,
+    975,
+    950,
+    925,
+    900,
+    850,
+    800,
+    750,
+    700,
+    650,
+    600,
+    550,
+    500,
+    450,
+    400,
+    350,
+    300,
+    250,
+    200,
+    150,
+    100,
+)
+
+
+class GfsProfileError(RuntimeError):
+    """Operational error while downloading or parsing a GFS profile."""
+
+
+@dataclass(frozen=True)
+class GfsRun:
+    date: str
+    cycle: str
+
+    @property
+    def run_datetime_utc(self) -> datetime:
+        return datetime.strptime(f"{self.date}{self.cycle}", "%Y%m%d%H").replace(tzinfo=timezone.utc)
+
+
+@dataclass(frozen=True)
+class ProfileResult:
+    run: GfsRun
+    lead_hour: int
+    requested_lat: float
+    requested_lon: float
+    grid_lat: float
+    grid_lon: float
+    grib_path: Path
+    dataframe: pd.DataFrame
+
+    @property
+    def valid_time_utc(self) -> datetime:
+        return self.run.run_datetime_utc + timedelta(hours=self.lead_hour)
+
+    def to_payload(self) -> dict[str, Any]:
+        df = self.dataframe
+        return {
+            "meta": {
+                "date": self.run.date,
+                "cycle": self.run.cycle,
+                "lead_index": self.lead_hour,
+                "lead_hour": self.lead_hour,
+                "valid_time_utc": self.valid_time_utc.strftime("%Y-%m-%d %H:%M"),
+                "requested_point": {"lat": self.requested_lat, "lon": self.requested_lon},
+                "gfs_grid_point": {"lat": self.grid_lat, "lon": self.grid_lon},
+                "max_height_m": float(df["geopotential_height_m"].max()) if not df.empty else 0.0,
+                "source": "NOMADS GRIB Filter + disk cache",
+                "rows": int(len(df)),
+                "cache_file": self.grib_path.name,
+                "freezing_level": freezing_level_diagnostic(df),
+            },
+            "columns": list(df.columns),
+            "rows": df.round(3).to_dict(orient="records"),
+        }
+
+
+def _emit(progress_callback: ProgressCallback | None, **payload: Any) -> None:
+    if progress_callback:
+        progress_callback(payload)
+
+
+def now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def canonical_leads() -> list[int]:
+    return list(range(0, 121)) + list(range(123, 385, 3))
+
+
+def validate_lead(lead_hour: int) -> int:
+    if lead_hour not in canonical_leads():
+        raise GfsProfileError("lead_hour вне допустимого диапазона GFS: 0-120 каждый час, 123-384 каждые 3 часа")
+    return lead_hour
+
+
+def snap_to_gfs_grid(lat: float, lon: float) -> tuple[float, float]:
+    if not -90 <= lat <= 90:
+        raise GfsProfileError("Широта должна быть в диапазоне -90..90")
+    if not -180 <= lon <= 180:
+        raise GfsProfileError("Долгота должна быть в диапазоне -180..180")
+
+    grid_lat = round(lat / GRID_STEP_DEG) * GRID_STEP_DEG
+    grid_lon = round(lon / GRID_STEP_DEG) * GRID_STEP_DEG
+    grid_lat = max(-90.0, min(90.0, grid_lat))
+    if grid_lon > 180:
+        grid_lon -= 360
+    if grid_lon < -180:
+        grid_lon += 360
+    return round(grid_lat, 3), round(grid_lon, 3)
+
+
+def configured_pressure_levels_hpa() -> tuple[int, ...] | None:
+    """Return optional pressure-level subset for NOMADS or None for all levels."""
+
+    raw = os.getenv("GFS_PRESSURE_LEVELS_HPA", "").strip()
+    if not raw or raw.lower() in {"all", "all_lev", "full"}:
+        return None
+    if raw.lower() in {"profile", "default"}:
+        return DEFAULT_PROFILE_LEVELS_HPA
+
+    levels: list[int] = []
+    for token in raw.replace(";", ",").replace(" ", ",").split(","):
+        token = token.strip()
+        if not token:
+            continue
+        try:
+            level = int(token)
+        except ValueError as exc:
+            raise GfsProfileError(f"Некорректный уровень давления в GFS_PRESSURE_LEVELS_HPA: {token}") from exc
+        if level <= 0:
+            raise GfsProfileError(f"Уровень давления должен быть положительным: {level}")
+        levels.append(level)
+    if not levels:
+        return None
+    return tuple(sorted(set(levels), reverse=True))
+
+
+def level_query_params(levels_hpa: tuple[int, ...] | None) -> dict[str, str]:
+    if not levels_hpa:
+        return {"all_lev": "on"}
+    return {f"lev_{level}_mb": "on" for level in levels_hpa}
+
+
+def levels_cache_suffix(levels_hpa: tuple[int, ...] | None) -> str:
+    if not levels_hpa:
+        return "alllev"
+    return "lev" + "-".join(str(level) for level in levels_hpa)
+
+
+def run_file_name(cycle: str, lead_hour: int) -> str:
+    return f"gfs.t{cycle}z.pgrb2.0p25.f{lead_hour:03d}"
+
+
+def run_dir(date: str, cycle: str) -> str:
+    return f"/gfs.{date}/{cycle}/atmos"
+
+
+def source_idx_url(date: str, cycle: str, lead_hour: int = 0) -> str:
+    file_name = run_file_name(cycle, lead_hour)
+    return f"{NOMADS_BASE}/pub/data/nccf/com/gfs/prod/gfs.{date}/{cycle}/atmos/{file_name}.idx"
+
+
+def cache_key(date: str, cycle: str, lead_hour: int, lat: float, lon: float, levels_hpa: tuple[int, ...] | None = None) -> str:
+    return f"{date}_{cycle}_f{lead_hour:03d}_{lat:.3f}_{lon:.3f}_{levels_cache_suffix(levels_hpa)}".replace("-", "m")
+
+
+def grib_filter_url(
+    date: str,
+    cycle: str,
+    lead_hour: int,
+    lat: float,
+    lon: float,
+    levels_hpa: tuple[int, ...] | None = None,
+) -> str:
+    lon_360 = lon % 360
+    top_lat = min(90.0, lat + 0.001)
+    bottom_lat = max(-90.0, lat)
+    query = {
+        "file": run_file_name(cycle, lead_hour),
+        "var_TMP": "on",
+        "var_RH": "on",
+        "var_UGRD": "on",
+        "var_VGRD": "on",
+        "var_HGT": "on",
+        "subregion": "",
+        "leftlon": f"{lon_360:.3f}",
+        "rightlon": f"{lon_360 + 0.001:.3f}",
+        "toplat": f"{top_lat:.3f}",
+        "bottomlat": f"{bottom_lat:.3f}",
+        "dir": run_dir(date, cycle),
+    }
+    query.update(level_query_params(levels_hpa))
+    return f"{NOMADS_BASE}/cgi-bin/filter_gfs_0p25_1hr.pl?{urlencode(query)}"
+
+
+def _availability_cache_bucket() -> int:
+    return int(time.time() // max(1, AVAILABILITY_CACHE_TTL_SECONDS))
+
+
+@lru_cache(maxsize=4096)
+def _forecast_file_exists_cached(date: str, cycle: str, lead_hour: int, cache_bucket: int) -> bool:
+    validate_lead(lead_hour)
+    try:
+        response = requests.head(source_idx_url(date, cycle, lead_hour), timeout=12)
+        return response.status_code == 200
+    except RequestException:
+        return False
+
+
+def forecast_file_exists(date: str, cycle: str, lead_hour: int) -> bool:
+    """Check that the exact GFS forecast file is published, with short-lived availability caching."""
+
+    return _forecast_file_exists_cached(date, cycle, lead_hour, _availability_cache_bucket())
+
+
+forecast_file_exists.cache_info = _forecast_file_exists_cached.cache_info  # type: ignore[attr-defined]
+forecast_file_exists.cache_clear = _forecast_file_exists_cached.cache_clear  # type: ignore[attr-defined]
+
+
+@lru_cache(maxsize=256)
+def _cycle_exists_cached(date: str, cycle: str, cache_bucket: int) -> bool:
+    return forecast_file_exists(date, cycle, 0)
+
+
+def cycle_exists(date: str, cycle: str) -> bool:
+    return _cycle_exists_cached(date, cycle, _availability_cache_bucket())
+
+
+cycle_exists.cache_info = _cycle_exists_cached.cache_info  # type: ignore[attr-defined]
+cycle_exists.cache_clear = _cycle_exists_cached.cache_clear  # type: ignore[attr-defined]
+
+
+def latest_available_run_for_lead(lead_hour: int, reference_time: datetime | None = None) -> GfsRun:
+    """Return the newest GFS run where the requested forecast lead is already available."""
+
+    validate_lead(lead_hour)
+    ref = reference_time or now_utc()
+    if ref.tzinfo is None:
+        ref = ref.replace(tzinfo=timezone.utc)
+    ref = ref.astimezone(timezone.utc)
+
+    for day_offset in (0, 1, 2):
+        day = ref.date() - timedelta(days=day_offset)
+        date = day.strftime("%Y%m%d")
+        for cycle in ("18", "12", "06", "00"):
+            run_time = datetime.strptime(f"{date}{cycle}", "%Y%m%d%H").replace(tzinfo=timezone.utc)
+            if run_time <= ref and forecast_file_exists(date, cycle, lead_hour):
+                return GfsRun(date=date, cycle=cycle)
+
+    raise GfsProfileError(f"Не найден доступный цикл GFS со сроком +{lead_hour} ч за последние 3 дня")
+
+
+def latest_available_run(reference_time: datetime | None = None) -> GfsRun:
+    return latest_available_run_for_lead(0, reference_time=reference_time)
+
+
+def clean_old_cache() -> None:
+    cutoff = time.time() - CACHE_TTL_SECONDS
+    for pattern in ("*.grib2", "*.part"):
+        for path in CACHE_DIR.glob(pattern):
+            try:
+                if path.stat().st_mtime < cutoff:
+                    path.unlink(missing_ok=True)
+            except OSError:
+                continue
+
+
+def _acquire_download_lock(key: str) -> _DownloadLock:
+    with _DOWNLOAD_LOCKS_LOCK:
+        entry = _DOWNLOAD_LOCKS.get(key)
+        if entry is None:
+            entry = _DownloadLock(threading.Lock())
+            _DOWNLOAD_LOCKS[key] = entry
+        entry.refs += 1
+        return entry
+
+
+def _release_download_lock(key: str, entry: _DownloadLock) -> None:
+    with _DOWNLOAD_LOCKS_LOCK:
+        entry.refs -= 1
+        if entry.refs <= 0 and _DOWNLOAD_LOCKS.get(key) is entry:
+            _DOWNLOAD_LOCKS.pop(key, None)
+
+
+def _validate_grib_file(path: Path) -> None:
+    try:
+        with path.open("rb") as file_obj:
+            magic = file_obj.read(4)
+    except OSError as exc:
+        raise GfsProfileError(f"Не удалось прочитать загруженный GRIB2: {exc}") from exc
+    if magic != b"GRIB":
+        path.unlink(missing_ok=True)
+        raise GfsProfileError("NOMADS вернул ответ без сигнатуры GRIB")
+
+    try:
+        import eccodes
+
+        with path.open("rb") as file_obj:
+            gid = eccodes.codes_grib_new_from_file(file_obj)
+            if gid is None:
+                path.unlink(missing_ok=True)
+                raise GfsProfileError("GRIB2 не содержит сообщений")
+            try:
+                points = int(eccodes.codes_get(gid, "numberOfDataPoints"))
+            finally:
+                eccodes.codes_release(gid)
+    except GfsProfileError:
+        raise
+    except Exception as exc:
+        raise GfsProfileError(f"Не удалось проверить сетку GRIB2: {exc}") from exc
+
+    if points > 16:
+        path.unlink(missing_ok=True)
+        raise GfsProfileError(f"NOMADS вернул слишком большую GRIB-сетку вместо точечного subset: {points} точек")
+
+
+def invalidate_grib_cache_file(path: Path) -> None:
+    try:
+        if path.is_file() and path.suffix == ".grib2" and path.parent == CACHE_DIR:
+            path.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _download_profile_grib_to_disk_unlocked(
+    date: str,
+    cycle: str,
+    lead_hour: int,
+    lat: float,
+    lon: float,
+    levels_hpa: tuple[int, ...] | None,
+    key: str,
+    out_path: Path,
+    progress_callback: ProgressCallback | None = None,
+) -> Path:
+    if out_path.exists():
+        try:
+            _validate_grib_file(out_path)
+            _emit(progress_callback, stage="cache", message="GRIB2 найден в файловом кэше", file=str(out_path), bytes=out_path.stat().st_size)
+            return out_path
+        except GfsProfileError:
+            out_path.unlink(missing_ok=True)
+
+    if not forecast_file_exists(date, cycle, lead_hour):
+        raise GfsProfileError(f"Файл GFS для {date} {cycle}Z +{lead_hour} ч ещё не опубликован")
+
+    url = grib_filter_url(date, cycle, lead_hour, lat, lon, levels_hpa)
+    part_path = CACHE_DIR / f"{key}.part"
+    part_path.unlink(missing_ok=True)
+    _emit(
+        progress_callback,
+        stage="download_start",
+        message="Начинаю загрузку GRIB2",
+        url=url,
+        downloaded=0,
+        total=None,
+        levels="all" if levels_hpa is None else list(levels_hpa),
+    )
+    try:
+        with requests.get(url, timeout=REQUEST_TIMEOUT, stream=True) as response:
+            if response.status_code != 200:
+                raise GfsProfileError(f"Ошибка загрузки GFS: HTTP {response.status_code}")
+            content_type = response.headers.get("content-type", "").lower()
+            if "text/html" in content_type:
+                raise GfsProfileError("NOMADS вернул HTML вместо GRIB2")
+
+            total = int(response.headers.get("content-length") or 0) or None
+            downloaded = 0
+            last_emit = 0.0
+            with part_path.open("wb") as file_obj:
+                for chunk in response.iter_content(chunk_size=65536):
+                    if chunk:
+                        file_obj.write(chunk)
+                        downloaded += len(chunk)
+                        now = time.monotonic()
+                        if now - last_emit >= 1.0:
+                            last_emit = now
+                            _emit(
+                                progress_callback,
+                                stage="download",
+                                message="Загружаю GRIB2",
+                                downloaded=downloaded,
+                                total=total,
+                            )
+            _emit(progress_callback, stage="download_done", message="GRIB2 загружен", downloaded=downloaded, total=total)
+    except RequestException as exc:
+        part_path.unlink(missing_ok=True)
+        raise GfsProfileError(f"Ошибка подключения к NOMADS: {exc}") from exc
+    except Exception:
+        part_path.unlink(missing_ok=True)
+        raise
+
+    if not part_path.exists() or part_path.stat().st_size < 256:
+        part_path.unlink(missing_ok=True)
+        raise GfsProfileError("Получен слишком маленький ответ от GFS Filter")
+
+    _validate_grib_file(part_path)
+    part_path.replace(out_path)
+    return out_path
+
+
+def download_profile_grib_to_disk(
+    date: str,
+    cycle: str,
+    lead_hour: int,
+    lat: float,
+    lon: float,
+    progress_callback: ProgressCallback | None = None,
+) -> Path:
+    validate_lead(lead_hour)
+    clean_old_cache()
+    levels_hpa = configured_pressure_levels_hpa()
+    key = cache_key(date, cycle, lead_hour, lat, lon, levels_hpa)
+    out_path = CACHE_DIR / f"{key}.grib2"
+
+    lock_entry = _acquire_download_lock(key)
+    try:
+        with lock_entry.lock:
+            return _download_profile_grib_to_disk_unlocked(
+                date,
+                cycle,
+                lead_hour,
+                lat,
+                lon,
+                levels_hpa,
+                key,
+                out_path,
+                progress_callback=progress_callback,
+            )
+    finally:
+        _release_download_lock(key, lock_entry)
+
+
+def open_isobaric_dataset(grib_path: Path, idx_path: str):
+    """Open GRIB through the supported xarray cfgrib engine."""
+
+    try:
+        import xarray as xr
+    except Exception as exc:
+        raise GfsProfileError("Не установлен xarray. Выполните pip install -r requirements.txt") from exc
+
+    try:
+        return xr.open_dataset(
+            str(grib_path),
+            engine="cfgrib",
+            backend_kwargs={
+                "indexpath": idx_path,
+                "errors": "raise",
+                "filter_by_keys": {"typeOfLevel": "isobaricInhPa"},
+            },
+        )
+    except Exception as exc:
+        raise GfsProfileError(f"Ошибка чтения GRIB2 через xarray/cfgrib: {exc}") from exc
+
+
+def extract_profile_from_grib_file(grib_path: Path, progress_callback: ProgressCallback | None = None) -> pd.DataFrame:
+    _emit(progress_callback, stage="parse_start", message="Читаю GRIB2 через xarray/cfgrib/eccodes", file=str(grib_path))
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        idx_path = os.path.join(tmp_dir, "profile.idx")
+        ds = open_isobaric_dataset(grib_path, idx_path)
+
+        required = ["t", "r", "u", "v", "gh", "isobaricInhPa"]
+        for name in required:
+            if name not in ds and name not in ds.coords:
+                raise GfsProfileError(f"В GRIB отсутствует поле {name}")
+
+        levels = ds["isobaricInhPa"].values.astype(float)
+        t = np.squeeze(ds["t"].values).astype(float)
+        rh = np.squeeze(ds["r"].values).astype(float)
+        u = np.squeeze(ds["u"].values).astype(float)
+        v = np.squeeze(ds["v"].values).astype(float)
+        hgt = np.squeeze(ds["gh"].values).astype(float)
+
+        if t.ndim > 1:
+            t = t[..., 0, 0]
+            rh = rh[..., 0, 0]
+            u = u[..., 0, 0]
+            v = v[..., 0, 0]
+            hgt = hgt[..., 0, 0]
+
+        df = pd.DataFrame(
+            {
+                "pressure_hpa": levels,
+                "temperature_k": t,
+                "relative_humidity_pct": rh,
+                "u_wind_ms": u,
+                "v_wind_ms": v,
+                "geopotential_height_m": hgt,
+            }
+        )
+        df = df.dropna(subset=["pressure_hpa", "geopotential_height_m"]).copy()
+        out = add_derived_parameters(df)
+        _emit(progress_callback, stage="parse_done", message="Изобарический профиль разобран", rows=len(out))
+        return out
+
+
+def add_derived_parameters(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+    out["temperature_c"] = out["temperature_k"] - 273.15
+    out["geopotential_height_km"] = out["geopotential_height_m"] / 1000.0
+    out["wind_speed_ms"] = np.sqrt(out["u_wind_ms"] ** 2 + out["v_wind_ms"] ** 2)
+    out["wind_dir_deg"] = (270 - np.degrees(np.arctan2(out["v_wind_ms"], out["u_wind_ms"]))) % 360
+
+    rh_fraction = np.clip(out["relative_humidity_pct"].astype(float), 1.0, 100.0) / 100.0
+    temp_c = out["temperature_c"].astype(float)
+    alpha = np.log(rh_fraction) + (17.625 * temp_c) / (243.04 + temp_c)
+    out["dewpoint_c"] = (243.04 * alpha) / (17.625 - alpha)
+    out["theta_k"] = out["temperature_k"] * np.power(1000.0 / out["pressure_hpa"], 0.286)
+
+    return out.sort_values("geopotential_height_m").reset_index(drop=True)
+
+
+def freezing_level_diagnostic(df: pd.DataFrame) -> dict[str, float | str | None]:
+    if df.empty or "temperature_c" not in df or "geopotential_height_m" not in df:
+        return {"status": "not_available", "height_m": None}
+
+    prof = df.sort_values("geopotential_height_m")[["temperature_c", "geopotential_height_m"]].dropna()
+    if prof.empty:
+        return {"status": "not_available", "height_m": None}
+
+    temps = prof["temperature_c"].to_numpy(dtype=float)
+    heights = prof["geopotential_height_m"].to_numpy(dtype=float)
+
+    if np.all(temps < 0):
+        return {"status": "below_lowest_level", "height_m": None}
+    if np.all(temps > 0):
+        return {"status": "above_highest_level", "height_m": None}
+
+    for i in range(len(temps) - 1):
+        t0, t1 = temps[i], temps[i + 1]
+        if math.isclose(t0, 0.0, abs_tol=0.05):
+            return {"status": "found", "height_m": float(heights[i])}
+        if (t0 >= 0 >= t1) or (t0 <= 0 <= t1):
+            if math.isclose(t0, t1, abs_tol=1e-9):
+                return {"status": "found", "height_m": float(heights[i])}
+            ratio = (0 - t0) / (t1 - t0)
+            height = heights[i] + ratio * (heights[i + 1] - heights[i])
+            return {"status": "found", "height_m": float(height)}
+
+    return {"status": "not_available", "height_m": None}
+
+
+def freezing_level_m(df: pd.DataFrame) -> float | None:
+    diagnostic = freezing_level_diagnostic(df)
+    return float(diagnostic["height_m"]) if diagnostic["status"] == "found" and diagnostic["height_m"] is not None else None
+
+
+def build_profile(
+    run: GfsRun,
+    lead_hour: int,
+    lat: float,
+    lon: float,
+    progress_callback: ProgressCallback | None = None,
+) -> ProfileResult:
+    validate_lead(lead_hour)
+    _emit(progress_callback, stage="check", message="Проверяю публикацию forecast-файла", run=f"{run.date} {run.cycle}Z", lead_hour=lead_hour)
+    if not forecast_file_exists(run.date, run.cycle, lead_hour):
+        raise GfsProfileError(f"Для указанной даты/цикла/срока данные GFS недоступны: {run.date} {run.cycle}Z +{lead_hour} ч")
+
+    grid_lat, grid_lon = snap_to_gfs_grid(lat, lon)
+    _emit(progress_callback, stage="grid", message="Точка привязана к узлу GFS", grid_lat=grid_lat, grid_lon=grid_lon)
+    grib_path = download_profile_grib_to_disk(run.date, run.cycle, lead_hour, grid_lat, grid_lon, progress_callback=progress_callback)
+    try:
+        df = extract_profile_from_grib_file(grib_path, progress_callback=progress_callback)
+    except GfsProfileError as exc:
+        if "Ошибка чтения GRIB2" in str(exc):
+            invalidate_grib_cache_file(grib_path)
+        raise
+    _emit(progress_callback, stage="done", message="Профиль готов", rows=len(df))
+    return ProfileResult(
+        run=run,
+        lead_hour=lead_hour,
+        requested_lat=lat,
+        requested_lon=lon,
+        grid_lat=grid_lat,
+        grid_lon=grid_lon,
+        grib_path=grib_path,
+        dataframe=df,
+    )
+
+
+def format_cli_summary(result: ProfileResult) -> str:
+    lines = [
+        "GFS 0.25: модельный профиль атмосферы",
+        f"Запуск: {result.run.date}/{result.run.cycle} | срок: +{result.lead_hour} ч | действительно на: {result.valid_time_utc:%Y-%m-%d %H:%M UTC}",
+        f"Запрошено: {result.requested_lat:.4f},{result.requested_lon:.4f} | узел GFS: {result.grid_lat:.3f},{result.grid_lon:.3f}",
+    ]
+    df = result.dataframe
+    for level in (1000, 925, 850, 700, 500, 300):
+        if df.empty:
+            continue
+        idx = (df["pressure_hpa"] - level).abs().idxmin()
+        row = df.loc[idx]
+        if abs(float(row["pressure_hpa"]) - level) > 35:
+            continue
+        lines.append(
+            f"{int(round(row['pressure_hpa'])):4d} гПа "
+            f"z={int(round(row['geopotential_height_m'])):5d} м "
+            f"T={row['temperature_c']:+5.1f} °C RH={row['relative_humidity_pct']:5.1f}% "
+            f"ветер={row['wind_dir_deg']:03.0f}°/{row['wind_speed_ms']:.1f} м/с"
+        )
+    diagnostic = freezing_level_diagnostic(df)
+    if diagnostic["status"] == "found":
+        lines.append(f"0 °C: {float(diagnostic['height_m']):.0f} м")
+    return "\n".join(lines)
+
+
+def cli(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Загрузить и напечатать точечный вертикальный профиль GFS 0.25.")
+    parser.add_argument("--lat", type=float, required=True, help="Широта")
+    parser.add_argument("--lon", type=float, required=True, help="Долгота")
+    parser.add_argument("--lead", type=int, default=24, help="Срок прогноза, часы")
+    parser.add_argument("--date", help="Дата запуска GFS YYYYMMDD. Если не задано, берётся последний доступный запуск для указанного срока.")
+    parser.add_argument("--cycle", choices=("00", "06", "12", "18"), help="Цикл GFS. Обязателен вместе с --date.")
+    parser.add_argument("--json", action="store_true", help="Напечатать полный JSON вместо компактной сводки.")
+    parser.add_argument("--csv", type=Path, help="Путь для записи полного CSV-профиля.")
+    args = parser.parse_args(argv)
+
+    try:
+        if args.date and not args.cycle:
+            raise GfsProfileError("Если задан --date, нужно задать --cycle")
+        run = GfsRun(args.date, args.cycle) if args.date else latest_available_run_for_lead(args.lead)
+        result = build_profile(run, args.lead, args.lat, args.lon)
+        if args.csv:
+            result.dataframe.round(3).to_csv(args.csv, index=False)
+        if args.json:
+            print(json.dumps(result.to_payload(), ensure_ascii=False, indent=2))
+        else:
+            print(format_cli_summary(result))
+            if args.csv:
+                print(f"CSV: {args.csv}")
+        return 0
+    except GfsProfileError as exc:
+        print(f"Ошибка: {exc}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(cli())
