@@ -3,21 +3,66 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from cloudgram_product import CloudgramData
+from cloudgram_product import CloudgramCell, CloudgramData
 from cloudgram_plot import (
-    PRO_ROWS,
+    CloudgramRow,
+    PRO_ROWS as LEGACY_PRO_ROWS,
     SIMPLE_ROWS,
     _draw_cloud_layers_cell,
     _draw_icon,
     _hour_lead_labels,
     _pro_cell,
-    _pro_footer,
     _set_icon_y_scale,
     _simple_cell,
-    _simple_footer,
 )
 from plot_style import METEO, add_footer, apply_meteo_rcparams, style_axis
 from time_guides_plot import draw_utc_day_guides
+
+
+PRO_ROWS = tuple(
+    CloudgramRow(
+        row.key,
+        "ВНГО AGL" if row.key == "ceiling" else "Конвект.\nпотенциал" if row.key == "cb" else row.label,
+        "м над землёй" if row.key == "ceiling" else row.unit,
+    )
+    for row in LEGACY_PRO_ROWS
+)
+
+
+def _audited_simple_cell(row: CloudgramRow, cell: CloudgramCell):
+    if row.key != "storm_simple":
+        return _simple_cell(row, cell)
+    if cell.phenomena == "TSRA":
+        return "#DC2626", "icon:storm_3", "#FFFFFF"
+    if int(cell.cb_score) >= 2:
+        return "#EEE5FF", "пот.", "#6D28D9"
+    if int(cell.cb_score) == 1:
+        return "#F6F2FF", "слаб.", "#7C3AED"
+    return "#FFFFFF", "", METEO.axis_text
+
+
+def _pro_footer(data: CloudgramData) -> str:
+    max_hazard = max((cell.hazard_score for cell in data.cells), default=0)
+    missing = f" Нет полей: {', '.join(data.missing_fields)}." if data.missing_fields else ""
+    intervals = sorted({float(cell.precip_interval_hours) for cell in data.cells if cell.precip_interval_hours is not None})
+    interval_text = "/".join(f"{value:g}" for value in intervals) if intervals else "—"
+    return (
+        "Облачность H/M/L и TCDC выбраны по точным слоям GFS. "
+        f"Осадки — количество за интервал {interval_text} ч. ВНГО — HGT cloud ceiling минус HGT поверхности, AGL. "
+        "Конвективный потенциал 0–3 рассчитан по CAPE/CIN 180–0 гПа AGL, ACPCP, CPRAT и TCDC convective cloud; "
+        "TSRA/⚡ только при уровне 3 и осадках. Шкала опасности 0–4 локальная, не ICAO. "
+        f"Макс. опасность: {max_hazard}.{missing}"
+    )
+
+
+def _simple_footer(data: CloudgramData) -> str:
+    max_hazard = max((cell.hazard_score for cell in data.cells), default=0)
+    return (
+        "Облака: верх/сред/низ; осадки — количество за интервал. "
+        "ВНГО используется только как AGL. «пот.» — конвективный потенциал, не гроза; ⚡ — только модельный TSRA.\n"
+        "Опасность 0–4 — локальная модельная шкала по осадкам, VIS, ВНГО AGL и подтверждённому TSRA. "
+        f"Максимум: {max_hazard}."
+    )
 
 
 def _write_grid(data: CloudgramData, rows, cell_func, *, title: str, footer: str, simple: bool) -> Path:
@@ -90,18 +135,18 @@ def _write_grid(data: CloudgramData, rows, cell_func, *, title: str, footer: str
 
 def _write_cloudgram_pro_png(data: CloudgramData) -> Path:
     title = (
-        f"GFS 0.25 · cloudgram PRO: облачность H/M/L, осадки, явления, ВНГО и опасность · {data.run.date} {data.run.cycle}Z · "
-        f"+{data.leads[0]}…+{data.leads[-1]} ч · узел {data.grid_lat:.2f}, {data.grid_lon:.2f}"
+        f"GFS 0.25 · cloudgram PRO: облачность, осадки, явления, VIS, ВНГО AGL и конвективный потенциал · "
+        f"{data.run.date} {data.run.cycle}Z · +{data.leads[0]}…+{data.leads[-1]} ч · узел {data.grid_lat:.2f}, {data.grid_lon:.2f}"
     )
     return _write_grid(data, PRO_ROWS, _pro_cell, title=title, footer=_pro_footer(data), simple=False)
 
 
 def _write_cloudgram_simple_png(data: CloudgramData) -> Path:
     title = (
-        f"GFS 0.25 · cloudgram SIMPLE: облака по ярусам, осадки/явления, гроза, видимость и опасность · {data.run.date} {data.run.cycle}Z · "
-        f"+{data.leads[0]}…+{data.leads[-1]} ч · узел {data.grid_lat:.2f}, {data.grid_lon:.2f}"
+        f"GFS 0.25 · cloudgram SIMPLE: облака, осадки/явления, конвективный потенциал и видимость · "
+        f"{data.run.date} {data.run.cycle}Z · +{data.leads[0]}…+{data.leads[-1]} ч · узел {data.grid_lat:.2f}, {data.grid_lon:.2f}"
     )
-    return _write_grid(data, SIMPLE_ROWS, _simple_cell, title=title, footer=_simple_footer(data), simple=True)
+    return _write_grid(data, SIMPLE_ROWS, _audited_simple_cell, title=title, footer=_simple_footer(data), simple=True)
 
 
 def write_cloudgram_png(data: CloudgramData, mode: str = "pro") -> Path:
