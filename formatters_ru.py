@@ -132,7 +132,7 @@ def format_profile_summary(result: ProfileResult) -> str:
             ]
         )
 
-    lines.append("ℹ Zg — геопотенциальная высота MSL • GFS grid, не радиозонд")
+    lines.append("ℹ NOMADS subset • Zg — геопотенциальная высота MSL • GFS grid, не радиозонд")
     return "\n".join(lines)
 
 
