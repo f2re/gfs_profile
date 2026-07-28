@@ -42,7 +42,16 @@ def _selected_field(datasets, selector: GribFieldSelector):
         return None
 
 
-def _field(datasets, names, *, type_of_level=None, level=None, step_types=None, interval_hours=None, prefer_shortest_interval=False):
+def _field(
+    datasets,
+    names,
+    *,
+    type_of_level=None,
+    level=None,
+    step_types=None,
+    interval_hours=None,
+    prefer_shortest_interval=False,
+):
     return _selected_field(
         datasets,
         GribFieldSelector(
@@ -73,10 +82,6 @@ def _cape_cin(datasets):
     )
     if cape is not None and cin is not None:
         return cape, cin, "180–0 hPa AGL"
-    cape = _field(datasets, ("cape",), type_of_level=("surface",), step_types=("instant",))
-    cin = _field(datasets, ("cin",), type_of_level=("surface",), step_types=("instant",))
-    if cape is not None and cin is not None:
-        return cape, cin, "surface fallback"
     return None, None, "unavailable"
 
 
@@ -91,7 +96,7 @@ def _forecast_interval_hours(lead_hour: int) -> float:
     return 1.0 if int(lead_hour) <= 120 else 3.0
 
 
-def _storm_grid(cape, cin, conv_precip, conv_cloud, conv_rate):
+def _storm_grid(cape, cin, conv_precip, conv_cloud, conv_rate, conv_precip_interval_hours: float = 1.0):
     reference = next((value for value in (cape, cin, conv_precip, conv_cloud, conv_rate) if value is not None), None)
     if reference is None:
         return None
@@ -101,7 +106,16 @@ def _storm_grid(cape, cin, conv_precip, conv_cloud, conv_rate):
         def optional(value):
             return None if np.isnan(value) else float(value)
 
-        return float(thunder_score(optional(ca), optional(ci), optional(cp), optional(cc), optional(cr)))
+        return float(
+            thunder_score(
+                optional(ca),
+                optional(ci),
+                optional(cp),
+                optional(cc),
+                optional(cr),
+                conv_precip_interval_hours=conv_precip_interval_hours,
+            )
+        )
 
     return np.vectorize(score, otypes=[float])(
         cape if cape is not None else missing,
@@ -142,7 +156,7 @@ def build_composite_map(
             ("tp", "apcp"),
             type_of_level=("surface",),
             step_types=("accum",),
-            prefer_shortest_interval=True,
+            interval_hours=expected_interval,
         )
         prate_item = _field(datasets, ("prate",), type_of_level=("surface",), step_types=("instant",))
         u_item = _field(
@@ -178,7 +192,7 @@ def build_composite_map(
             ("acpcp",),
             type_of_level=("surface",),
             step_types=("accum",),
-            prefer_shortest_interval=True,
+            interval_hours=expected_interval,
         )
         cprat_item = _field(datasets, ("cprat",), type_of_level=("surface",), step_types=("instant",))
         cape_item, cin_item, cape_layer = _cape_cin(datasets)
@@ -188,7 +202,7 @@ def build_composite_map(
         precip_source = "none"
         if apcp_item is not None:
             precip = np.maximum(0.0, apcp_item[0])
-            precip_interval = apcp_item[3].interval_hours or expected_interval
+            precip_interval = float(apcp_item[3].interval_hours or expected_interval)
             precip_source = "APCP accumulation"
         elif prate_item is not None:
             precip = np.maximum(0.0, prate_item[0] * 3600.0 * expected_interval)
@@ -199,6 +213,7 @@ def build_composite_map(
         cloud = np.clip(cloud_item[0], 0.0, 100.0) if cloud_item is not None else None
         conv_cloud = np.clip(conv_cloud_item[0], 0.0, 100.0) if conv_cloud_item is not None else None
         conv_precip = np.maximum(0.0, acpcp_item[0]) if acpcp_item is not None else None
+        conv_interval = float(acpcp_item[3].interval_hours or expected_interval) if acpcp_item is not None else expected_interval
         conv_rate = np.maximum(0.0, cprat_item[0] * 3600.0) if cprat_item is not None else None
         cape = cape_item[0] if cape_item is not None else None
         cin = cin_item[0] if cin_item is not None else None
@@ -206,7 +221,7 @@ def build_composite_map(
         u500 = u_item[0] if u_item is not None else None
         v500 = v_item[0] if v_item is not None else None
 
-        convective_score = _storm_grid(cape, cin, conv_precip, conv_cloud, conv_rate)
+        convective_score = _storm_grid(cape, cin, conv_precip, conv_cloud, conv_rate, conv_interval)
         if convective_score is None:
             confirmed_storm = None
         else:
@@ -256,6 +271,7 @@ def build_composite_map(
         "cloud": cloud,
         "convective_cloud": conv_cloud,
         "convective_score": convective_score,
+        "convective_precip_interval_hours": float(conv_interval),
         "storm": confirmed_storm,
         "cape": cape,
         "cin": cin,
