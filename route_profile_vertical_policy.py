@@ -66,16 +66,24 @@ def vertical_risk_for_point(data: Any, point_index: int) -> int:
     return 0
 
 
+def _precip_equivalent_rate(surface: Any) -> float | None:
+    amount = getattr(surface, "precip_mm", None)
+    if amount is None:
+        return None
+    interval = max(1e-6, float(getattr(surface, "precip_interval_hours", 1.0) or 1.0))
+    return max(0.0, float(amount)) / interval
+
+
 def surface_risk(surface: Any) -> int:
     score = 0
-    precip = getattr(surface, "precip_mm", None)
+    precip_rate = _precip_equivalent_rate(surface)
     ceiling = getattr(surface, "ceiling_m", None)
     visibility = getattr(surface, "visibility_km", None)
     cb_score = int(getattr(surface, "cb_score", 0) or 0)
 
-    if precip is not None and float(precip) >= 0.2:
+    if precip_rate is not None and precip_rate >= 0.2:
         score = max(score, 1)
-    if precip is not None and float(precip) >= 7.0:
+    if precip_rate is not None and precip_rate >= 3.0:
         score = max(score, 2)
     if ceiling is not None and float(ceiling) < 1000.0:
         score = max(score, 2)
@@ -93,6 +101,55 @@ def surface_risk(surface: Any) -> int:
     if str(getattr(surface, "phenomena", "")) == "TSRA":
         score = 3
     return score
+
+
+def point_risk_reasons(data: Any, point_index: int) -> tuple[str, ...]:
+    point = data.waypoints[point_index]
+    surface = point.surface
+    reasons: list[str] = []
+    phenomena = str(getattr(surface, "phenomena", "—") or "—")
+    cb_score = int(getattr(surface, "cb_score", 0) or 0)
+    if phenomena == "TSRA":
+        reasons.append("модельный TSRA")
+    elif cb_score >= 2:
+        reasons.append("конвективный потенциал")
+    if phenomena not in {"—", "TSRA"}:
+        reasons.append(phenomena)
+
+    visibility = getattr(surface, "visibility_km", None)
+    ceiling = getattr(surface, "ceiling_m", None)
+    precip_rate = _precip_equivalent_rate(surface)
+    if visibility is not None and float(visibility) < 5.0:
+        reasons.append("видимость <5 км")
+    if ceiling is not None and float(ceiling) < 1000.0:
+        reasons.append("ВНГО AGL <1000 м")
+    if precip_rate is not None and precip_rate >= 3.0:
+        reasons.append("сильные осадки")
+    elif precip_rate is not None and precip_rate >= 0.2:
+        reasons.append("осадки")
+
+    icing = np.asarray(data.icing_score[:, point_index], dtype=float)
+    turbulence = np.asarray(data.turbulence_score[:, point_index], dtype=float)
+    wind = np.asarray(data.wind_speed_ms[:, point_index], dtype=float)
+    max_icing = float(np.nanmax(icing)) if icing.size else 0.0
+    max_turbulence = float(np.nanmax(turbulence)) if turbulence.size else 0.0
+    finite_wind = wind[np.isfinite(wind)]
+    max_wind = float(np.max(finite_wind)) if finite_wind.size else 0.0
+    if max_icing >= 2:
+        reasons.append("прокси обледенения")
+    elif max_icing >= 1:
+        reasons.append("слабый icing proxy")
+    if max_turbulence >= 2:
+        reasons.append("прокси CAT/болтанки")
+    elif max_turbulence >= 1:
+        reasons.append("сдвиг/CAT proxy")
+    if max_wind >= 30.0:
+        reasons.append("ветер ≥30 м/с")
+    elif max_wind >= 20.0:
+        reasons.append("сильный ветер")
+    if not reasons:
+        reasons.append("значимых модельных рисков нет")
+    return tuple(dict.fromkeys(reasons))
 
 
 def _nearest_row(profile, level_hpa: int):
@@ -124,12 +181,33 @@ def _diagnostic_arrays(data, levels_hpa: tuple[int, ...]) -> tuple[np.ndarray, n
     return icing, turbulence, cloud
 
 
+def _surface_flags(data: Any, indices: tuple[int, ...]) -> dict[str, np.ndarray]:
+    points = [data.waypoints[index] for index in indices]
+    return {
+        "thunder": np.asarray([str(point.surface.phenomena) == "TSRA" for point in points], dtype=bool),
+        "visibility": np.asarray(
+            [
+                (point.surface.visibility_km is not None and point.surface.visibility_km < 5.0)
+                or (point.surface.ceiling_m is not None and point.surface.ceiling_m < 1000.0)
+                for point in points
+            ],
+            dtype=bool,
+        ),
+        "precip": np.asarray(
+            [(_precip_equivalent_rate(point.surface) or 0.0) >= 0.2 for point in points],
+            dtype=bool,
+        ),
+    }
+
+
 def install() -> None:
     global _INSTALLED
     if _INSTALLED:
         return
 
+    import cloudgram_product
     import route_profile as route
+    import route_profile_card_policy as card_policy
     import route_profile_contract as contract
 
     original_contract_builder = contract.build_route_profile_data
@@ -143,6 +221,17 @@ def install() -> None:
             levels_hpa=tuple(route.ROUTE_LEVELS_HPA),
             include_surface_row=False,
             progress_callback=progress_callback,
+        )
+
+    def route_surface_cell(run, lead_hour, lat, lon, progress_callback=None, duration_hours=1):
+        native_interval = 1 if int(lead_hour) <= 120 else 3
+        return cloudgram_product._read_cloudgram_cell(
+            run,
+            lead_hour,
+            lat,
+            lon,
+            progress_callback=progress_callback,
+            duration_hours=native_interval,
         )
 
     def build_route_profile_data(
@@ -172,8 +261,11 @@ def install() -> None:
         return contract.recompute_objective_risk(enriched)
 
     route.build_profile = diagnostic_route_profile
+    route._read_cloudgram_cell = route_surface_cell
     route._shear_severity = shear_severity
     contract.build_route_profile_data = build_route_profile_data
     contract.vertical_risk_for_point = vertical_risk_for_point
     contract.surface_risk = surface_risk
+    contract.point_risk_reasons = point_risk_reasons
+    card_policy._surface_flags = _surface_flags
     _INSTALLED = True
