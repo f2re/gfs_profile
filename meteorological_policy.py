@@ -18,15 +18,17 @@ def install(namespace: dict[str, Any] | None = None) -> None:
         route_profile_vertical_policy.install()
         return
 
-    for name in (
-        "build_composite_map",
-        "build_composite_map_frames",
-        "write_composite_map_png",
-        "write_composite_map_gif",
-    ):
+    # Core builders are safe to replace in the source module. The PNG writer is
+    # deliberately left as the original implementation: the audited wrapper
+    # delegates to it after installing the corrected legend. Replacing it with
+    # the delegating wrapper would create recursion.
+    for name in ("build_composite_map", "build_composite_map_frames"):
         implementation = getattr(composite_map_meteorology, name)
         setattr(composite_map, name, implementation)
         setattr(telegram_map, name, implementation)
+
+    for name in ("write_composite_map_png", "write_composite_map_gif"):
+        setattr(telegram_map, name, getattr(composite_map_meteorology, name))
 
     map_animation.write_composite_map_png = composite_map_meteorology.write_composite_map_png
     route_profile_vertical_policy.install()
