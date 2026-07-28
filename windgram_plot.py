@@ -71,13 +71,7 @@ def _mean_height_km(values: list[float]) -> float | None:
 
 
 def _height_labels_by_level(data: WindgramData) -> dict[int, str]:
-    """Return y-axis labels with mean geopotential height for each pressure level.
-
-    The mean is calculated over all forecast leads included in the windgram.
-    This avoids static standard-atmosphere labels and keeps wind/temp/RH
-    windgrams consistent with the actual GFS thickness field for the selected
-    point, run and lead range.
-    """
+    """Return labels with mean GFS geopotential height MSL by pressure level."""
 
     heights: dict[int, list[float]] = defaultdict(list)
     for cell in data.cells:
@@ -88,20 +82,14 @@ def _height_labels_by_level(data: WindgramData) -> dict[int, str]:
     for level in data.levels_hpa:
         mean_km = _mean_height_km(heights.get(level) or [])
         if mean_km is None:
-            labels[level] = f"{level}\nZср —"
+            labels[level] = f"{level}\nZgср —"
         else:
-            labels[level] = f"{level}\nZср {mean_km:.1f} км"
+            labels[level] = f"{level}\nZgср {mean_km:.1f} км"
     return labels
 
 
 def _lead_guide_items(data: WindgramData) -> list[_LeadGuideItem]:
-    """Return one UTC-guide item per lead column.
-
-    Windgram cells are stored as lead × pressure-level records, while the x-axis
-    has only lead columns. Passing all cells to the day-guide helper makes the
-    guide span `len(leads) * len(levels)` columns, which expands the tight PNG
-    canvas far beyond the heatmap and can trigger Telegram Photo_invalid_dimensions.
-    """
+    """Return one UTC-guide item per lead column."""
 
     lead_times: dict[int, datetime] = {}
     for cell in data.cells:
@@ -122,10 +110,6 @@ def _x_tick_labels(data: WindgramData) -> list[str]:
 
 
 def _format_cell_value(value: float, param: str) -> str:
-    if param == "temp":
-        return f"{value:.0f}"
-    if param == "rh":
-        return f"{value:.0f}"
     return f"{value:.0f}"
 
 
@@ -195,7 +179,7 @@ def write_windgram_png(data: WindgramData, param: str | None = None) -> Path:
         ax.set_yticks(range(n_levels))
         ax.set_yticklabels([height_labels[level] for level in levels_top_down], fontsize=8)
         ax.set_xlabel("Срок прогноза и UTC-время")
-        ax.set_ylabel("Изобарический уровень p, гПа / средняя по срокам геопотенциальная высота Zср, км")
+        ax.set_ylabel("Изобарический уровень p, гПа / средняя Zg MSL по срокам, км")
         ax.set_title(
             f"GFS 0.25 · windgram: {PARAM_TITLES[selected_param]} по срокам и уровням · {data.run.date} {data.run.cycle}Z · "
             f"+{data.leads[0]}…+{data.leads[-1]} ч · узел {data.grid_lat:.2f}, {data.grid_lon:.2f}",
@@ -228,7 +212,12 @@ def write_windgram_png(data: WindgramData, param: str | None = None) -> Path:
         colorbar.outline.set_edgecolor(METEO.spine)
         colorbar.outline.set_linewidth(0.8)
 
-        add_footer(fig, PARAM_FOOTERS[selected_param] + " Zср слева — средняя геопотенциальная высота уровня по всем срокам диаграммы. Данные: модельный профиль GFS.", y=0.012)
+        add_footer(
+            fig,
+            PARAM_FOOTERS[selected_param]
+            + " Zgср слева — средняя геопотенциальная высота уровня над MSL по всем срокам. Данные: модельный профиль GFS.",
+            y=0.012,
+        )
         fig.tight_layout(rect=(0, 0.052, 1, 1))
         fig.savefig(out_path, dpi=180, bbox_inches="tight")
     except Exception:
