@@ -26,15 +26,23 @@ jobs:
           MPLBACKEND: Agg
         run: python runtime_check.py
       - name: Run unit tests
+        id: unittest
+        continue-on-error: true
         env:
           MPLBACKEND: Agg
+        run: python -m unittest discover -s tests > unittest.log 2>&1
+      - name: Upload unittest log
+        if: steps.unittest.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: unittest-log
+          path: unittest.log
+          retention-days: 3
+      - name: Fail on unit-test errors
+        if: steps.unittest.outcome == 'failure'
         run: |
-          set +e
-          python -m unittest discover -s tests > unittest.log 2>&1
-          status=$?
-          if [ "$status" -ne 0 ]; then
-            echo "===== UNIT TEST FAILURE (tail) ====="
-            tail -n 160 unittest.log
-            exit "$status"
-          fi
-          tail -n 20 unittest.log
+          echo "Unit tests failed; see unittest-log artifact."
+          exit 1
+      - name: Print unittest summary
+        if: steps.unittest.outcome == 'success'
+        run: tail -n 20 unittest.log
