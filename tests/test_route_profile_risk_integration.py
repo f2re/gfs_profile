@@ -8,19 +8,23 @@ import numpy as np
 import pandas as pd
 
 import route_profile_contract as contract
-import route_profile_vertical_policy  # noqa: F401
+import route_profile_vertical_policy
 from geocode import GeoPoint
 from gfs_core import GfsRun
 from route_profile import RouteProfileData, RouteWaypoint
 
 
 class RouteProfileRiskIntegrationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        route_profile_vertical_policy.install()
+
     @staticmethod
     def _surface(*, cb_score: int, phenomena: str):
         return SimpleNamespace(
             cb_score=cb_score,
             phenomena=phenomena,
             precip_mm=1.0 if phenomena == "TSRA" else 0.0,
+            precip_interval_hours=1.0,
             visibility_km=20.0,
             ceiling_m=5000.0,
         )
@@ -90,10 +94,10 @@ class RouteProfileRiskIntegrationTests(unittest.TestCase):
         result = contract.recompute_objective_risk(data)
 
         self.assertEqual(result.point_risk.tolist(), [0, 2, 3])
-        self.assertNotIn("гроза", result.waypoints[0].risk_reasons)
-        self.assertNotIn("гроза", result.waypoints[1].risk_reasons)
-        self.assertIn("конвективный риск", result.waypoints[1].risk_reasons)
-        self.assertIn("гроза", result.waypoints[2].risk_reasons)
+        self.assertNotIn("модельный TSRA", result.waypoints[0].risk_reasons)
+        self.assertNotIn("модельный TSRA", result.waypoints[1].risk_reasons)
+        self.assertIn("конвективный потенциал", result.waypoints[1].risk_reasons)
+        self.assertIn("модельный TSRA", result.waypoints[2].risk_reasons)
 
 
 if __name__ == "__main__":
