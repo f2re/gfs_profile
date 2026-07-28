@@ -21,12 +21,14 @@ import route_profile_vertical_policy  # noqa: F401,E402
 import route_profile_rendering  # noqa: F401,E402
 import telegram_concise_ux  # noqa: E402
 import telegram_result_copy  # noqa: E402
+import meteorological_policy  # noqa: E402
 
 # Presentation and product policies are applied before handlers are built.
 telegram_concise_ux.install(globals())
 telegram_result_copy.install()
 aero_single_mode.install(globals())
 admin_product_policy.install(globals())
+meteorological_policy.install(globals())
 
 # A callback message is authored by the bot, so message.from_user cannot identify
 # the person who opened a product from the inline home menu. Capture the actual
