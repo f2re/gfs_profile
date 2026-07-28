@@ -24,6 +24,7 @@ class RouteProfileContractTests(unittest.TestCase):
             "phenomena": "—",
             "cb_score": 0,
             "precip_mm": 0.0,
+            "precip_interval_hours": 1.0,
             "visibility_km": 20.0,
             "ceiling_m": 5000.0,
         }
@@ -65,6 +66,12 @@ class RouteProfileContractTests(unittest.TestCase):
         self.assertTrue(contract.confirmed_thunder(surface))
         self.assertEqual(contract.surface_risk(surface), 3)
 
+    def test_surface_precipitation_risk_is_interval_independent(self) -> None:
+        one_hour = self._surface(precip_mm=3.5, precip_interval_hours=1.0)
+        three_hour = self._surface(precip_mm=10.5, precip_interval_hours=3.0)
+        self.assertEqual(contract.surface_risk(one_hour), 2)
+        self.assertEqual(contract.surface_risk(three_hour), 2)
+
     def test_vertical_risk_is_computed_per_route_point(self) -> None:
         data = SimpleNamespace(
             icing_score=np.asarray(
@@ -93,7 +100,7 @@ class RouteProfileContractTests(unittest.TestCase):
         )
         self.assertEqual(contract.vertical_risk_for_point(data, 0), 0)
         self.assertEqual(contract.vertical_risk_for_point(data, 1), 2)
-        self.assertEqual(contract.vertical_risk_for_point(data, 2), 2)
+        self.assertEqual(contract.vertical_risk_for_point(data, 2), 3)
         self.assertEqual(contract.vertical_risk_for_point(data, 3), 2)
 
     def test_persistent_severe_layers_are_required_for_vertical_r3(self) -> None:
