@@ -44,6 +44,15 @@ MICROPHYSICS_COLUMNS = {
     "snmr": "snow_mixing_ratio_kgkg",
     "grle": "graupel_mixing_ratio_kgkg",
 }
+LIQUID_COLUMNS = (
+    "cloud_liquid_mixing_ratio_kgkg",
+    "rain_mixing_ratio_kgkg",
+)
+ICE_COLUMNS = (
+    "cloud_ice_mixing_ratio_kgkg",
+    "snow_mixing_ratio_kgkg",
+    "graupel_mixing_ratio_kgkg",
+)
 
 
 def pressure_level_tokens(levels_hpa: tuple[int, ...]) -> tuple[str, ...]:
@@ -72,8 +81,7 @@ def air_density_kg_m3(pressure_hpa, temperature_k, relative_humidity_pct) -> np.
     dry_hpa = np.maximum(0.0, pressure - vapour_hpa)
     with np.errstate(divide="ignore", invalid="ignore"):
         density = dry_hpa * 100.0 / (RD * temperature) + vapour_hpa * 100.0 / (RV * temperature)
-    density[~np.isfinite(density)] = np.nan
-    return density
+    return np.where(np.isfinite(density), density, np.nan)
 
 
 def icing_proxy_score(
@@ -138,8 +146,7 @@ def _thetae_bolton(frame: pd.DataFrame) -> np.ndarray:
     with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
         tl = 1.0 / (1.0 / np.maximum(td - 56.0, 1.0) + np.log(np.maximum(t / td, 1e-6)) / 800.0) + 56.0
         thetae = theta * np.exp((3376.0 / tl - 2.54) * r * (1.0 + 0.81 * r))
-    thetae[~np.isfinite(thetae)] = np.nan
-    return thetae
+    return np.where(np.isfinite(thetae), thetae, np.nan)
 
 
 def add_profile_diagnostics(frame: pd.DataFrame) -> pd.DataFrame:
@@ -155,42 +162,37 @@ def add_profile_diagnostics(frame: pd.DataFrame) -> pd.DataFrame:
         out["temperature_k"].to_numpy(dtype=float),
         out["relative_humidity_pct"].to_numpy(dtype=float),
     )
-    liquid_q = (
-        out["cloud_liquid_mixing_ratio_kgkg"].fillna(0.0).to_numpy(dtype=float)
-        + out["rain_mixing_ratio_kgkg"].fillna(0.0).to_numpy(dtype=float)
-    )
-    ice_q = (
-        out["cloud_ice_mixing_ratio_kgkg"].fillna(0.0).to_numpy(dtype=float)
-        + out["snow_mixing_ratio_kgkg"].fillna(0.0).to_numpy(dtype=float)
-        + out["graupel_mixing_ratio_kgkg"].fillna(0.0).to_numpy(dtype=float)
-    )
-    micro_available = out[list(MICROPHYSICS_COLUMNS.values())].notna().any(axis=1).to_numpy(dtype=bool)
-    slwc = np.where(out["temperature_c"].to_numpy(dtype=float) <= 0.5, density * liquid_q * 1000.0, 0.0)
-    iwc = density * ice_q * 1000.0
-    total_condensate = np.maximum(0.0, slwc) + np.maximum(0.0, iwc)
+    liquid_q = out[list(LIQUID_COLUMNS)].fillna(0.0).sum(axis=1).to_numpy(dtype=float)
+    ice_q = out[list(ICE_COLUMNS)].fillna(0.0).sum(axis=1).to_numpy(dtype=float)
+    hydrometeor_available = out[list(MICROPHYSICS_COLUMNS.values())].notna().any(axis=1).to_numpy(dtype=bool)
+    liquid_available = out[list(LIQUID_COLUMNS)].notna().any(axis=1).to_numpy(dtype=bool)
+    ice_available = out[list(ICE_COLUMNS)].notna().any(axis=1).to_numpy(dtype=bool)
+
+    temperature = out["temperature_c"].to_numpy(dtype=float)
+    slwc = np.where(liquid_available & (temperature <= 0.5), density * liquid_q * 1000.0, np.nan)
+    iwc = np.where(ice_available, density * ice_q * 1000.0, np.nan)
+    liquid_content = np.where(np.isfinite(slwc), np.maximum(0.0, slwc), 0.0)
+    ice_content = np.where(np.isfinite(iwc), np.maximum(0.0, iwc), 0.0)
+    total_condensate = np.where(hydrometeor_available, liquid_content + ice_content, np.nan)
 
     out["air_density_kg_m3"] = density
     out["supercooled_liquid_water_content_gm3"] = slwc
     out["ice_water_content_gm3"] = iwc
     out["total_condensate_gm3"] = total_condensate
-    out["microphysics_available"] = micro_available
+    out["microphysics_available"] = hydrometeor_available
+    out["liquid_microphysics_available"] = liquid_available
 
-    spread = out["temperature_c"].to_numpy(dtype=float) - out["dewpoint_c"].to_numpy(dtype=float)
+    spread = temperature - out["dewpoint_c"].to_numpy(dtype=float)
     rh = out["relative_humidity_pct"].to_numpy(dtype=float)
     fallback_cloud = (rh >= 90.0) | ((rh >= 80.0) & (spread <= 2.5))
-    out["cloud_proxy"] = np.where(micro_available, total_condensate >= 0.001, fallback_cloud)
-    out["cloud_proxy_source"] = np.where(micro_available, "GFS hydrometeor mixing ratios", "T/RH fallback")
+    out["cloud_proxy"] = np.where(hydrometeor_available, total_condensate >= 0.001, fallback_cloud)
+    out["cloud_proxy_source"] = np.where(hydrometeor_available, "GFS hydrometeor mixing ratios", "T/RH fallback")
 
     out["icing_proxy_score"] = [
-        icing_proxy_score(t, w, h, microphysics_available=available)
-        for t, w, h, available in zip(
-            out["temperature_c"].to_numpy(dtype=float),
-            slwc,
-            rh,
-            micro_available,
-        )
+        icing_proxy_score(t, w if np.isfinite(w) else None, h, microphysics_available=available)
+        for t, w, h, available in zip(temperature, slwc, rh, liquid_available)
     ]
-    out["icing_proxy_source"] = np.where(micro_available, "GFS SLWC proxy", "T/RH fallback; max score 1")
+    out["icing_proxy_source"] = np.where(liquid_available, "GFS SLWC proxy", "T/RH fallback; max score 1")
 
     z = out["geopotential_height_m"].to_numpy(dtype=float)
     u = out["u_wind_ms"].to_numpy(dtype=float)
@@ -326,7 +328,7 @@ def build_diagnostic_profile(
         lon,
         DIAGNOSTIC_PROFILE_VARIABLES,
         tuple(level_tokens),
-        product_key="diagnostic_profile_surface" if include_surface_row else "diagnostic_profile",
+        product_key="diagnostic_profile_surface_v2" if include_surface_row else "diagnostic_profile_v2",
         progress_callback=progress_callback,
     )
 
