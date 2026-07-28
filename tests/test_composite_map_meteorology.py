@@ -25,6 +25,16 @@ class CompositeMapMeteorologyTests(unittest.TestCase):
         self.assertEqual(float(scores[0, 0]), 1.0)
         self.assertEqual(float(scores[0, 1]), 3.0)
 
+    def test_storm_grid_normalizes_acpcp_interval(self) -> None:
+        cape = np.asarray([[700.0]])
+        cin = np.asarray([[-80.0]])
+        conv_cloud = np.asarray([[40.0]])
+        conv_rate = np.asarray([[0.0]])
+        one_hour = _storm_grid(cape, cin, np.asarray([[0.3]]), conv_cloud, conv_rate, 1.0)
+        three_hour = _storm_grid(cape, cin, np.asarray([[0.9]]), conv_cloud, conv_rate, 3.0)
+        np.testing.assert_allclose(one_hour, three_hour)
+        self.assertEqual(float(one_hour[0, 0]), 2.0)
+
     def test_lightning_mask_requires_score_three_and_precipitation(self) -> None:
         source = inspect.getsource(build_composite_map)
         self.assertIn("convective_score >= 3.0", source)
