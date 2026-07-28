@@ -242,8 +242,20 @@ def _microphysics_for_levels(datasets: list[object], levels_hpa: tuple[int, ...]
 
 
 def _surface_row(datasets: list[object]) -> dict[str, float | str] | None:
-    pressure_pa = scalar_from_datasets(datasets, ("sp", "pres"), type_of_level=("surface",), step_types=("instant",))
-    height_gpm = scalar_from_datasets(datasets, ("gh", "hgt"), type_of_level=("surface",), step_types=("instant",))
+    pressure_pa = scalar_from_datasets(
+        datasets,
+        ("sp", "pres"),
+        type_of_level=("surface",),
+        step_types=("instant",),
+    )
+    # ecCodes/cfgrib commonly exposes HGT:surface as ``orog`` even though the
+    # source GRIB inventory names the parameter HGT. Keep WMO/NCEP aliases.
+    height_gpm = scalar_from_datasets(
+        datasets,
+        ("orog", "gh", "hgt", "z"),
+        type_of_level=("surface",),
+        step_types=("instant",),
+    )
     temperature_k = scalar_from_datasets(
         datasets,
         ("t2m", "2t", "t", "tmp"),
@@ -328,7 +340,7 @@ def build_diagnostic_profile(
         lon,
         DIAGNOSTIC_PROFILE_VARIABLES,
         tuple(level_tokens),
-        product_key="diagnostic_profile_surface_v2" if include_surface_row else "diagnostic_profile_v2",
+        product_key="diagnostic_profile_surface_v3" if include_surface_row else "diagnostic_profile_v2",
         progress_callback=progress_callback,
     )
 
