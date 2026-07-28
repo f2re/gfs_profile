@@ -14,6 +14,7 @@ from geocode import GeoPoint
 
 class RouteProfileContractTests(unittest.TestCase):
     def setUp(self) -> None:
+        vertical_policy.install()
         self.moscow = GeoPoint(55.7558, 37.6173, "Москва", "test")
         self.novosibirsk = GeoPoint(55.0084, 82.9357, "Новосибирск", "test")
 
@@ -92,8 +93,16 @@ class RouteProfileContractTests(unittest.TestCase):
         )
         self.assertEqual(contract.vertical_risk_for_point(data, 0), 0)
         self.assertEqual(contract.vertical_risk_for_point(data, 1), 2)
-        self.assertEqual(contract.vertical_risk_for_point(data, 2), 3)
+        self.assertEqual(contract.vertical_risk_for_point(data, 2), 2)
         self.assertEqual(contract.vertical_risk_for_point(data, 3), 2)
+
+    def test_persistent_severe_layers_are_required_for_vertical_r3(self) -> None:
+        data = SimpleNamespace(
+            icing_score=np.asarray([[0], [3], [3], [0]], dtype=int),
+            turbulence_score=np.asarray([[0], [0], [0], [0]], dtype=int),
+            wind_speed_ms=np.asarray([[10.0], [10.0], [10.0], [10.0]], dtype=float),
+        )
+        self.assertEqual(contract.vertical_risk_for_point(data, 0), 3)
 
     def test_vertical_policy_is_bound_to_contract(self) -> None:
         self.assertIs(contract.vertical_risk_for_point, vertical_policy.vertical_risk_for_point)
