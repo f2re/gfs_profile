@@ -2,10 +2,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import aero_meteorology
 from aero_plot import AERO_LEVELS_HPA, DEFAULT_AERO_DIAGRAM
 from aero_plot_layout import write_aero_png
-from gfs_core import GfsRun, ProfileResult, ProgressCallback
-from gfs_product_core import build_profile_for_levels
+from diagnostic_profile import build_diagnostic_profile
+from gfs_core import DEFAULT_PROFILE_LEVELS_HPA, GfsRun, ProfileResult, ProgressCallback
+
+
+aero_meteorology.install()
 
 
 def build_aero_product(
@@ -16,14 +20,16 @@ def build_aero_product(
     diagram_type: str = DEFAULT_AERO_DIAGRAM,
     progress_callback: ProgressCallback | None = None,
 ) -> tuple[ProfileResult, Path]:
-    """Build the single GFS Skew-T log-P product with hodograph."""
+    """Build Skew-T from one thermodynamic/microphysics GFS point subset."""
 
-    result = build_profile_for_levels(
+    levels = tuple(AERO_LEVELS_HPA or DEFAULT_PROFILE_LEVELS_HPA)
+    result = build_diagnostic_profile(
         run,
         lead_hour,
         lat,
         lon,
-        levels_hpa=AERO_LEVELS_HPA,
+        levels_hpa=levels,
+        include_surface_row=True,
         progress_callback=progress_callback,
     )
     if progress_callback:
@@ -38,5 +44,5 @@ def format_aero_caption(result: ProfileResult, diagram_type: str = DEFAULT_AERO_
     return (
         "🧾 GFS · аэрологическая диаграмма\n"
         f"{result.run.date} {result.run.cycle}Z · +{result.lead_hour} ч · {result.valid_time_utc:%d.%m %H:%M UTC}\n"
-        f"Узел {result.grid_lat:.3f}, {result.grid_lon:.3f}"
+        f"Узел {result.grid_lat:.3f}, {result.grid_lon:.3f} · Zg MSL · icing/CAT — модельные прокси"
     )
