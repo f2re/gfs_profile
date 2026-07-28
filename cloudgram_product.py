@@ -6,8 +6,17 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+import numpy as np
+
 from gfs_core import GfsProfileError, GfsRun, ProgressCallback, canonical_leads
-from gfs_subset import bool_from_datasets, download_gfs_subset_to_disk, open_grib_datasets, scalar_from_datasets
+from gfs_subset import (
+    GribFieldSelector,
+    bool_from_datasets,
+    download_gfs_subset_to_disk,
+    open_grib_datasets,
+    scalar_from_datasets,
+    select_grib_field,
+)
 from weather_diagnostics import precipitation_code, thunder_score, visibility_km as diagnostic_visibility_km, weather_code
 
 
@@ -72,6 +81,7 @@ class CloudgramCell:
     conv_precip_rate_mmh: float | None = None
     cape_layer: str = "180–0 hPa AGL"
     precip_interval_hours: float | None = None
+    conv_precip_interval_hours: float | None = None
 
 
 @dataclass(frozen=True)
@@ -118,12 +128,12 @@ def _mmh_from_prate(value: float | None) -> float | None:
     return max(0.0, float(value) * 3600.0)
 
 
-def _precip_from_total_or_rate(total_mm: float | None, rate_mmh: float | None, duration_hours: int) -> float | None:
+def _precip_from_total_or_rate(total_mm: float | None, rate_mmh: float | None, duration_hours: float) -> float | None:
     if total_mm is not None:
         return total_mm
     if rate_mmh is None:
         return None
-    return max(0.0, float(rate_mmh) * max(1, int(duration_hours)))
+    return max(0.0, float(rate_mmh) * max(1.0, float(duration_hours)))
 
 
 def _visibility_km(value: float | None) -> float | None:
@@ -134,22 +144,45 @@ def _precip_type_from_flags(rain: bool, snow: bool, freezing: bool, ice_pellets:
     return precipitation_code(rain, snow, freezing, ice_pellets)
 
 
-def _cb_score(cape: float | None, cin: float | None, conv_precip_mm: float | None, conv_cloud_pct: float | None, conv_precip_rate_mmh: float | None) -> int:
-    return thunder_score(cape, cin, conv_precip_mm, conv_cloud_pct, conv_precip_rate_mmh)
+def _cb_score(
+    cape: float | None,
+    cin: float | None,
+    conv_precip_mm: float | None,
+    conv_cloud_pct: float | None,
+    conv_precip_rate_mmh: float | None,
+    conv_precip_interval_hours: float = 1.0,
+) -> int:
+    return thunder_score(
+        cape,
+        cin,
+        conv_precip_mm,
+        conv_cloud_pct,
+        conv_precip_rate_mmh,
+        conv_precip_interval_hours=conv_precip_interval_hours,
+    )
 
 
 def _phenomena(precip_mm: float | None, precip_type: str, cb_score: int, visibility_km: float | None) -> str:
     return weather_code(precip_mm, precip_type, cb_score, visibility_km)
 
 
-def _hazard_score(cb_score: int, precip_mm: float | None, ceiling_m: float | None, visibility_km: float | None, phenomena: str) -> tuple[int, str]:
+def _hazard_score(
+    cb_score: int,
+    precip_mm: float | None,
+    ceiling_m: float | None,
+    visibility_km: float | None,
+    phenomena: str,
+    precip_interval_hours: float = 1.0,
+) -> tuple[int, str]:
     score = 0
     reasons: list[str] = []
+    interval = max(1e-6, float(precip_interval_hours or 1.0))
+    precip_equivalent_rate = None if precip_mm is None else max(0.0, float(precip_mm)) / interval
 
-    if precip_mm is not None and precip_mm >= 0.2:
+    if precip_equivalent_rate is not None and precip_equivalent_rate >= 0.2:
         score = max(score, 1)
         reasons.append("осадки")
-    if precip_mm is not None and precip_mm >= 7.0:
+    if precip_equivalent_rate is not None and precip_equivalent_rate >= 3.0:
         score = max(score, 2)
         reasons.append("сильные осадки")
 
@@ -177,7 +210,7 @@ def _hazard_score(cb_score: int, precip_mm: float | None, ceiling_m: float | Non
     return score, ", ".join(dict.fromkeys(reasons)) if reasons else "спокойно"
 
 
-def _instant_or_average(datasets, names: tuple[str, ...], type_of_level: tuple[str, ...], duration_hours: int) -> float | None:
+def _instant_or_average(datasets, names: tuple[str, ...], type_of_level: tuple[str, ...], duration_hours: float) -> float | None:
     value = scalar_from_datasets(datasets, names, type_of_level=type_of_level, step_types=("instant",))
     if value is not None:
         return value
@@ -188,6 +221,19 @@ def _instant_or_average(datasets, names: tuple[str, ...], type_of_level: tuple[s
         step_types=("avg", "average"),
         interval_hours=float(duration_hours),
     )
+
+
+def _selected_scalar(datasets, selector: GribFieldSelector) -> tuple[float | None, float | None]:
+    selected = select_grib_field(datasets, selector)
+    if selected is None:
+        return None, None
+    try:
+        value = float(np.asarray(selected.data_array.values).squeeze().flat[0])
+    except Exception:
+        return None, selected.interval_hours
+    if not math.isfinite(value):
+        return None, selected.interval_hours
+    return value, selected.interval_hours
 
 
 def _cape_cin_180(datasets) -> tuple[float | None, float | None, str]:
@@ -205,7 +251,7 @@ def _cape_cin_180(datasets) -> tuple[float | None, float | None, str]:
         level=CAPE_LAYER_PA,
         step_types=("instant",),
     )
-    if cape is not None or cin is not None:
+    if cape is not None and cin is not None:
         return cape, cin, "180–0 hPa AGL"
 
     surface_cape = scalar_from_datasets(datasets, ("cape",), type_of_level=("surface",), step_types=("instant",))
@@ -251,16 +297,17 @@ def _read_cloudgram_cell(
         lon,
         CLOUDGRAM_VARIABLES,
         CLOUDGRAM_LEVEL_TOKENS,
-        product_key="cloudgram_strict_v2",
+        product_key="cloudgram_strict_v3",
         progress_callback=progress_callback,
     )
     missing: set[str] = set()
+    requested_interval = max(1.0, float(duration_hours))
     with tempfile.TemporaryDirectory() as tmp:
         datasets = open_grib_datasets(path, Path(tmp))
-        low = _clip_pct(_instant_or_average(datasets, ("lcc", "lcdc"), ("lowCloudLayer",), duration_hours))
-        mid = _clip_pct(_instant_or_average(datasets, ("mcc", "mcdc"), ("middleCloudLayer",), duration_hours))
-        high = _clip_pct(_instant_or_average(datasets, ("hcc", "hcdc"), ("highCloudLayer",), duration_hours))
-        total = _clip_pct(_instant_or_average(datasets, ("tcc", "tcdc"), ("atmosphere", "entireAtmosphere"), duration_hours))
+        low = _clip_pct(_instant_or_average(datasets, ("lcc", "lcdc"), ("lowCloudLayer",), requested_interval))
+        mid = _clip_pct(_instant_or_average(datasets, ("mcc", "mcdc"), ("middleCloudLayer",), requested_interval))
+        high = _clip_pct(_instant_or_average(datasets, ("hcc", "hcdc"), ("highCloudLayer",), requested_interval))
+        total = _clip_pct(_instant_or_average(datasets, ("tcc", "tcdc"), ("atmosphere", "entireAtmosphere"), requested_interval))
         conv_cloud = _clip_pct(
             scalar_from_datasets(
                 datasets,
@@ -271,28 +318,33 @@ def _read_cloudgram_cell(
         )
         ceiling, ceiling_msl, surface_elevation = _ceiling_agl(datasets)
 
-        apcp_total = _mm_from_kgm2(
-            scalar_from_datasets(
-                datasets,
-                ("tp", "apcp"),
+        apcp_value, apcp_interval = _selected_scalar(
+            datasets,
+            GribFieldSelector(
+                names=("tp", "apcp"),
                 type_of_level=("surface",),
                 step_types=("accum",),
-                interval_hours=float(duration_hours),
-            )
+                interval_hours=requested_interval,
+            ),
         )
+        apcp_total = _mm_from_kgm2(apcp_value)
+        precip_interval = float(apcp_interval or requested_interval)
         prate = _mmh_from_prate(
             scalar_from_datasets(datasets, ("prate",), type_of_level=("surface",), step_types=("instant",))
         )
-        apcp = _precip_from_total_or_rate(apcp_total, prate, duration_hours)
-        acpcp = _mm_from_kgm2(
-            scalar_from_datasets(
-                datasets,
-                ("acpcp",),
+        apcp = _precip_from_total_or_rate(apcp_total, prate, precip_interval)
+
+        acpcp_value, acpcp_interval = _selected_scalar(
+            datasets,
+            GribFieldSelector(
+                names=("acpcp",),
                 type_of_level=("surface",),
                 step_types=("accum",),
-                interval_hours=float(duration_hours),
-            )
+                interval_hours=requested_interval,
+            ),
         )
+        acpcp = _mm_from_kgm2(acpcp_value)
+        conv_interval = float(acpcp_interval or requested_interval)
         cprat = _mmh_from_prate(
             scalar_from_datasets(datasets, ("cprat",), type_of_level=("surface",), step_types=("instant",))
         )
@@ -322,9 +374,9 @@ def _read_cloudgram_cell(
         if value is None:
             missing.add(name)
 
-    cb = _cb_score(cape, cin, acpcp, conv_cloud, cprat)
+    cb = _cb_score(cape, cin, acpcp, conv_cloud, cprat, conv_interval)
     phenomena = _phenomena(apcp, precip_type, cb, visibility)
-    hazard, hazard_text = _hazard_score(cb, apcp, ceiling, visibility, phenomena)
+    hazard, hazard_text = _hazard_score(cb, apcp, ceiling, visibility, phenomena, precip_interval)
     valid_time = run.run_datetime_utc + timedelta(hours=lead_hour)
 
     return (
@@ -352,7 +404,8 @@ def _read_cloudgram_cell(
             convective_cloud_pct=conv_cloud,
             conv_precip_rate_mmh=cprat,
             cape_layer=cape_layer,
-            precip_interval_hours=float(duration_hours),
+            precip_interval_hours=precip_interval,
+            conv_precip_interval_hours=conv_interval,
         ),
         grid_lat,
         grid_lon,
