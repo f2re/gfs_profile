@@ -17,7 +17,7 @@ def thunder_score(
     cin: float | None,
     conv_precip_mm: float | None,
     conv_cloud_pct: float | None,
-    conv_precip_rate_mmh: float | None,
+    precip_rate_mmh: float | None,
 ) -> int:
     """Transparent convective-potential score based on consistent GFS layers.
 
@@ -30,7 +30,7 @@ def thunder_score(
     cape_value = max(0.0, float(cape)) if cape is not None else 0.0
     cin_value = float(cin) if cin is not None else None
     conv_precip = max(0.0, float(conv_precip_mm)) if conv_precip_mm is not None else 0.0
-    conv_rate = max(0.0, float(conv_precip_rate_mmh)) if conv_precip_rate_mmh is not None else 0.0
+    conv_rate = max(0.0, float(precip_rate_mmh)) if precip_rate_mmh is not None else 0.0
     conv_cloud = max(0.0, min(100.0, float(conv_cloud_pct))) if conv_cloud_pct is not None else 0.0
 
     weak_evidence = conv_precip >= 0.1 or conv_rate >= 0.5
