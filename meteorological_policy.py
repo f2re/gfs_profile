@@ -2,6 +2,7 @@ from __future__ import annotations
 
 """Install audited meteorological implementations into composed Telegram flows."""
 
+import sys
 from typing import Any
 
 
@@ -9,6 +10,7 @@ def install(namespace: dict[str, Any] | None = None) -> None:
     import composite_map
     import composite_map_meteorology
     import map_animation
+    import route_profile_contract
     import route_profile_vertical_policy
     import telegram_map
 
@@ -28,6 +30,10 @@ def install(namespace: dict[str, Any] | None = None) -> None:
 
     map_animation.write_composite_map_png = composite_map_meteorology.write_composite_map_png
     route_profile_vertical_policy.install()
+
+    telegram_route = sys.modules.get("telegram_route")
+    if telegram_route is not None:
+        telegram_route.build_route_profile_data = route_profile_contract.build_route_profile_data
 
     if namespace is not None:
         namespace["meteorological_policy_installed"] = True
