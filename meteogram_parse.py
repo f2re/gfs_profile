@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -134,7 +134,7 @@ def _metadata(payload: dict[str, Any], source: MeteogramSource, point_label: str
         metadata_warnings.append(
             f"Не найден часовой пояс {timezone_name}; временная шкала показана в UTC"
         )
-        timezone_name, tz = "UTC", UTC
+        timezone_name, tz = "UTC", timezone.utc
     times = []
     for value in raw_times:
         try:
@@ -253,9 +253,9 @@ def _precip_intensity(values: np.ndarray, times: list[datetime]) -> np.ndarray:
 def _parse_time(value: Any) -> datetime:
     try:
         parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        return parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+        return parsed.replace(tzinfo=timezone.utc) if parsed.tzinfo is None else parsed.astimezone(timezone.utc)
     except (TypeError, ValueError):
-        return datetime.now(UTC)
+        return datetime.now(timezone.utc)
 
 
 def _float_or_none(value: Any) -> float | None:

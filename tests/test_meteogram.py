@@ -3,7 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from unittest.mock import patch
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -30,7 +30,7 @@ from meteogram_request import parse_meteogram_request
 
 
 def _times(hours: int = 96) -> list[str]:
-    start = datetime(2026, 8, 6, tzinfo=UTC)
+    start = datetime(2026, 8, 6, tzinfo=timezone.utc)
     return [(start + timedelta(hours=index * 3)).strftime("%Y-%m-%dT%H:%M") for index in range(hours // 3 + 1)]
 
 
@@ -136,7 +136,6 @@ class MeteogramDataTests(unittest.TestCase):
         self.assertTrue(np.isfinite(series.values("wind_direction_10m")).all())
         self.assertIn("Неполный ансамбль", " ".join(series.warnings))
 
-
     def test_unit_mismatch_rejected(self):
         payload = _deterministic_payload()
         payload["hourly_units"]["wind_speed_10m"] = "km/h"
@@ -184,7 +183,6 @@ class MeteogramDataTests(unittest.TestCase):
 
     def test_ensemble_probabilities_and_per_time_coverage(self):
         payload = _ensemble_payload(members=7)
-        # One missing temperature member at one term must reduce only that term's coverage.
         payload["hourly"]["temperature_2m_member06"][4] = None
         series = parse_ensemble_payload(
             payload, source=source_for_id("gefs"), point_label="Москва",
@@ -224,7 +222,7 @@ class MeteogramRenderTests(unittest.TestCase):
 
     def test_semantic_axes_and_legends(self):
         payload = _deterministic_payload(120)
-        payload["hourly"]["precipitation"][1] = 0.15  # 0.05 mm/h: trace marker.
+        payload["hourly"]["precipitation"][1] = 0.15
         payload["hourly"]["weather_code"][5] = 95
         payload["hourly"]["precipitation"][5] = 6.0
         series = parse_deterministic_payload(

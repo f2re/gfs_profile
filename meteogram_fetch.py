@@ -4,7 +4,7 @@ import hashlib
 import json
 import os
 import time
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
@@ -62,7 +62,7 @@ def fetch_meteogram(
         if progress:
             progress("Загружаю модельные данные")
         payload = _request_json(source.endpoint, params)
-        payload["_retrieved_at_utc"] = datetime.now(UTC).isoformat()
+        payload["_retrieved_at_utc"] = datetime.now(timezone.utc).isoformat()
     elif progress:
         progress("Использую свежие данные из кэша")
 
@@ -89,7 +89,7 @@ def fetch_meteogram(
         if progress:
             progress("Кэш повреждён; повторно загружаю данные")
         payload = _request_json(source.endpoint, params)
-        payload["_retrieved_at_utc"] = datetime.now(UTC).isoformat()
+        payload["_retrieved_at_utc"] = datetime.now(timezone.utc).isoformat()
         series = validate_and_parse(payload)
         from_cache = False
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 
 import numpy as np
 
@@ -58,7 +58,7 @@ class MeteogramSeries:
     times: list[datetime]
     fields: dict[str, np.ndarray]
     stats: dict[str, dict[str, np.ndarray]] = field(default_factory=dict)
-    retrieved_at_utc: datetime = field(default_factory=lambda: datetime.now(UTC))
+    retrieved_at_utc: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     member_count: int | None = None
     expected_member_count: int | None = None
     warnings: list[str] = field(default_factory=list)
