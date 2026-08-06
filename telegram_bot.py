@@ -30,6 +30,16 @@ aero_single_mode.install(globals())
 admin_product_policy.install(globals())
 meteorological_policy.install(globals())
 
+# All product switches, /start and /cancel must also discard the independent
+# meteogram wizard, otherwise a later plain-text message could resume stale state.
+_core_clear_pending = _clear_pending
+
+
+def _clear_pending(context):
+    _core_clear_pending(context)
+    context.user_data.pop("meteogram_wizard", None)
+
+
 # A callback message is authored by the bot, so message.from_user cannot identify
 # the person who opened a product from the inline home menu. Capture the actual
 # callback user for the point-selection keyboard and recent locations.
@@ -50,6 +60,7 @@ async def _start_product_wizard(message, context, state):
 
 
 from telegram_route import register_route_handlers
+from telegram_meteogram import register_meteogram_handlers
 
 _core_build_application = build_application
 
@@ -69,6 +80,7 @@ def build_application():
         group=-3,
     )
     telegram_concise_ux.register(application, globals())
+    register_meteogram_handlers(application)
     register_route_handlers(
         application,
         gfs_semaphore=GFS_SEMAPHORE,
