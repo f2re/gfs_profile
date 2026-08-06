@@ -19,6 +19,7 @@ class TelegramCommandTests(unittest.TestCase):
                 "aero",
                 "windgram",
                 "cloudgram",
+                "meteogram",
                 "map",
                 "cycle",
                 "status",
