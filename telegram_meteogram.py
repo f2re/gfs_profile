@@ -6,6 +6,8 @@ import os
 import time
 from pathlib import Path
 
+import numpy as np
+
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler, CommandHandler, MessageHandler, filters
@@ -131,10 +133,13 @@ async def _run_product(message, point: GeoPoint, request: MeteogramRequest, user
     )
     png_path: Path | None = None
     progress_state = {"text": "1/5 Проверяю источник и период…"}
+    progress_step = 1
     stop = False
 
     def progress(text: str) -> None:
-        progress_state["text"] = "2/5 " + text + "…"
+        nonlocal progress_step
+        progress_step = min(3, progress_step + 1)
+        progress_state["text"] = f"{progress_step}/5 {text}…"
 
     async def reporter() -> None:
         last = ""
@@ -155,15 +160,39 @@ async def _run_product(message, point: GeoPoint, request: MeteogramRequest, user
             progress_state["text"] = "4/5 Строю изображение без пересечений подписей…"
             png_path = await asyncio.to_thread(write_meteogram_png, series)
         progress_state["text"] = "5/5 Отправляю результат…"
-        members = f" · {series.member_count}/{series.expected_member_count} членов" if source.ensemble else ""
+        member_line = ""
+        warning_line = ""
+        if source.ensemble:
+            observed = series.member_count or 0
+            expected = series.expected_member_count or observed
+            member_line = f"\nАнсамбль: {observed}/{expected} членов"
+            per_time = series.values("ensemble_member_count")
+            finite_counts = per_time[np.isfinite(per_time)]
+            minimum_per_time = int(np.nanmin(finite_counts)) if finite_counts.size else observed
+            if expected and minimum_per_time < expected:
+                warning_line = (
+                    f"\n⚠️ На отдельных сроках доступно от "
+                    f"{minimum_per_time}/{expected} членов."
+                )
         await status.edit_text(
             f"📊 {'Ансамблевая ' if source.ensemble else ''}метеограмма готова\n"
             f"📍 {point.label}\n"
-            f"{source.model}{members}\n"
-            f"{series.times[0]:%d.%m %H:%M} — {series.times[-1]:%d.%m %H:%M} · {series.timezone}\n"
+            f"{source.model}\n"
+            f"{source.provider}{member_line}\n"
+            f"{series.times[0]:%d.%m %H:%M} — {series.times[-1]:%d.%m %H:%M} · местное время"
+            f"{warning_line}\n"
             "ℹ Модельный прогноз, не наблюдение."
         )
-        await reply_png_file(message, png_path, caption=f"PNG · METEOGRAM · {source.label} · {request.days} сут · {point.label}"[:1024], prefer_photo=True)
+        caption = (
+            f"PNG · METEOGRAM · {source.model} · {source.provider} · "
+            f"{request.days} сут · {point.label}"
+        )[:1024]
+        await reply_png_file(
+            message,
+            png_path,
+            caption=caption,
+            prefer_photo=True,
+        )
         await message.reply_text(f"📋 <code>{html.escape(_repeat_command(point, request))}</code>", parse_mode=ParseMode.HTML)
         record_request_finish(request_id, status="ok", duration_ms=int((time.perf_counter() - started) * 1000))
         return True

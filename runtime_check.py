@@ -56,6 +56,16 @@ OPTIONAL_RUNTIME_MODULES = (
     "composite_map",
     "map_animation_overlay",
     "map_animation",
+    "meteogram_models",
+    "meteogram_parse",
+    "meteogram_fetch",
+    "meteogram_data",
+    "meteogram_core",
+    "meteogram_plot_common",
+    "meteogram_plot_thermo",
+    "meteogram_plot_weather",
+    "meteogram_plot",
+    "meteogram_request",
     "telegram_commands",
     "telegram_ui",
     "telegram_product_wizard",
@@ -64,6 +74,7 @@ OPTIONAL_RUNTIME_MODULES = (
     "telegram_cloudgram",
     "telegram_map",
     "telegram_route",
+    "telegram_meteogram",
     "telegram_bot_core",
     "telegram_concise_ux",
     "telegram_result_copy",
@@ -82,18 +93,32 @@ def check_modules(modules: tuple[str, ...]) -> list[str]:
 
 
 def main() -> int:
-    errors = check_modules(REQUIRED_MODULES + OPTIONAL_RUNTIME_MODULES)
+    errors = check_modules(REQUIRED_MODULES)
     if errors:
-        print("Runtime check failed:", file=sys.stderr)
-        for error in errors:
-            print(f"  - {error}", file=sys.stderr)
+        _print_errors(errors)
         return 1
 
+    # Plot modules import pyplot. Select the non-interactive backend before
+    # importing product modules so runtime_check also works under systemd/SSH.
     import matplotlib
 
     matplotlib.use("Agg", force=True)
-    print("Runtime check OK: DaData, single Skew-T aerological product with hodograph, route products and Telegram UX import successfully")
+    errors = check_modules(OPTIONAL_RUNTIME_MODULES)
+    if errors:
+        _print_errors(errors)
+        return 1
+
+    print(
+        "Runtime check OK: GFS/GRIB, DaData, Skew-T, route, "
+        "model/ensemble meteograms and Telegram UX import successfully"
+    )
     return 0
+
+
+def _print_errors(errors: list[str]) -> None:
+    print("Runtime check failed:", file=sys.stderr)
+    for error in errors:
+        print(f"  - {error}", file=sys.stderr)
 
 
 if __name__ == "__main__":
