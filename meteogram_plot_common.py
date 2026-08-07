@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 import textwrap
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone as dt_timezone
 
 import matplotlib.dates as mdates
 import matplotlib.pyplot as plt
@@ -222,7 +222,7 @@ def _shade_night(axes, series: MeteogramSeries, x: np.ndarray) -> None:
 
 
 def _solar_elevation(value: datetime, latitude: float, longitude: float) -> float:
-    utc = value.astimezone(UTC)
+    utc = value.astimezone(dt_timezone.utc)
     day = utc.timetuple().tm_yday
     hour = utc.hour + utc.minute / 60 + utc.second / 3600
     gamma = 2 * np.pi / 365 * (day - 1 + (hour - 12) / 24)
@@ -281,7 +281,7 @@ def _finish_axes(figure: Figure, axes, series: MeteogramSeries, tracked) -> None
         grid = f" · расчётная точка {series.grid_lat:.3f},{series.grid_lon:.3f}"
         if distance is not None:
             grid += f" ({distance:.1f} км)"
-    generated = datetime.now(UTC)
+    generated = datetime.now(dt_timezone.utc)
     footer1 = figure.text(
         0.063,
         0.066,
