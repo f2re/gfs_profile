@@ -1,35 +1,50 @@
 # Deploy Telegram-бота
 
-Бот работает из `/opt/gfs_profile`, поэтому после `git pull` требуется deploy:
+Бот работает из `/opt/gfs_profile`. Ручное обновление:
 
 ```bash
 cd ~/gfs_profile
 git checkout telegram-bot
-git pull
+git pull --ff-only
 sudo bash deploy_telegram_bot.sh --yes
 ```
 
-## Исправление преждевременного завершения
+## Автоматическое обновление
 
-Скрипт использует `set -Eeuo pipefail`. Ранее optional-функции содержали конструкции вида:
+Рекомендуемый режим — `systemd timer`, который проверяет `origin/telegram-bot`, применяет только fast-forward и запускает штатный deploy:
 
 ```bash
-[[ "$INSTALL_SYSTEM_PACKAGES" -eq 1 ]] || return
+cd ~/gfs_profile
+sudo bash install_auto_update.sh --yes
 ```
 
-При ложном условии `return` без кода возвращал статус `1`. Поэтому deploy завершался сразу после получения lock и не доходил до `rsync` и `systemctl restart`.
+Проверка:
 
-Теперь пропускаемые этапы явно выполняют `return 0`. Исправлены системные пакеты, отсутствие admin DB, `--skip-pip`, `--skip-tests`, `--skip-commands`, `--no-restart` и отключённый DaData.
+```bash
+sudo bash install_auto_update.sh --status
+systemctl status gfs-profile-bot-auto-update.timer
+sudo journalctl -u gfs-profile-bot-auto-update.service -n 100 --no-pager
+```
 
-## Этапы
+При провале нового commit updater возвращает checkout на предыдущий SHA, повторно разворачивает старую версию и помещает неудачный SHA в quarantine. Новый SHA проверяется сразу; тот же неудачный SHA автоматически повторяется через 30 минут. Подробно: [`docs/AUTO_UPDATE.md`](docs/AUTO_UPDATE.md).
 
-Deploy печатает каждый этап, проверяет checksum-синхронизацию checkout с `/opt`, запускает unit tests и runtime preflight, затем выполняет `systemctl restart` и проверяет изменение PID.
+## Этапы deploy
+
+Deploy печатает каждый этап, проверяет checksum-синхронизацию checkout с `/opt`, обновляет зависимости, запускает unit tests и runtime preflight, затем выполняет `systemctl restart` и проверяет изменение PID.
 
 По умолчанию lock хранится в:
 
 ```text
 /run/lock/gfs-profile-bot.deploy.lock
 ```
+
+Auto-update использует отдельный lock:
+
+```text
+/run/lock/gfs-profile-bot-auto-update.lock
+```
+
+Перед изменением checkout updater также проверяет штатный deploy-lock. Поэтому ручной и автоматический deploy не выполняются одновременно.
 
 ## Запуск и проверка
 
@@ -40,13 +55,13 @@ sudo systemctl status gfs-profile-bot.service
 sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
 ```
 
-Запуск без root завершается понятным сообщением, поскольку скрипт изменяет `/opt` и systemd.
+Запуск deploy без root завершается понятным сообщением, поскольку скрипт изменяет `/opt` и systemd.
 
 ## Сохраняемые данные
 
 Deploy не удаляет `.env`, `.install-state`, `.venv/`, `.cache_gfs/` и `data/basemap/`. Admin DB сохраняется до `rsync --delete` и восстанавливается после копирования.
 
-## Опции
+## Опции deploy
 
 ```text
 --yes
@@ -59,3 +74,7 @@ Deploy не удаляет `.env`, `.install-state`, `.venv/`, `.cache_gfs/` и 
 ```
 
 `--skip-commands` оставляет прежнее Telegram-меню. По умолчанию команды регистрируются после успешного перезапуска.
+
+## Git hooks
+
+`install_git_hooks.sh` — только ускоритель после ручного `git pull`/`rebase`. Он не мониторит GitHub. Для автоматического обнаружения новых commit используйте `install_auto_update.sh`.
