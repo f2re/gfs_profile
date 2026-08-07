@@ -23,6 +23,7 @@ Telegram-бот и веб-интерфейс для вертикальных, в
 - [`docs/METEOROLOGICAL_METHODS.md`](docs/METEOROLOGICAL_METHODS.md) — действующая реализация: точные поля GFS, формулы, единицы, пороги, тесты и ограничения.
 - [`docs/METEOROLOGICAL_PARAMETERS_AUDIT.md`](docs/METEOROLOGICAL_PARAMETERS_AUDIT.md) — исходный аудит, на основании которого исправлены P0/P1-дефекты.
 - [`docs/METEOGRAM.md`](docs/METEOGRAM.md) — модели, ансамблевая статистика, компоновка и ограничения `/meteogram`.
+- [`docs/AUTO_UPDATE.md`](docs/AUTO_UPDATE.md) — безопасное автообновление `telegram-bot`, rollback и эксплуатация systemd timer.
 
 Критические изменения реализации: `VIS` всегда переводится из метров в километры; GRIB-поля выбираются по shortName/слою/stepType/интервалу; CAPE/CIN берутся с 180–0 гПа AGL; ВНГО переводится MSL→AGL; общие и конвективные облака/осадки не смешиваются; Aero и Route загружают изобарические гидрометеоры GFS.
 
@@ -45,13 +46,22 @@ TELEGRAM_ADMIN_IDS='<TELEGRAM_USER_ID>' \
 bash install_telegram_bot.sh --yes
 ```
 
-Обновление:
+Ручное обновление:
 
 ```bash
 git checkout telegram-bot
-git pull
+git pull --ff-only
 sudo bash deploy_telegram_bot.sh --yes
 ```
+
+Рекомендуемое автоматическое обновление рабочей ветки:
+
+```bash
+sudo bash install_auto_update.sh --yes
+sudo bash install_auto_update.sh --status
+```
+
+Сервер сам проверяет `origin/telegram-bot`, применяет только fast-forward, запускает штатные тесты/deploy и автоматически возвращает предыдущую версию при неудачном commit. Входящий webhook и GitHub token не требуются.
 
 Проверка:
 
