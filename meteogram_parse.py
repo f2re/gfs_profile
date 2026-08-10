@@ -18,6 +18,7 @@ DETERMINISTIC_PARAMETERS = (
 ENSEMBLE_PARAMETERS = (
     "temperature_2m", "relative_humidity_2m", "dew_point_2m",
     "precipitation", "weather_code", "pressure_msl", "cloud_cover",
+    "cloud_cover_low", "cloud_cover_mid", "cloud_cover_high",
     "wind_speed_10m", "wind_direction_10m", "wind_gusts_10m",
 )
 MEMBER_RE = re.compile(r"^(?P<name>.+)_member(?P<member>\d+)$")
@@ -87,6 +88,9 @@ def parse_ensemble_payload(
         fields[name] = mean if name in {"temperature_2m", "dew_point_2m", "pressure_msl"} else q50
         stats[name] = {"q10": q10, "q25": q25, "q50": q50, "q75": q75, "q90": q90, "mean": mean}
         if name == "precipitation":
+            # Daily ensemble totals must be calculated member-by-member.
+            # Summing pointwise medians is not the median of accumulated totals.
+            stats[name]["members"] = matrix.copy()
             valid = np.sum(np.isfinite(matrix), axis=0)
             for threshold, suffix in ((0.1, "0p1"), (1.0, "1"), (5.0, "5")):
                 events = np.sum(np.where(np.isfinite(matrix), matrix >= threshold, False), axis=0)
@@ -135,14 +139,20 @@ def _metadata(payload: dict[str, Any], source: MeteogramSource, point_label: str
             f"Не найден часовой пояс {timezone_name}; временная шкала показана в UTC"
         )
         timezone_name, tz = "UTC", timezone.utc
-    times = []
+    times: list[datetime] = []
+    previous_timestamp: float | None = None
     for value in raw_times:
         try:
             parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
         except (TypeError, ValueError) as exc:
             raise MeteogramError(f"Некорректный срок прогноза: {value}") from exc
-        times.append(parsed.replace(tzinfo=tz) if parsed.tzinfo is None else parsed.astimezone(tz))
-    if any(right <= left for left, right in zip(times, times[1:])):
+        localized = _localize_monotonic(parsed, tz, previous_timestamp)
+        times.append(localized)
+        previous_timestamp = localized.timestamp()
+    if any(
+        right.timestamp() <= left.timestamp()
+        for left, right in zip(times, times[1:])
+    ):
         raise MeteogramError("Прогностические сроки не возрастают строго по времени")
     retrieved = _parse_time(payload.get("_retrieved_at_utc"))
     return {
@@ -158,6 +168,37 @@ def _metadata(payload: dict[str, Any], source: MeteogramSource, point_label: str
             *list(payload.get("_meteogram_warnings") or []),
         ],
     }
+
+
+def _localize_monotonic(
+    parsed: datetime, tz, previous_timestamp: float | None
+) -> datetime:
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(tz)
+    candidates: list[datetime] = []
+    seen_timestamps: set[float] = set()
+    for fold in (0, 1):
+        candidate = parsed.replace(tzinfo=tz, fold=fold)
+        # Round-trip validation rejects nonexistent wall-clock times at the
+        # spring DST transition and retains both folds of a repeated hour.
+        roundtrip = (
+            candidate.astimezone(timezone.utc)
+            .astimezone(tz)
+            .replace(tzinfo=None)
+        )
+        timestamp = candidate.timestamp()
+        if roundtrip == parsed and timestamp not in seen_timestamps:
+            candidates.append(candidate)
+            seen_timestamps.add(timestamp)
+    if not candidates:
+        raise MeteogramError(f"Несуществующее местное время прогноза: {parsed.isoformat()}")
+    candidates.sort(key=datetime.timestamp)
+    if previous_timestamp is None:
+        return candidates[0]
+    return next(
+        (candidate for candidate in candidates if candidate.timestamp() > previous_timestamp),
+        candidates[0],
+    )
 
 
 def _require_finite_field(
@@ -244,9 +285,12 @@ def _circular_mean(matrix: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
 def _precip_intensity(values: np.ndarray, times: list[datetime]) -> np.ndarray:
     intervals = np.ones(len(times), dtype=float)
     if len(times) > 1:
-        intervals[0] = max((times[1] - times[0]).total_seconds() / 3600.0, 1.0)
+        intervals[0] = max((times[1].timestamp() - times[0].timestamp()) / 3600.0, 0.01)
         for index in range(1, len(times)):
-            intervals[index] = max((times[index] - times[index - 1]).total_seconds() / 3600.0, 1.0)
+            intervals[index] = max(
+                (times[index].timestamp() - times[index - 1].timestamp()) / 3600.0,
+                0.01,
+            )
     return np.asarray(values, dtype=float) / intervals
 
 
