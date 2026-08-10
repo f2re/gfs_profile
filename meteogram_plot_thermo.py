@@ -73,7 +73,7 @@ def _draw_clouds(axis, x: np.ndarray, series: MeteogramSeries) -> None:
     axis.text(
         0.0,
         1.03,
-        "облачность, %",
+        "облачность, % · медиана" if series.source.ensemble else "облачность, %",
         transform=axis.transAxes,
         ha="left",
         va="bottom",
@@ -86,12 +86,15 @@ def _draw_clouds(axis, x: np.ndarray, series: MeteogramSeries) -> None:
 def _draw_temperature(axis, x: np.ndarray, series: MeteogramSeries, tracked) -> None:
     _base_axis(axis, "°C")
     temperature = series.values("temperature_2m")
-    scale_arrays = [temperature]
+    dewpoint = series.values("dew_point_2m")
+    scale_arrays = [temperature, dewpoint]
     if series.source.ensemble:
         scale_arrays.extend(
             [
                 series.statistic("temperature_2m", "q10"),
                 series.statistic("temperature_2m", "q90"),
+                series.statistic("dew_point_2m", "q10"),
+                series.statistic("dew_point_2m", "q90"),
             ]
         )
     finite = _combined_finite(scale_arrays)
@@ -114,7 +117,25 @@ def _draw_temperature(axis, x: np.ndarray, series: MeteogramSeries, tracked) -> 
         q90 = series.statistic("temperature_2m", "q90")
         _band(axis, x, q10, q90, COLORS["temperature"], 0.12)
         _band(axis, x, q25, q75, COLORS["temperature"], 0.23)
-        _line(axis, x, temperature, COLORS["temperature"], 2.0, "центр")
+        _line(axis, x, temperature, COLORS["temperature"], 2.0, "температура, среднее")
+        if np.isfinite(dewpoint).any():
+            _band(
+                axis,
+                x,
+                series.statistic("dew_point_2m", "q10"),
+                series.statistic("dew_point_2m", "q90"),
+                COLORS["dewpoint"],
+                0.08,
+            )
+            _line(
+                axis,
+                x,
+                dewpoint,
+                COLORS["dewpoint"],
+                1.25,
+                "точка росы, среднее",
+                "--",
+            )
     else:
         _line(
             axis,
@@ -124,7 +145,6 @@ def _draw_temperature(axis, x: np.ndarray, series: MeteogramSeries, tracked) -> 
             2.0,
             "температура",
         )
-        dewpoint = series.values("dew_point_2m")
         if np.isfinite(dewpoint).any():
             _line(
                 axis,
@@ -273,7 +293,7 @@ def _draw_humidity(axis, x: np.ndarray, series: MeteogramSeries, tracked) -> Non
         sy,
         color=COLORS["humidity"],
         lw=1.35,
-        label="влажность",
+        label="влажность, медиана" if series.source.ensemble else "влажность",
     )
     axis.set_ylim(0, 100)
     axis.set_yticks((0, 50, 100))
