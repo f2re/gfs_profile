@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -26,6 +27,9 @@ from meteogram_plot import (
     build_meteogram_figure,
     write_meteogram_png,
 )
+from meteogram_parse import _precip_intensity
+from meteogram_plot_common import PRECIPITATION_CLASSES, _interval_hours
+from meteogram_plot_weather import _precipitation_class
 from meteogram_request import parse_meteogram_request
 
 
@@ -80,6 +84,7 @@ def _ensemble_payload(hours: int = 240, members: int = 5) -> dict:
         for name in (
             "temperature_2m", "dew_point_2m", "relative_humidity_2m",
             "precipitation", "pressure_msl", "cloud_cover",
+            "cloud_cover_low", "cloud_cover_mid", "cloud_cover_high",
             "wind_speed_10m", "wind_gusts_10m", "wind_direction_10m", "weather_code",
         ):
             values = np.asarray(base["hourly"][name], dtype=float)
@@ -134,6 +139,8 @@ class MeteogramDataTests(unittest.TestCase):
         self.assertEqual(series.expected_member_count, 31)
         self.assertTrue(np.isfinite(series.statistic("temperature_2m", "q10")).all())
         self.assertTrue(np.isfinite(series.values("wind_direction_10m")).all())
+        self.assertTrue(np.isfinite(series.values("cloud_cover_low")).all())
+        self.assertEqual(series.statistic("precipitation", "members").shape[0], 5)
         self.assertIn("Неполный ансамбль", " ".join(series.warnings))
 
     def test_unit_mismatch_rejected(self):
@@ -150,6 +157,46 @@ class MeteogramDataTests(unittest.TestCase):
                 payload, source=source_for_id("gfs"), point_label="Москва",
                 requested_lat=55.75, requested_lon=37.62,
             )
+
+    def test_elapsed_interval_across_dst(self):
+        tz = ZoneInfo("Europe/London")
+        times = [
+            datetime(2026, 3, 29, 0, 0, tzinfo=tz),
+            datetime(2026, 3, 29, 2, 0, tzinfo=tz),
+        ]
+        self.assertAlmostEqual(_interval_hours(times, 1), 1.0)
+        np.testing.assert_allclose(_precip_intensity(np.array([1.0, 1.0]), times), [1.0, 1.0])
+
+        spring_payload = _deterministic_payload(6)
+        spring_payload["timezone"] = "Europe/London"
+        spring_payload["hourly"]["time"] = [
+            "2026-03-29T00:00",
+            "2026-03-29T01:00",
+            "2026-03-29T02:00",
+        ]
+        with self.assertRaises(MeteogramError):
+            parse_deterministic_payload(
+                spring_payload, source=source_for_id("gfs"), point_label="Лондон",
+                requested_lat=51.507, requested_lon=-0.128,
+            )
+
+        payload = _deterministic_payload(9)
+        payload["timezone"] = "Europe/London"
+        payload["hourly"]["time"] = [
+            "2026-10-25T00:00",
+            "2026-10-25T01:00",
+            "2026-10-25T01:00",
+            "2026-10-25T02:00",
+        ]
+        series = parse_deterministic_payload(
+            payload, source=source_for_id("gfs"), point_label="Лондон",
+            requested_lat=51.507, requested_lon=-0.128,
+        )
+        elapsed = [
+            (right.timestamp() - left.timestamp()) / 3600.0
+            for left, right in zip(series.times, series.times[1:])
+        ]
+        self.assertEqual(elapsed, [1.0, 1.0, 1.0])
 
     def test_invalid_response_is_not_cached(self):
         payload = _deterministic_payload(24)
@@ -241,6 +288,7 @@ class MeteogramRenderTests(unittest.TestCase):
             bars = list(precipitation_axis._meteogram_precipitation_bars)
             self.assertEqual(bars[0].get_edgecolor()[-1], 0.0)
             self.assertGreater(bars[5].get_edgecolor()[-1], 0.0)
+            self.assertEqual(_precipitation_class(2.0, 95), PRECIPITATION_CLASSES[3])
             self.assertGreaterEqual(wind_axis.get_ylim()[1], 25.0)
 
             temperature_legend = axes[1].get_legend()
@@ -304,6 +352,63 @@ class MeteogramRenderTests(unittest.TestCase):
         result = self._render(series)
         self.assertEqual(result["photo_safe"], 1)
 
+    def test_ensemble_dewpoint_and_probability_labels(self):
+        series = parse_ensemble_payload(
+            _ensemble_payload(120, members=7),
+            source=source_for_id("gefs"),
+            point_label="Москва",
+            requested_lat=55.75,
+            requested_lon=37.62,
+        )
+        figure, axes, _tracked = build_meteogram_figure(series)
+        try:
+            temperature_labels = [text.get_text() for text in axes[1].get_legend().get_texts()]
+            self.assertIn("точка росы, среднее", temperature_labels)
+            probability_axis = axes[3]._meteogram_probability_axis
+            probability_labels = [line.get_label() for line in probability_axis.lines]
+            self.assertTrue(all("/интервал" in label for label in probability_labels))
+        finally:
+            plt.close(figure)
+
+    def test_partial_day_is_not_labelled_as_daily_total(self):
+        payload = _deterministic_payload(12)
+        payload["hourly"]["precipitation"] = [0.0] * len(payload["hourly"]["time"])
+        payload["hourly"]["precipitation"][1] = 1.0
+        series = parse_deterministic_payload(
+            payload, source=source_for_id("gfs"), point_label="Москва",
+            requested_lat=55.75, requested_lon=37.62,
+        )
+        figure, axes, _tracked = build_meteogram_figure(series)
+        try:
+            labels = [artist.get_text() for artist in axes[3]._meteogram_daily_labels]
+            self.assertTrue(any("мм за 12 ч" in text for text in labels))
+            self.assertFalse(any("мм/сут" in text for text in labels))
+        finally:
+            plt.close(figure)
+
+    def test_ensemble_daily_total_is_median_of_member_totals(self):
+        payload = _ensemble_payload(48, members=3)
+        count = len(payload["hourly"]["time"])
+        for member in range(3):
+            payload["hourly"][f"precipitation_member{member:02d}"] = [0.0] * count
+            payload["hourly"][f"weather_code_member{member:02d}"] = [95.0] * count
+        payload["hourly"]["precipitation_member00"][1] = 10.0
+        payload["hourly"]["precipitation_member01"][2] = 10.0
+        payload["hourly"]["precipitation_member02"][1] = 10.0
+        payload["hourly"]["precipitation_member02"][2] = 10.0
+        series = parse_ensemble_payload(
+            payload, source=source_for_id("gefs"), point_label="Москва",
+            requested_lat=55.75, requested_lon=37.62,
+        )
+        figure, axes, _tracked = build_meteogram_figure(series)
+        try:
+            labels = [artist.get_text() for artist in axes[3]._meteogram_daily_labels]
+            self.assertTrue(any(text.startswith("10,0 мм/сут") for text in labels))
+            self.assertFalse(any(text.startswith("20,0 мм/сут") for text in labels))
+            self.assertFalse(any("гроза" in text for text in labels))
+        finally:
+            plt.close(figure)
+
     def test_overlap_resolver_hides_lower_priority(self):
         figure = plt.figure(figsize=(4, 2), dpi=100)
         high = figure.text(0.2, 0.5, "важная подпись", fontsize=12)
@@ -311,6 +416,19 @@ class MeteogramRenderTests(unittest.TestCase):
         _resolve_overlaps(figure, [(high, 100), (low, 10)])
         self.assertTrue(high.get_visible())
         self.assertFalse(low.get_visible())
+        plt.close(figure)
+
+
+    def test_overlap_resolver_treats_legend_as_obstacle(self):
+        figure, axis = plt.subplots(figsize=(4, 2), dpi=100)
+        axis.plot([0, 1], [0, 1], label="легенда")
+        legend = axis.legend(loc="upper left")
+        figure.canvas.draw()
+        box = legend.get_window_extent(figure.canvas.get_renderer())
+        x_fig, y_fig = figure.transFigure.inverted().transform((box.x0 + 2, box.y0 + 2))
+        annotation = figure.text(x_fig, y_fig, "вторичная подпись", fontsize=12)
+        _resolve_overlaps(figure, [(annotation, 10)])
+        self.assertFalse(annotation.get_visible())
         plt.close(figure)
 
 
