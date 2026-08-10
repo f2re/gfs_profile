@@ -50,8 +50,8 @@ def build_meteogram_figure(
         raise MeteogramError("Для метеограммы требуется не менее двух сроков")
 
     duration_days = (
-        series.times[-1] - series.times[0]
-    ).total_seconds() / 86400.0
+        series.times[-1].timestamp() - series.times[0].timestamp()
+    ) / 86400.0
     width = min(17.0, max(11.8, 9.0 + duration_days * 0.48))
     dpi = int(os.getenv("METEOGRAM_DPI", "170"))
     plt.rcParams.update(
