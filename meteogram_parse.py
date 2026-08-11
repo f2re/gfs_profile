@@ -33,6 +33,8 @@ EXPECTED_UNITS = {
     "wind_gusts_10m": {"m/s", "ms"},
     "wind_direction_10m": {"°", "degree", "degrees"},
 }
+UNAVAILABLE_UNIT_MARKERS = frozenset({"", "undefined", "null", "none", "n/a", "na", "nan"})
+
 
 def parse_deterministic_payload(
     payload: dict[str, Any], *, source: MeteogramSource, point_label: str,
@@ -55,10 +57,18 @@ def parse_ensemble_payload(
     hourly = payload.get("hourly") or {}
     count = len(meta["times"])
     members: dict[str, dict[int, np.ndarray]] = {}
+
+    # Open-Meteo may expose member 0 without a suffix and the remaining
+    # members as *_member01, *_member02, ... . Prefer an explicit member00
+    # field if a provider returns both representations.
     for key, values in hourly.items():
         match = MEMBER_RE.match(str(key))
         if match:
             members.setdefault(match.group("name"), {})[int(match.group("member"))] = _numeric(values, count)
+    for name in ENSEMBLE_PARAMETERS:
+        if name in hourly and 0 not in members.get(name, {}):
+            members.setdefault(name, {})[0] = _numeric(hourly.get(name), count)
+
     if not members:
         raise MeteogramError("Ансамблевый ответ не содержит отдельных членов")
     all_ids = {member for group in members.values() for member in group}
@@ -215,28 +225,82 @@ def _require_finite_field(
 
 def _validate_payload_units(payload: dict[str, Any], source: MeteogramSource) -> None:
     units = payload.get("hourly_units") or {}
+    hourly = payload.get("hourly") or {}
     if not isinstance(units, dict):
         units = {}
+    if not isinstance(hourly, dict):
+        hourly = {}
     warnings: list[str] = []
+
     for parameter, expected in EXPECTED_UNITS.items():
-        raw = units.get(parameter)
-        if raw is None:
-            # Some ensemble responses expose units only on member fields.
-            member_unit = next(
-                (value for key, value in units.items() if str(key).startswith(parameter + "_member")),
-                None,
-            )
-            raw = member_unit
-        if raw is None:
+        data_keys = _parameter_keys(hourly, parameter)
+        unit_keys = _parameter_keys(units, parameter)
+        raw_units = [units.get(key) for key in unit_keys]
+        has_finite_data = any(_contains_finite(hourly.get(key)) for key in data_keys)
+
+        if not raw_units:
             warnings.append(f"Источник не передал единицу поля {parameter}")
             continue
-        normalised = str(raw).strip()
-        if normalised not in expected:
+
+        normalised_units = [str(value).strip() if value is not None else "" for value in raw_units]
+        defined_units = [
+            value for value in normalised_units
+            if value.lower() not in UNAVAILABLE_UNIT_MARKERS
+        ]
+        unexpected = sorted({value for value in defined_units if value not in expected})
+        if unexpected and has_finite_data:
             expected_text = "/".join(sorted(expected))
             raise MeteogramError(
-                f"Неожиданная единица {parameter}: {normalised}; ожидалось {expected_text}"
+                f"Неожиданная единица {parameter}: {unexpected[0]}; ожидалось {expected_text}"
             )
+
+        if defined_units and not unexpected:
+            continue
+
+        marker = next(
+            (value for value in normalised_units if value.lower() in UNAVAILABLE_UNIT_MARKERS),
+            unexpected[0] if unexpected else "не задана",
+        )
+        _clear_parameter(hourly, data_keys)
+        warnings.append(
+            f"{source.label}: поле {parameter} недоступно ({marker or 'пустая единица'}); исключено из метеограммы"
+        )
+
     payload["_meteogram_warnings"] = warnings
+
+
+def _parameter_keys(mapping: dict[str, Any], parameter: str) -> list[str]:
+    result: list[str] = []
+    for raw_key in mapping:
+        key = str(raw_key)
+        if key == parameter:
+            result.append(key)
+            continue
+        match = MEMBER_RE.match(key)
+        if match and match.group("name") == parameter:
+            result.append(key)
+    return result
+
+
+def _contains_finite(values: Any) -> bool:
+    if not isinstance(values, (list, tuple, np.ndarray)):
+        return False
+    for value in values:
+        if value is None:
+            continue
+        try:
+            if np.isfinite(float(value)):
+                return True
+        except (TypeError, ValueError):
+            continue
+    return False
+
+
+def _clear_parameter(hourly: dict[str, Any], keys: list[str]) -> None:
+    count = len(hourly.get("time") or [])
+    for key in keys:
+        hourly[key] = [None] * count
+
 
 def _numeric(values: Any, count: int) -> np.ndarray:
     result = np.full(count, np.nan, dtype=float)

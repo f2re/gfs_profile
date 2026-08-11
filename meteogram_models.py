@@ -34,7 +34,8 @@ SOURCES = (
     MeteogramSource("gefs", "GEFS 0.25° · NOAA/NCEP", "NOAA GEFS 0.25°", "NOAA/NCEP через Open-Meteo", "https://ensemble-api.open-meteo.com/v1/ensemble", "ncep_gefs025", 10, True, 31, "0.25°"),
     MeteogramSource("ecmwf_ens", "ECMWF ENS", "ECMWF IFS Ensemble 0.25°", "ECMWF через Open-Meteo", "https://ensemble-api.open-meteo.com/v1/ensemble", "ecmwf_ifs025_ensemble", 15, True, 51, "0.25°"),
     MeteogramSource("aifs_ens", "AIFS ENS", "ECMWF AIFS Ensemble 0.25°", "ECMWF через Open-Meteo", "https://ensemble-api.open-meteo.com/v1/ensemble", "ecmwf_aifs025_ensemble", 15, True, 51, "0.25°"),
-    MeteogramSource("icon_eps", "ICON-EPS", "DWD ICON Global EPS", "DWD через Open-Meteo", "https://ensemble-api.open-meteo.com/v1/ensemble", "icon_global_eps", 8, True, 40),
+    # Native ICON Global EPS horizon is 7.5 days. Offer only complete days.
+    MeteogramSource("icon_eps", "ICON-EPS", "DWD ICON Global EPS", "DWD через Open-Meteo", "https://ensemble-api.open-meteo.com/v1/ensemble", "icon_global_eps", 7, True, 40),
     MeteogramSource("geps", "GEPS · ECCC", "ECCC Global Ensemble Prediction System", "ECCC через Open-Meteo", "https://ensemble-api.open-meteo.com/v1/ensemble", "gem_global_ensemble", 16, True, 21),
 )
 SOURCE_BY_ID = {source.source_id: source for source in SOURCES}
@@ -84,8 +85,10 @@ def sources_by_kind(ensemble: bool) -> tuple[MeteogramSource, ...]:
 
 
 def available_periods(source: MeteogramSource) -> tuple[int, ...]:
-    values = tuple(value for value in (3, 5, 8, 10, 15, 16) if value <= source.horizon_days)
-    return values or (source.horizon_days,)
+    values = [value for value in (3, 5, 8, 10, 15, 16) if value <= source.horizon_days]
+    if source.horizon_days not in values:
+        values.append(source.horizon_days)
+    return tuple(sorted(set(values)))
 
 
 def validate_days(source: MeteogramSource, days: int) -> int:
