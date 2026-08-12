@@ -48,12 +48,17 @@ def fetch_meteogram(
         "longitude": round(float(lon), 5),
         "hourly": ",".join(ENSEMBLE_PARAMETERS if source.ensemble else DETERMINISTIC_PARAMETERS),
         "models": source.upstream_id,
-        "forecast_days": days,
+        # A period button means the next exact N×24 hours, not calendar days
+        # that start at 00:00 and may include already elapsed hours.
+        "forecast_hours": days * 24,
         "timezone": "auto",
         "temperature_unit": "celsius",
         "wind_speed_unit": "ms",
         "precipitation_unit": "mm",
         "cell_selection": "nearest",
+        # The product is labelled as model-grid data. Disable Open-Meteo's
+        # default terrain downscaling and retain the nearest model cell.
+        "elevation": "nan",
     }
     cache_path = _cache_path(source, params)
     payload = _read_cache(cache_path)

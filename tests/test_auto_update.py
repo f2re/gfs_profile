@@ -31,6 +31,7 @@ class AutoUpdateScriptTests(unittest.TestCase):
         self.assertIn("User=root", text)
         self.assertIn("AUTO_UPDATE_BRANCH=$BRANCH", text)
         self.assertIn("systemctl enable --now", text)
+        self.assertIn("git -C \"$REPO_ROOT\" ls-remote --exit-code", text)
 
     def test_fast_forward_deploy_rollback_and_block(self) -> None:
         with tempfile.TemporaryDirectory() as raw:

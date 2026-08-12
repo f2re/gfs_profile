@@ -97,8 +97,20 @@ fi
 [[ -x "$REPO_ROOT/auto_update_telegram_bot.sh" ]] || { echo "Не найден auto_update_telegram_bot.sh" >&2; exit 1; }
 [[ -f "$REPO_ROOT/deploy_telegram_bot.sh" ]] || { echo "Не найден deploy_telegram_bot.sh" >&2; exit 1; }
 REPO_USER="$(stat -c '%U' "$REPO_ROOT/.git")"
-CURRENT_BRANCH="$(runuser -u "$REPO_USER" -- git -C "$REPO_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+REPO_HOME="$(getent passwd "$REPO_USER" 2>/dev/null | cut -d: -f6 || true)"
+REPO_HOME="${REPO_HOME:-/root}"
+CURRENT_BRANCH="$(runuser -u "$REPO_USER" -- env HOME="$REPO_HOME" git -C "$REPO_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
 [[ "$CURRENT_BRANCH" == "$BRANCH" ]] || { echo "Checkout должен быть в ветке $BRANCH, сейчас: $CURRENT_BRANCH" >&2; exit 1; }
+REMOTE_URL="$(runuser -u "$REPO_USER" -- env HOME="$REPO_HOME" git -C "$REPO_ROOT" remote get-url "$REMOTE" 2>/dev/null || true)"
+[[ -n "$REMOTE_URL" ]] || { echo "Не найден git remote '$REMOTE'" >&2; exit 1; }
+
+echo "Проверяю доступ к $REMOTE/$BRANCH от имени $REPO_USER..."
+if ! runuser -u "$REPO_USER" -- env HOME="$REPO_HOME" git -C "$REPO_ROOT" ls-remote --exit-code "$REMOTE" "refs/heads/$BRANCH" >/dev/null 2>&1; then
+  echo "Не удалось прочитать $REMOTE/$BRANCH без интерактивной сессии." >&2
+  echo "Remote: $REMOTE_URL" >&2
+  echo "Если SSH использует только ssh-agent, настройте постоянный deploy key или HTTPS fetch URL." >&2
+  exit 1
+fi
 
 if [[ "$ASSUME_YES" -ne 1 ]]; then
   echo "Будет установлен ${UNIT_BASE}.timer:"

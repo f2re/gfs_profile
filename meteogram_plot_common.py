@@ -61,8 +61,12 @@ def _draw_header(figure: Figure, series: MeteogramSeries, tracked) -> None:
     if series.source.ensemble:
         observed = series.member_count or 0
         expected = series.expected_member_count or observed
-        coverage = 100.0 * observed / expected if expected else 0.0
-        members = f" · {observed}/{expected} членов ({coverage:.0f} %)"
+        members = f" · {observed}/{expected} членов"
+        per_time = series.values("ensemble_member_count")
+        if np.isfinite(per_time).any():
+            minimum = int(np.nanmin(per_time))
+            if minimum < observed:
+                members += f" · на сроках ≥{minimum}/{expected}"
 
     point_label = textwrap.shorten(
         " ".join(series.point_label.split()), width=92, placeholder="…"
@@ -254,8 +258,8 @@ def _solar_elevation(value: datetime, latitude: float, longitude: float) -> floa
 def _finish_axes(figure: Figure, axes, series: MeteogramSeries, tracked) -> None:
     timezone = series.times[0].tzinfo
     duration_days = (
-        series.times[-1] - series.times[0]
-    ).total_seconds() / 86400.0
+        series.times[-1].timestamp() - series.times[0].timestamp()
+    ) / 86400.0
     axes[-1].xaxis.set_major_locator(mdates.DayLocator(interval=1, tz=timezone))
     weekdays = ("пн", "вт", "ср", "чт", "пт", "сб", "вс")
 
@@ -304,8 +308,8 @@ def _finish_axes(figure: Figure, axes, series: MeteogramSeries, tracked) -> None
         color=COLORS["muted"],
     )
     explanation = (
-        "центр: T/Td/p — среднее, прочие поля — медиана; полосы q25–q75 и q10–q90; "
-        "P осадков — сырая доля членов за интервал"
+        "T/Td/p — среднее; направление — круговое среднее; прочее — медиана; "
+        "q25–q75/q10–q90; P — доля членов за исходный интервал"
         if series.source.ensemble
         else "непрерывные поля сглажены PCHIP; осадки показаны без сглаживания"
     )
@@ -428,6 +432,19 @@ def _resolve_overlaps(figure: Figure, tracked) -> None:
     figure.canvas.draw()
     renderer = figure.canvas.get_renderer()
     kept: list[tuple[Bbox, int]] = []
+    # Legends are fixed layout elements. Treat them as high-priority obstacles
+    # so optional annotations cannot be drawn through their white panels.
+    seen_legends: set[int] = set()
+    legends = list(figure.legends)
+    legends.extend(axis.get_legend() for axis in figure.axes)
+    for legend in legends:
+        if legend is None or not legend.get_visible() or id(legend) in seen_legends:
+            continue
+        seen_legends.add(id(legend))
+        try:
+            kept.append((legend.get_window_extent(renderer=renderer).expanded(1.02, 1.06), 1000))
+        except Exception:
+            pass
     for artist, priority in sorted(tracked, key=lambda item: item[1], reverse=True):
         if not artist.get_visible():
             continue
@@ -459,9 +476,9 @@ def _interval_hours(times: list[datetime], index: int) -> float:
     if len(times) < 2:
         return 1.0
     if index > 0:
-        hours = (times[index] - times[index - 1]).total_seconds() / 3600.0
+        hours = (times[index].timestamp() - times[index - 1].timestamp()) / 3600.0
     else:
-        hours = (times[1] - times[0]).total_seconds() / 3600.0
+        hours = (times[1].timestamp() - times[0].timestamp()) / 3600.0
     return max(hours, 0.01)
 
 

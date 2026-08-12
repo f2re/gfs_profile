@@ -23,8 +23,20 @@ systemctl restart
 ```bash
 cd ~/gfs_profile
 git checkout telegram-bot
-git pull
+git pull --ff-only
 sudo bash install_auto_update.sh --yes
+```
+
+Установщик до создания timer выполняет `git ls-remote` от имени владельца checkout. Это проверяет доступ именно в неинтерактивной systemd-среде. Если `origin` использует SSH-ключ, доступный только через `ssh-agent`, настройте постоянный deploy key либо fetch по HTTPS. Для публичного репозитория наиболее простой fetch URL:
+
+```bash
+git remote set-url origin https://github.com/f2re/gfs_profile.git
+```
+
+Если с сервера также выполняется push по SSH, можно отдельно сохранить push URL:
+
+```bash
+git remote set-url --push origin git@github.com:f2re/gfs_profile.git
 ```
 
 По умолчанию проверка выполняется примерно раз в 60 секунд. Другой интервал:
