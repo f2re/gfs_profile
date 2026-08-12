@@ -5,7 +5,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from cloudgram_product import CloudgramCell, CloudgramData
+from cloudgram_product import CloudgramCell, CloudgramData, _is_no_ceiling_value
 from plot_style import (
     METEO,
     PRECIP_TYPE_COLORS,
@@ -305,6 +305,8 @@ def _pro_cell(row: CloudgramRow, cell: CloudgramCell):
         value = cell.ceiling_m
         cmap, norm = ceiling_cmap_and_norm()
         if value is None:
+            if _is_no_ceiling_value(cell.ceiling_msl_gpm):
+                return "#FFFFFF", "нет", METEO.axis_text
             return "#E6EBF1", "—", METEO.axis_text
         return cmap(norm(value)), _ceiling_text(value), value_text_color(value, param="ceiling")
 
@@ -418,22 +420,22 @@ def _pro_footer(data: CloudgramData) -> str:
     missing = f" Нет полей: {', '.join(data.missing_fields)}." if data.missing_fields else ""
     return (
         "Облачность: одна ячейка = H/M/L сверху вниз, число = общая облачность %. "
+        "ВНГО — нативное HGT cloud ceiling AGL; 20 000 м означает «потолка нет». "
         "Гроза 0–3: 0 нет, 1 слабая, 2 развитая, 3 выраженная. "
         "Опасность 0–4: 0 спокойно, 4 максимум риска. "
         "RA дождь, SN снег, FZRA переохл. дождь, FG туман, TSRA гроза с дождём. "
         f"Макс. опасность: {max_hazard}.{missing}"
     )
 
-
 def _simple_footer(data: CloudgramData) -> str:
     max_hazard = max((cell.hazard_score for cell in data.cells), default=0)
     return (
         "Облака: верх/сред/низ сверху вниз; центр = общая облачность. "
         "Осадки/явления: фон = интенсивность, значок = тип; гроза — только при сигнале.\n"
+        "ВНГО в риске — нативное AGL; 20 000 м = потолка нет. "
         "Опасность = максимум сигналов: осадки, видимость, ВНГО, гроза. "
         f"0 спокойно · 1 слабые · 2 ограничения · 3 опасно · 4 гроза/очень опасно. Макс: {max_hazard}."
     )
-
 
 def _write_grid(data: CloudgramData, rows: tuple[CloudgramRow, ...], cell_func, *, title: str, footer: str, simple: bool) -> Path:
     import matplotlib

@@ -62,6 +62,7 @@ OPTIONAL_RUNTIME_MODULES = (
     "meteogram_data",
     "meteogram_core",
     "meteogram_plot_common",
+    "meteogram_diagnostics",
     "meteogram_plot_thermo",
     "meteogram_plot_weather",
     "meteogram_plot",

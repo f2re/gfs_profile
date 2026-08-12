@@ -9,6 +9,7 @@ from cloudgram_product import (
     _cape_cin_180,
     _cb_score,
     _ceiling_agl,
+    _is_no_ceiling_value,
     _hazard_score,
     cloudgram_leads,
 )
@@ -67,22 +68,36 @@ class CloudgramProductTests(unittest.TestCase):
         self.assertEqual(one_hour, three_hour)
         self.assertEqual(one_hour, 2)
 
-    def test_ceiling_is_converted_from_msl_to_agl(self) -> None:
+    def test_ceiling_field_is_already_agl(self) -> None:
         datasets = [
             _scalar_dataset("gh_ceiling", 850.0, short_name="gh", type_of_level="cloudCeiling"),
             _scalar_dataset("gh_surface", 250.0, short_name="gh", type_of_level="surface"),
         ]
-        agl, ceiling_msl, surface = _ceiling_agl(datasets)
-        self.assertEqual(agl, 600.0)
-        self.assertEqual(ceiling_msl, 850.0)
+        agl, source, surface = _ceiling_agl(datasets)
+        self.assertEqual(agl, 850.0)
+        self.assertEqual(source, 850.0)
         self.assertEqual(surface, 250.0)
 
-    def test_ceiling_is_missing_without_surface_elevation(self) -> None:
+    def test_ceiling_does_not_require_surface_elevation(self) -> None:
         datasets = [_scalar_dataset("gh_ceiling", 850.0, short_name="gh", type_of_level="cloudCeiling")]
-        agl, ceiling_msl, surface = _ceiling_agl(datasets)
-        self.assertIsNone(agl)
-        self.assertEqual(ceiling_msl, 850.0)
+        agl, source, surface = _ceiling_agl(datasets)
+        self.assertEqual(agl, 850.0)
+        self.assertEqual(source, 850.0)
         self.assertIsNone(surface)
+
+    def test_no_ceiling_sentinel_is_valid_absence(self) -> None:
+        datasets = [_scalar_dataset("gh_ceiling", 20000.0, short_name="gh", type_of_level="cloudCeiling")]
+        agl, source, _surface = _ceiling_agl(datasets)
+        self.assertIsNone(agl)
+        self.assertEqual(source, 20000.0)
+        self.assertTrue(_is_no_ceiling_value(source))
+
+    def test_zero_ceiling_is_not_replaced_or_dropped(self) -> None:
+        datasets = [_scalar_dataset("gh_ceiling", 0.0, short_name="gh", type_of_level="cloudCeiling")]
+        agl, source, _surface = _ceiling_agl(datasets)
+        self.assertEqual(agl, 0.0)
+        self.assertEqual(source, 0.0)
+        self.assertFalse(_is_no_ceiling_value(source))
 
     def test_cape_cin_use_180_0_hpa_layer(self) -> None:
         datasets = [

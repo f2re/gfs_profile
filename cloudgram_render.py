@@ -48,22 +48,21 @@ def _pro_footer(data: CloudgramData) -> str:
     interval_text = "/".join(f"{value:g}" for value in intervals) if intervals else "—"
     return (
         "Облачность H/M/L и TCDC выбраны по точным слоям GFS. "
-        f"Осадки — количество за интервал {interval_text} ч. ВНГО — HGT cloud ceiling минус HGT поверхности, AGL. "
+        f"Осадки — количество за интервал {interval_text} ч. "
+        "ВНГО — нативное HGT cloud ceiling AGL; 20 000 м означает «потолка нет». "
         "Конвективный потенциал 0–3 рассчитан по CAPE/CIN 180–0 гПа AGL, ACPCP, CPRAT и TCDC convective cloud; "
         "TSRA/⚡ только при уровне 3 и осадках. Шкала опасности 0–4 локальная, не ICAO. "
         f"Макс. опасность: {max_hazard}.{missing}"
     )
 
-
 def _simple_footer(data: CloudgramData) -> str:
     max_hazard = max((cell.hazard_score for cell in data.cells), default=0)
     return (
         "Облака: верх/сред/низ; осадки — количество за интервал. "
-        "ВНГО используется только как AGL. «пот.» — конвективный потенциал, не гроза; ⚡ — только модельный TSRA.\n"
+        "ВНГО — нативное AGL; 20 000 м = потолка нет. «пот.» — конвективный потенциал, не гроза; ⚡ — только модельный TSRA.\n"
         "Опасность 0–4 — локальная модельная шкала по осадкам, VIS, ВНГО AGL и подтверждённому TSRA. "
         f"Максимум: {max_hazard}."
     )
-
 
 def _write_grid(data: CloudgramData, rows, cell_func, *, title: str, footer: str, simple: bool) -> Path:
     import matplotlib

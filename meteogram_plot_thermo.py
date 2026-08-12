@@ -5,13 +5,13 @@ import math
 import numpy as np
 
 from meteogram_core import MeteogramSeries
+from meteogram_diagnostics import add_humidity_diagnostics, add_temperature_diagnostics
 from meteogram_plot_common import (
     COLORS,
     FOG_CODES,
     _band,
     _base_axis,
     _combined_finite,
-    _extreme_label,
     _legend_above,
     _line,
     _outside_zone_label,
@@ -157,19 +157,9 @@ def _draw_temperature(axis, x: np.ndarray, series: MeteogramSeries, tracked) -> 
             )
     axis.set_ylim(lower, upper)
     axis.set_yticks(np.arange(math.ceil(lower / 10) * 10, upper + 0.1, 10))
-    _legend_above(axis, columns=3, fontsize=7.0)
-
-    finite_indices = np.flatnonzero(np.isfinite(temperature))
-    if finite_indices.size:
-        minimum = int(
-            finite_indices[np.nanargmin(temperature[finite_indices])]
-        )
-        maximum = int(
-            finite_indices[np.nanargmax(temperature[finite_indices])]
-        )
-        _extreme_label(axis, x, temperature, minimum, "min", tracked)
-        if maximum != minimum:
-            _extreme_label(axis, x, temperature, maximum, "max", tracked)
+    add_temperature_diagnostics(axis, x, series, tracked)
+    _legend_above(axis, columns=4, fontsize=6.6)
+    if np.isfinite(temperature).any():
         _mark_zero_crossings(axis, x, temperature, tracked)
 
 
@@ -300,7 +290,8 @@ def _draw_humidity(axis, x: np.ndarray, series: MeteogramSeries, tracked) -> Non
     _outside_zone_label(axis, 20, "сухо")
     _outside_zone_label(axis, 80, "влажно")
     _outside_zone_label(axis, 96, "очень влажно")
-    _legend_above(axis, columns=2, fontsize=7.0)
+    add_humidity_diagnostics(axis, x, series)
+    _legend_above(axis, columns=2, fontsize=6.7)
     if not series.source.ensemble:
         _mark_fog_risk(axis, x, series, tracked)
 
