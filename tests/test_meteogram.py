@@ -28,6 +28,7 @@ from meteogram_plot import (
     write_meteogram_png,
 )
 from meteogram_parse import _precip_intensity
+from meteogram_diagnostics import critical_episode_indices, daily_temperature_extrema, rolling_time_mean
 from meteogram_plot_common import PRECIPITATION_CLASSES, _interval_hours
 from meteogram_plot_weather import _precipitation_class
 from meteogram_request import parse_meteogram_request
@@ -431,6 +432,60 @@ class MeteogramRenderTests(unittest.TestCase):
         self.assertFalse(annotation.get_visible())
         plt.close(figure)
 
+
+
+
+class MeteogramDiagnosticsTests(unittest.TestCase):
+    def test_time_weighted_24h_mean_and_daily_extrema(self) -> None:
+        start = datetime(2026, 8, 10, tzinfo=timezone.utc)
+        times = [start + timedelta(hours=3 * index) for index in range(17)]
+        values = np.arange(17, dtype=float)
+        trend = rolling_time_mean(times, values)
+        self.assertEqual(trend.shape, values.shape)
+        self.assertTrue(np.isfinite(trend[4:-4]).all())
+        extrema = daily_temperature_extrema(times, values)
+        self.assertGreaterEqual(len(extrema), 2)
+        self.assertEqual(extrema[0][1], 0)
+        self.assertEqual(extrema[0][2], 7)
+
+    def test_one_marker_is_selected_per_critical_episode(self) -> None:
+        values = np.asarray([0.0, 6.0, 7.0, 1.0, 8.0, 9.0])
+        mask = values >= 5.0
+        self.assertEqual(critical_episode_indices(values, mask, mode="max"), [2, 5])
+
+    def test_russian_daily_extrema_trends_and_critical_markers(self) -> None:
+        payload = _deterministic_payload(72)
+        count = len(payload["hourly"]["time"])
+        payload["hourly"]["temperature_2m"] = [10.0] * count
+        payload["hourly"]["temperature_2m"][2] = 36.0
+        payload["hourly"]["temperature_2m"][10] = -22.0
+        payload["hourly"]["relative_humidity_2m"][4] = 97.0
+        payload["hourly"]["precipitation"][6] = 18.0
+        payload["hourly"]["wind_speed_10m"][8] = 11.0
+        payload["hourly"]["wind_gusts_10m"][8] = 16.0
+        series = parse_deterministic_payload(
+            payload, source=source_for_id("gfs"), point_label="Москва",
+            requested_lat=55.75, requested_lon=37.62,
+        )
+        figure, axes, _tracked = build_meteogram_figure(series)
+        try:
+            temperature_axis = axes[1]
+            labels = [artist.get_text() for artist in temperature_axis._meteogram_daily_temperature_labels]
+            self.assertTrue(any(text.startswith("мин.") for text in labels))
+            self.assertTrue(any(text.startswith("макс.") for text in labels))
+            self.assertFalse(any(text.startswith(("min", "max")) for text in labels))
+            self.assertGreaterEqual(np.isfinite(temperature_axis._meteogram_temperature_trend).sum(), 2)
+            self.assertTrue(all(marker is not None for marker in temperature_axis._meteogram_temperature_critical_markers))
+            self.assertIsNotNone(axes[2]._meteogram_humidity_critical_markers)
+            self.assertIsNotNone(axes[3]._meteogram_precipitation_critical_markers)
+            self.assertIsNotNone(axes[4]._meteogram_wind_critical_markers)
+            self.assertIsNotNone(axes[4]._meteogram_gust_critical_markers)
+            self.assertGreaterEqual(np.isfinite(axes[4]._meteogram_pressure_axis._meteogram_pressure_trend).sum(), 2)
+            footer = " ".join(item.get_text() for item in figure.texts)
+            self.assertIn("среднее за 24 ч", footer)
+            self.assertIn("Красный ромб", footer)
+        finally:
+            plt.close(figure)
 
 if __name__ == "__main__":
     unittest.main()

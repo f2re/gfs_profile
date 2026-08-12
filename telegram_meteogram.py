@@ -343,40 +343,7 @@ async def _show_home(message, prefix: str | None = None) -> None:
     await message.reply_text(f"{prefix}\n\n{text}" if prefix else text, reply_markup=telegram_concise_ux.home_keyboard())
 
 
-def _patch_home_ui() -> None:
-    import telegram_concise_ux
-    if getattr(telegram_concise_ux, "_METEOGRAM_PATCHED", False):
-        return
-    original_keyboard = telegram_concise_ux.home_keyboard
-    original_home = telegram_concise_ux.home_text
-    original_help = telegram_concise_ux.help_text
-
-    def home_keyboard():
-        markup = original_keyboard()
-        rows = [list(row) for row in markup.inline_keyboard]
-        insert_at = max(0, len(rows) - 1)
-        rows.insert(insert_at, [InlineKeyboardButton("📊 Метеограмма", callback_data="home:meteogram")])
-        return InlineKeyboardMarkup(rows)
-
-    def home_text():
-        text = original_home()
-        marker = "/map — карта, серия или анимация"
-        addition = "/meteogram — прогноз по времени и ансамбль"
-        return text.replace(marker, marker + "\n" + addition) if marker in text else text + "\n" + addition
-
-    def help_text():
-        text = original_help()
-        example = '<code>/meteogram Москва source=ecmwf_ifs days=5</code>'
-        return text.replace("\n\n/cycle", f"\n{example}\n\n/cycle") if "\n\n/cycle" in text else text + "\n" + example
-
-    telegram_concise_ux.home_keyboard = home_keyboard
-    telegram_concise_ux.home_text = home_text
-    telegram_concise_ux.help_text = help_text
-    telegram_concise_ux._METEOGRAM_PATCHED = True
-
-
 def register_meteogram_handlers(application) -> None:
-    _patch_home_ui()
     application.add_handler(CommandHandler("meteogram", meteogram_command), group=-4)
     application.add_handler(CallbackQueryHandler(meteogram_callback, pattern=r"^(home:meteogram|meteo:)"), group=-4)
     application.add_handler(MessageHandler(filters.LOCATION, meteogram_location), group=-4)

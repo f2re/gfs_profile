@@ -10,6 +10,7 @@ from matplotlib.patches import Patch
 from matplotlib.transforms import blended_transform_factory
 
 from meteogram_core import MeteogramSeries
+from meteogram_diagnostics import add_precipitation_diagnostics, add_wind_pressure_diagnostics
 from meteogram_plot_common import (
     COLORS,
     DRIZZLE_CODES,
@@ -122,7 +123,7 @@ def _draw_precipitation(axis, x: np.ndarray, series: MeteogramSeries, tracked) -
             tracked.append((artist, 35))
 
     daily_labels = _daily_precipitation_labels(axis, x, series, values, tracked)
-
+    add_precipitation_diagnostics(axis, x, values)
     probability_axis = None
     if series.source.ensemble:
         probability_axis = axis.twinx()
@@ -416,18 +417,18 @@ def _draw_wind_pressure(axis, x: np.ndarray, series: MeteogramSeries, tracked) -
         )
         pressure_axis.tick_params(labelsize=6.5, colors=COLORS["pressure"])
         pressure_axis.spines["top"].set_visible(False)
-
+    add_wind_pressure_diagnostics(axis, pressure_axis, x, series)
     _wind_arrows(axis, x, series.values("wind_direction_10m"))
     if pressure_axis is not None:
         _combined_legend_above(
             axis,
             pressure_axis,
-            columns=3,
-            fontsize=6.8,
+            columns=5,
+            fontsize=6.2,
             anchor_y=1.035,
         )
     else:
-        _legend_above(axis, columns=2, fontsize=6.8)
+        _legend_above(axis, columns=3, fontsize=6.4)
 
     maximum_gust = float(np.nanmax(gust)) if np.isfinite(gust).any() else 0.0
     maximum_wind = float(np.nanmax(wind)) if np.isfinite(wind).any() else 0.0

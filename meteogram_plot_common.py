@@ -288,7 +288,7 @@ def _finish_axes(figure: Figure, axes, series: MeteogramSeries, tracked) -> None
     generated = datetime.now(dt_timezone.utc)
     footer1 = figure.text(
         0.063,
-        0.066,
+        0.096,
         f"Запрошено {series.requested_lat:.4f},{series.requested_lon:.4f}{grid}",
         ha="left",
         va="bottom",
@@ -297,7 +297,7 @@ def _finish_axes(figure: Figure, axes, series: MeteogramSeries, tracked) -> None
     )
     footer2 = figure.text(
         0.063,
-        0.042,
+        0.074,
         (
             f"Получено {series.retrieved_at_utc:%d.%m.%Y %H:%M} UTC · "
             f"PNG {generated:%d.%m.%Y %H:%M} UTC · модельный прогноз, не наблюдение"
@@ -315,15 +315,35 @@ def _finish_axes(figure: Figure, axes, series: MeteogramSeries, tracked) -> None
     )
     footer3 = figure.text(
         0.063,
-        0.018,
+        0.052,
         explanation,
         ha="left",
         va="bottom",
         fontsize=6.15,
         color=COLORS["muted"],
     )
-    tracked.extend(((footer1, 100), (footer2, 100), (footer3, 100)))
-    figure.subplots_adjust(left=0.078, right=0.895, top=0.855, bottom=0.145)
+    footer4 = figure.text(
+        0.063,
+        0.030,
+        "Пунктир — среднее за 24 ч; мин./макс. T — по доступным срокам местных суток.",
+        ha="left",
+        va="bottom",
+        fontsize=5.95,
+        color=COLORS["muted"],
+    )
+    footer5 = figure.text(
+        0.063,
+        0.008,
+        "Красный ромб — диагностический порог: T ≤−20/≥+35 °C; RH ≥95%; осадки ≥5 мм/ч; ветер ≥10; порывы ≥14 м/с.",
+        ha="left",
+        va="bottom",
+        fontsize=5.80,
+        color=COLORS["muted"],
+    )
+    tracked.extend(
+        ((footer1, 100), (footer2, 100), (footer3, 100), (footer4, 100), (footer5, 100))
+    )
+    figure.subplots_adjust(left=0.078, right=0.895, top=0.855, bottom=0.185)
 
 
 def _line(axis, x, values, color, width, label, style="-") -> None:

@@ -24,6 +24,8 @@ CLOUDGRAM_DEFAULT_TO = 72
 CLOUDGRAM_DEFAULT_STEP = 3
 CLOUDGRAM_MAX_TO = 120
 CAPE_LAYER_PA = 18000.0
+GFS_NO_CEILING_M = 20000.0
+GFS_NO_CEILING_TOLERANCE_M = 1.0
 
 CLOUDGRAM_VARIABLES = (
     "LCDC",
@@ -261,8 +263,18 @@ def _cape_cin_180(datasets) -> tuple[float | None, float | None, str]:
     return None, None, "unavailable"
 
 
+def _is_no_ceiling_value(value: float | None) -> bool:
+    if value is None:
+        return False
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(numeric) and numeric >= GFS_NO_CEILING_M - GFS_NO_CEILING_TOLERANCE_M
+
+
 def _ceiling_agl(datasets) -> tuple[float | None, float | None, float | None]:
-    ceiling_msl = scalar_from_datasets(
+    ceiling_source = scalar_from_datasets(
         datasets,
         ("gh", "h", "hgt"),
         type_of_level=("cloudCeiling",),
@@ -274,12 +286,26 @@ def _ceiling_agl(datasets) -> tuple[float | None, float | None, float | None]:
         type_of_level=("surface",),
         step_types=("instant",),
     )
-    if ceiling_msl is None or surface is None:
-        return None, ceiling_msl, surface
-    if not math.isfinite(float(ceiling_msl)) or not math.isfinite(float(surface)) or abs(float(ceiling_msl)) > 1e8:
-        return None, ceiling_msl, surface
-    return max(0.0, float(ceiling_msl) - float(surface)), float(ceiling_msl), float(surface)
-
+    surface_value = None
+    if surface is not None:
+        try:
+            candidate = float(surface)
+            if math.isfinite(candidate) and abs(candidate) <= 1e8:
+                surface_value = candidate
+        except (TypeError, ValueError):
+            pass
+    if ceiling_source is None:
+        return None, None, surface_value
+    try:
+        ceiling_value = float(ceiling_source)
+    except (TypeError, ValueError):
+        return None, ceiling_source, surface_value
+    if not math.isfinite(ceiling_value) or abs(ceiling_value) > 1e8 or ceiling_value < 0:
+        return None, ceiling_source, surface_value
+    if _is_no_ceiling_value(ceiling_value):
+        return None, ceiling_value, surface_value
+    # NCEP UPP cloudCeiling HGT is already metres above the surface (AGL).
+    return ceiling_value, ceiling_value, surface_value
 
 def _read_cloudgram_cell(
     run: GfsRun,
@@ -316,7 +342,7 @@ def _read_cloudgram_cell(
                 step_types=("instant",),
             )
         )
-        ceiling, ceiling_msl, surface_elevation = _ceiling_agl(datasets)
+        ceiling, ceiling_source, surface_elevation = _ceiling_agl(datasets)
 
         apcp_value, apcp_interval = _selected_scalar(
             datasets,
@@ -365,7 +391,6 @@ def _read_cloudgram_cell(
         "high_cloud": high,
         "total_cloud": total,
         "convective_cloud": conv_cloud,
-        "ceiling_agl": ceiling,
         "precip": apcp,
         "visibility": visibility,
         "cape_180_0": cape if cape_layer == "180–0 hPa AGL" else None,
@@ -373,7 +398,8 @@ def _read_cloudgram_cell(
     }.items():
         if value is None:
             missing.add(name)
-
+    if ceiling is None and not _is_no_ceiling_value(ceiling_source):
+        missing.add("ceiling_agl")
     cb = _cb_score(cape, cin, acpcp, conv_cloud, cprat, conv_interval)
     phenomena = _phenomena(apcp, precip_type, cb, visibility)
     hazard, hazard_text = _hazard_score(cb, apcp, ceiling, visibility, phenomena, precip_interval)
@@ -399,7 +425,8 @@ def _read_cloudgram_cell(
             phenomena=phenomena,
             hazard_score=hazard,
             hazard_text=hazard_text,
-            ceiling_msl_gpm=ceiling_msl,
+            # Compatibility field: native GFS AGL value or the 20,000 m no-ceiling sentinel.
+            ceiling_msl_gpm=ceiling_source,
             surface_elevation_gpm=surface_elevation,
             convective_cloud_pct=conv_cloud,
             conv_precip_rate_mmh=cprat,

@@ -29,10 +29,10 @@ def home_text() -> str:
         "/aero, /skewt — аэродиаграммы\n"
         "/windgram — ветер, температура или влажность по срокам\n"
         "/cloudgram — облака, осадки и грозы\n"
+        "/meteogram — прогноз по времени и ансамбль\n"
         "/map — карта, серия или анимация\n\n"
         "Выберите продукт."
     )
-
 
 def help_text() -> str:
     return (
@@ -44,10 +44,10 @@ def help_text() -> str:
         "<code>/profile Москва +24</code>\n"
         "<code>/route Москва -&gt; Санкт-Петербург +6</code>\n"
         "<code>/cloudgram Москва to=72 mode=simple</code>\n"
+        "<code>/meteogram Москва source=gfs days=5</code>\n"
         "<code>/map Москва from=0 to=24 step=3 mode=gif</code>\n\n"
         "/cycle — последний цикл · /status — доступность · /cancel — сброс"
     )
-
 
 def home_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
@@ -62,12 +62,14 @@ def home_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton("🧾 Аэродиаграмма", callback_data="home:aero"),
-                InlineKeyboardButton("🗺️ Карта", callback_data="home:map"),
+                InlineKeyboardButton("📊 Метеограмма", callback_data="home:meteogram"),
             ],
-            [InlineKeyboardButton("❓ Как пользоваться", callback_data="home:help")],
+            [
+                InlineKeyboardButton("🗺️ Карта", callback_data="home:map"),
+                InlineKeyboardButton("❓ Как пользоваться", callback_data="home:help"),
+            ],
         ]
     )
-
 
 def point_keyboard(recent_locations: list[Any] | None = None) -> ReplyKeyboardMarkup:
     rows: list[list[KeyboardButton]] = [[KeyboardButton("📍 Моя геолокация", request_location=True)]]

@@ -6,13 +6,14 @@ from types import SimpleNamespace
 from telegram import InlineKeyboardMarkup, ReplyKeyboardMarkup
 
 import telegram_concise_ux as ux
+from telegram_commands import BOT_COMMANDS
 from telegram_ui import location_keyboard
 
 
 class TelegramConciseUxTests(unittest.TestCase):
     def test_start_text_is_short_and_explains_products(self) -> None:
         text = ux.home_text()
-        for command in ("/profile", "/route", "/aero", "/windgram", "/cloudgram", "/map"):
+        for command in ("/profile", "/route", "/aero", "/windgram", "/cloudgram", "/meteogram", "/map"):
             self.assertIn(command, text)
         self.assertLess(len(text), 500)
         for redundant in ("не радар", "не наблюдение", "не радиозонд"):
@@ -21,11 +22,17 @@ class TelegramConciseUxTests(unittest.TestCase):
     def test_home_navigation_is_inline(self) -> None:
         keyboard = ux.home_keyboard()
         self.assertIsInstance(keyboard, InlineKeyboardMarkup)
-        callbacks = [button.callback_data for row in keyboard.inline_keyboard for button in row]
+        buttons = [button for row in keyboard.inline_keyboard for button in row]
+        callbacks = [button.callback_data for button in buttons]
         self.assertIn("home:profile", callbacks)
         self.assertIn("home:route", callbacks)
         self.assertIn("home:map", callbacks)
         self.assertIn("home:help", callbacks)
+        self.assertEqual(callbacks.count("home:meteogram"), 1)
+        meteogram_button = next(button for button in buttons if button.callback_data == "home:meteogram")
+        self.assertTrue(meteogram_button.text.startswith("📊"))
+        commands = [command.command for command in BOT_COMMANDS]
+        self.assertEqual(commands.count("meteogram"), 1)
 
     def test_location_keyboard_is_temporary_and_stage_specific(self) -> None:
         point = SimpleNamespace(label="Москва", lat=55.75, lon=37.62)
