@@ -45,8 +45,11 @@ def _draw_precipitation(axis, x: np.ndarray, series: MeteogramSeries, tracked) -
     trace_mask = (
         np.isfinite(values) & (values > 0) & (values < TRACE_RATE_LIMIT_MM_H)
     )
+    # Keep the true intensity for trace precipitation instead of suppressing
+    # it to zero. A translucent filled column remains meteorologically
+    # proportional, while the trace marker still makes <0.1 mm/h visible.
     bar_heights = display_values.copy()
-    bar_heights[trace_mask] = 0.0
+    axis_upper = _precipitation_axis_upper(values)
 
     weather = series.values("weather_code")
     classes = [
@@ -56,7 +59,9 @@ def _draw_precipitation(axis, x: np.ndarray, series: MeteogramSeries, tracked) -
         )
         for index in range(len(values))
     ]
-    facecolors = [to_rgba(item[2], 0.86) for item in classes]
+    # Filled semi-transparent columns are deliberately more prominent than
+    # probability curves; the latter are supporting ensemble diagnostics.
+    facecolors = [to_rgba(item[2], 0.58) for item in classes]
     thunder_flags = [
         not series.source.ensemble
         and np.isfinite(weather[index])
@@ -71,7 +76,7 @@ def _draw_precipitation(axis, x: np.ndarray, series: MeteogramSeries, tracked) -
     linewidths = [0.9 if thunder else 0.0 for thunder in thunder_flags]
 
     _precipitation_background(axis)
-    width = max(np.nanmedian(np.diff(x)) * 0.82, 0.015)
+    width = max(np.nanmedian(np.diff(x)) * 0.94, 0.015)
     bars = axis.bar(
         x,
         bar_heights,
@@ -99,8 +104,8 @@ def _draw_precipitation(axis, x: np.ndarray, series: MeteogramSeries, tracked) -
             label="следы <0,1 мм/ч",
         )
 
-    axis.set_ylim(0, PRECIPITATION_RATE_CAP_MM_H)
-    axis.set_yticks(PRECIPITATION_RATE_TICKS)
+    axis.set_ylim(0, axis_upper)
+    axis.set_yticks(_precipitation_axis_ticks(axis_upper))
     for index, rate in enumerate(values):
         if np.isfinite(rate) and rate > PRECIPITATION_RATE_CAP_MM_H:
             artist = axis.annotate(
@@ -141,7 +146,9 @@ def _draw_precipitation(axis, x: np.ndarray, series: MeteogramSeries, tracked) -
                 probability,
                 where="mid",
                 color=color,
-                linewidth=1.15,
+                linewidth=0.85,
+                alpha=0.72,
+                linestyle="--",
                 label=label,
                 zorder=5,
             )
@@ -178,6 +185,37 @@ def _draw_precipitation(axis, x: np.ndarray, series: MeteogramSeries, tracked) -
     axis._meteogram_trace_markers = trace_markers  # type: ignore[attr-defined]
     axis._meteogram_daily_labels = daily_labels  # type: ignore[attr-defined]
     axis._meteogram_probability_axis = probability_axis  # type: ignore[attr-defined]
+
+
+def _precipitation_axis_upper(values) -> float:
+    """Adaptive mm/h scale that keeps weak precipitation readable without exaggeration."""
+
+    finite = np.asarray(values, dtype=float)
+    finite = finite[np.isfinite(finite) & (finite > 0)]
+    if not finite.size:
+        return 2.0
+    maximum = min(float(np.nanmax(finite)), PRECIPITATION_RATE_CAP_MM_H)
+    if maximum <= 0.5:
+        return 1.0
+    if maximum <= 2.0:
+        return 2.0
+    if maximum <= 5.0:
+        return 5.0
+    if maximum <= 10.0:
+        return 10.0
+    return PRECIPITATION_RATE_CAP_MM_H
+
+
+def _precipitation_axis_ticks(upper: float) -> tuple[float, ...]:
+    if upper <= 1.0:
+        return (0.1, 0.5, 1.0)
+    if upper <= 2.0:
+        return (0.1, 0.5, 1.0, 2.0)
+    if upper <= 5.0:
+        return (0.5, 2.0, 5.0)
+    if upper <= 10.0:
+        return (0.5, 2.0, 5.0, 10.0)
+    return PRECIPITATION_RATE_TICKS
 
 
 def _precipitation_background(axis) -> None:
