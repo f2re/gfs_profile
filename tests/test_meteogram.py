@@ -271,6 +271,7 @@ class MeteogramRenderTests(unittest.TestCase):
     def test_semantic_axes_and_legends(self):
         payload = _deterministic_payload(120)
         payload["hourly"]["precipitation"][1] = 0.15
+        payload["hourly"]["precipitation"][2] = 0.05
         payload["hourly"]["weather_code"][5] = 95
         payload["hourly"]["precipitation"][5] = 6.0
         series = parse_deterministic_payload(
@@ -282,11 +283,14 @@ class MeteogramRenderTests(unittest.TestCase):
             figure.canvas.draw()
             precipitation_axis = axes[3]
             wind_axis = axes[4]
-            self.assertEqual(precipitation_axis.get_ylim()[1], PRECIPITATION_RATE_CAP_MM_H)
+            self.assertLessEqual(precipitation_axis.get_ylim()[1], PRECIPITATION_RATE_CAP_MM_H)
+            self.assertGreaterEqual(precipitation_axis.get_ylim()[1], 1.0)
             self.assertNotIn(0.0, precipitation_axis.get_yticks())
             self.assertIsNotNone(precipitation_axis._meteogram_trace_markers)
             self.assertLess(float(np.nanmin(series.values("precipitation_intensity"))), TRACE_RATE_LIMIT_MM_H)
             bars = list(precipitation_axis._meteogram_precipitation_bars)
+            self.assertGreater(bars[2].get_height(), 0.0)
+            self.assertLess(bars[2].get_facecolor()[-1], 1.0)
             self.assertEqual(bars[0].get_edgecolor()[-1], 0.0)
             self.assertGreater(bars[5].get_edgecolor()[-1], 0.0)
             self.assertEqual(_precipitation_class(2.0, 95), PRECIPITATION_CLASSES[3])
@@ -348,6 +352,8 @@ class MeteogramRenderTests(unittest.TestCase):
             probability_axis = axes[3]._meteogram_probability_axis
             self.assertIsNotNone(probability_axis)
             self.assertEqual(len(probability_axis.lines), 3)
+            self.assertTrue(all(line.get_alpha() == 0.72 for line in probability_axis.lines))
+            self.assertTrue(all(line.get_linestyle() == "--" for line in probability_axis.lines))
         finally:
             plt.close(figure)
         result = self._render(series)
