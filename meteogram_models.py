@@ -26,7 +26,22 @@ class MeteogramSource:
 
 
 SOURCES = (
-    MeteogramSource("gfs", "GFS 0.25° · NOAA/NCEP", "NOAA GFS 0.25°", "NOAA/NCEP через Open-Meteo", "https://api.open-meteo.com/v1/gfs", "gfs025", 16, resolution="0.25°"),
+    # The Telegram meteogram needs a complete, continuous surface series.
+    # Open-Meteo's /v1/gfs route defaults to gfs_seamless; using the legacy
+    # gfs025 selector has produced incomplete current responses in operation.
+    # gfs_seamless joins the currently available NOAA/NCEP GFS grids while
+    # keeping one continuous surface forecast. Native /profile and /cloudgram
+    # remain direct NOMADS GFS 0.25° products and are unaffected by this choice.
+    MeteogramSource(
+        "gfs",
+        "GFS · NOAA/NCEP",
+        "NOAA GFS Global seamless",
+        "NOAA/NCEP через Open-Meteo",
+        "https://api.open-meteo.com/v1/gfs",
+        "gfs_seamless",
+        16,
+        resolution="0.11°/0.25°",
+    ),
     MeteogramSource("ecmwf_ifs", "ECMWF IFS", "ECMWF IFS 0.25° Open Data", "ECMWF через Open-Meteo", "https://api.open-meteo.com/v1/ecmwf", "ecmwf_ifs025", 15, resolution="0.25°"),
     MeteogramSource("ecmwf_aifs", "ECMWF AIFS", "ECMWF AIFS 0.25° Single", "ECMWF через Open-Meteo", "https://api.open-meteo.com/v1/ecmwf", "ecmwf_aifs025_single", 15, resolution="0.25°"),
     MeteogramSource("icon_global", "ICON · DWD", "DWD ICON Global", "DWD через Open-Meteo", "https://api.open-meteo.com/v1/dwd-icon", "dwd_icon_global", 8, resolution="около 11 км"),

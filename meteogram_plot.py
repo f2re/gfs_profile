@@ -23,6 +23,7 @@ from meteogram_plot_common import (
 )
 from meteogram_plot_thermo import _draw_clouds, _draw_humidity, _draw_temperature
 from meteogram_plot_weather import _draw_precipitation, _draw_wind_pressure
+from meteogram_precip_style import add_precipitation_upper_layer
 
 
 def write_meteogram_png(
@@ -87,6 +88,7 @@ def build_meteogram_figure(
     _draw_temperature(axes[1], x, series, tracked)
     _draw_humidity(axes[2], x, series, tracked)
     _draw_precipitation(axes[3], x, series, tracked)
+    add_precipitation_upper_layer(axes[3], x, series)
     _draw_wind_pressure(axes[4], x, series, tracked)
     _finish_axes(figure, axes, series, tracked)
     _resolve_overlaps(figure, tracked)
