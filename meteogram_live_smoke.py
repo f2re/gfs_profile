@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-"""Live contract smoke for the Open-Meteo ensemble used by Telegram."""
+"""Live provider-contract smoke for the Telegram meteogram sources."""
 
 import os
 
@@ -9,8 +9,7 @@ import numpy as np
 from meteogram_fetch import fetch_meteogram
 
 
-def main() -> int:
-    source_id = os.getenv("METEOGRAM_SMOKE_SOURCE", "icon_eps")
+def _check_source(source_id: str) -> None:
     series = fetch_meteogram(
         source_id,
         "Санкт-Петербург",
@@ -37,6 +36,20 @@ def main() -> int:
     )
     for warning in series.warnings:
         print(f"warning: {warning}")
+
+
+def main() -> int:
+    # Keep the legacy single-source override for operators, but exercise GFS by
+    # default because it is the first deterministic option in Telegram.
+    legacy_source = os.getenv("METEOGRAM_SMOKE_SOURCE", "").strip()
+    raw_sources = legacy_source or os.getenv(
+        "METEOGRAM_SMOKE_SOURCES", "gfs,icon_eps"
+    )
+    source_ids = [value.strip() for value in raw_sources.split(",") if value.strip()]
+    if not source_ids:
+        raise RuntimeError("METEOGRAM_SMOKE_SOURCES не содержит источников")
+    for source_id in source_ids:
+        _check_source(source_id)
     return 0
 
 
