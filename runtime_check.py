@@ -3,6 +3,8 @@ from __future__ import annotations
 import importlib
 import sys
 
+import docx
+import meteogram_report
 REQUIRED_MODULES = (
     "numpy",
     "pandas",

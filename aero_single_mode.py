@@ -36,7 +36,7 @@ def _human_help_text() -> str:
         "<code>/route Москва -&gt; Санкт-Петербург +6</code>\n"
         "<code>/aero Москва +24</code>\n"
         "<code>/cloudgram Москва to=72 mode=simple</code>\n"
-        "<code>/meteogram Москва source=ecmwf_ifs days=5</code>\n"
+        "<code>/meteogram Москва ensemble=gefs days=5 format=pdf</code>\n"
         "<code>/map Москва from=0 to=24 step=3 mode=gif</code>"
     )
 

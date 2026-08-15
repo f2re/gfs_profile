@@ -10,7 +10,7 @@ BOT_COMMANDS: tuple[BotCommand, ...] = (
     BotCommand("aero", "🧾 Аэрологическая диаграмма"),
     BotCommand("windgram", "🟦 Срок × уровень"),
     BotCommand("cloudgram", "☁️ Облака, осадки, грозы"),
-    BotCommand("meteogram", "📊 Прогноз по времени и ансамбль"),
+    BotCommand("meteogram", "📊 Метеограмма и отчёт DOCX/PDF"),
     BotCommand("map", "🗺️ Карта, серия, анимация"),
     BotCommand("cycle", "🕒 Последний цикл GFS"),
     BotCommand("status", "⚙️ Доступность и кэш"),
