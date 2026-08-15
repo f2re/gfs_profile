@@ -69,6 +69,7 @@ OPTIONAL_RUNTIME_MODULES = (
     "meteogram_plot_weather",
     "meteogram_plot",
     "meteogram_request",
+    "meteogram_pdf",
     "telegram_commands",
     "telegram_ui",
     "telegram_product_wizard",

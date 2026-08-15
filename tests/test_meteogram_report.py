@@ -132,16 +132,24 @@ class MeteogramReportTests(unittest.TestCase):
             self.assertIn("Метеограмма", text)
             self.assertIn("Методика и ограничения", text)
 
-    def test_pdf_request_falls_back_to_docx_when_libreoffice_is_absent(self) -> None:
+    def test_pdf_request_works_without_libreoffice(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
             chart = directory / "meteogram.png"
             Image.new("RGB", (1400, 760), "white").save(chart)
             with patch("meteogram_report._find_libreoffice", return_value=None):
-                result = write_meteogram_report(_series(), chart, "pdf", output_dir=directory)
-            self.assertEqual(result.format, "docx")
-            self.assertIsNotNone(result.fallback_reason)
+                result = write_meteogram_report(
+                    _series(),
+                    chart,
+                    "pdf",
+                    output_dir=directory,
+                    pdf_fallback_to_docx=False,
+                )
+            self.assertEqual(result.format, "pdf")
+            self.assertIsNone(result.fallback_reason)
             self.assertTrue(result.path.is_file())
+            self.assertGreater(result.path.stat().st_size, 1500)
+            self.assertEqual(result.path.read_bytes()[:5], b"%PDF-")
 
     def test_telegram_output_parser_and_keyboard(self) -> None:
         import telegram_meteogram as module

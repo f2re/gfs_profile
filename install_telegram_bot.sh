@@ -174,7 +174,7 @@ install_system_packages() {
   run_root apt-get update
   run_root apt-get install -y python3 python3-venv python3-pip ca-certificates rsync fonts-dejavu-core fonts-dejavu-extra ffmpeg
   run_root apt-get install -y python3-dev build-essential pkg-config libeccodes0 libeccodes-dev || warn "Дополнительные GRIB-пакеты установлены не полностью"
-  run_root apt-get install -y --no-install-recommends libreoffice-writer fonts-liberation || warn "LibreOffice Writer не установлен; PDF будет возвращён как DOCX"
+  run_root apt-get install -y --no-install-recommends fonts-liberation || warn "Шрифты Liberation установлены не полностью"
 }
 ensure_service_user() {
   id "$SERVICE_USER" >/dev/null 2>&1 && return
