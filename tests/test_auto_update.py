@@ -33,7 +33,7 @@ class AutoUpdateScriptTests(unittest.TestCase):
         self.assertIn("systemctl enable --now", text)
         self.assertIn("git -C \"$REPO_ROOT\" ls-remote --exit-code", text)
 
-    def test_fast_forward_deploy_rollback_and_block(self) -> None:
+    def test_remote_authoritative_sync_deploy_rollback_and_block(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             base = Path(raw)
             remote = base / "remote.git"
@@ -62,7 +62,9 @@ class AutoUpdateScriptTests(unittest.TestCase):
                 "#!/usr/bin/env bash\n"
                 "set -e\n"
                 "if [[ -f BROKEN ]]; then echo FAIL >> \"${TEST_DEPLOY_LOG}\"; exit 42; fi\n"
-                "git rev-parse HEAD >> \"${TEST_DEPLOY_LOG}\"\n",
+                "rev=$(git rev-parse HEAD)\n"
+                "echo \"$rev\" >> \"${TEST_DEPLOY_LOG}\"\n"
+                "printf 'source_rev=%s\\n' \"${rev:0:7}\" > \"${INSTALL_DIR}/.install-state\"\n",
                 encoding="utf-8",
             )
             deploy.chmod(0o755)
@@ -144,6 +146,91 @@ class AutoUpdateScriptTests(unittest.TestCase):
             run("bash", str(work / "auto_update_telegram_bot.sh"), cwd=work, env=env)
             self.assertEqual(run("git", "rev-parse", "HEAD", cwd=work).stdout.strip(), fixed)
             self.assertIn(fixed, deploy_log.read_text(encoding="utf-8"))
+
+    def test_diverged_and_dirty_checkout_is_preserved_then_forced_to_remote(self) -> None:
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            remote = base / "remote.git"
+            seed = base / "seed"
+            work = base / "work"
+            state = base / "state"
+            install = base / "install"
+            install.mkdir()
+
+            run("git", "init", "--bare", str(remote))
+            run("git", "init", "-b", "telegram-bot", str(seed))
+            run("git", "config", "user.email", "test@example.com", cwd=seed)
+            run("git", "config", "user.name", "Test", cwd=seed)
+            (seed / "app.txt").write_text("base\n", encoding="utf-8")
+            run("git", "add", ".", cwd=seed)
+            run("git", "commit", "-m", "base", cwd=seed)
+            run("git", "remote", "add", "origin", str(remote), cwd=seed)
+            run("git", "push", "-u", "origin", "telegram-bot", cwd=seed)
+            run("git", "clone", "-b", "telegram-bot", str(remote), str(work))
+            run("git", "config", "user.email", "test@example.com", cwd=work)
+            run("git", "config", "user.name", "Test", cwd=work)
+
+            (work / "auto_update_telegram_bot.sh").write_text(UPDATER.read_text(encoding="utf-8"), encoding="utf-8")
+            deploy = work / "deploy_telegram_bot.sh"
+            deploy.write_text(
+                "#!/usr/bin/env bash\n"
+                "set -e\n"
+                "rev=$(git rev-parse HEAD)\n"
+                "printf 'source_rev=%s\\n' \"${rev:0:7}\" > \"${INSTALL_DIR}/.install-state\"\n",
+                encoding="utf-8",
+            )
+            deploy.chmod(0o755)
+            (work / "auto_update_telegram_bot.sh").chmod(0o755)
+            run("git", "add", ".", cwd=work)
+            run("git", "commit", "-m", "scripts", cwd=work)
+            run("git", "push", "origin", "telegram-bot", cwd=work)
+            run("git", "pull", "--ff-only", cwd=seed)
+
+            deployed = run("git", "rev-parse", "HEAD", cwd=work).stdout.strip()
+            (install / ".install-state").write_text(f"source_rev={deployed[:7]}\n", encoding="utf-8")
+
+            # Локальный commit, которого нет на GitHub.
+            (work / "app.txt").write_text("local commit\n", encoding="utf-8")
+            run("git", "add", "app.txt", cwd=work)
+            run("git", "commit", "-m", "local-only", cwd=work)
+            local_only = run("git", "rev-parse", "HEAD", cwd=work).stdout.strip()
+
+            # Незакоммиченные и untracked изменения тоже не должны блокировать update.
+            (work / "app.txt").write_text("dirty worktree\n", encoding="utf-8")
+            (work / "scratch.txt").write_text("keep me\n", encoding="utf-8")
+
+            # Remote развивается независимо от локального commit: обычная divergence.
+            (seed / "app.txt").write_text("remote source of truth\n", encoding="utf-8")
+            run("git", "add", "app.txt", cwd=seed)
+            run("git", "commit", "-m", "remote", cwd=seed)
+            remote_head = run("git", "rev-parse", "HEAD", cwd=seed).stdout.strip()
+            run("git", "push", cwd=seed)
+
+            env = {
+                "INSTALL_DIR": str(install),
+                "AUTO_UPDATE_REPO_ROOT": str(work),
+                "AUTO_UPDATE_REPO_USER": os.environ.get("USER", ""),
+                "AUTO_UPDATE_STATE_DIR": str(state),
+                "AUTO_UPDATE_LOCK_FILE": str(base / "update.lock"),
+                "AUTO_UPDATE_DEPLOY_LOCK_FILE": str(base / "deploy.lock"),
+                "AUTO_UPDATE_INNER_DEPLOY_LOCK_FILE": str(base / "inner-deploy.lock"),
+                "AUTO_UPDATE_DEPLOY_SCRIPT": str(deploy),
+            }
+
+            result = run("bash", str(work / "auto_update_telegram_bot.sh"), cwd=work, env=env)
+            self.assertIn("authoritative-reset", result.stderr)
+            self.assertEqual(run("git", "rev-parse", "HEAD", cwd=work).stdout.strip(), remote_head)
+            self.assertEqual((work / "app.txt").read_text(encoding="utf-8"), "remote source of truth\n")
+            self.assertEqual(run("git", "status", "--porcelain", cwd=work).stdout.strip(), "")
+
+            state_text = (state / "auto-update.state").read_text(encoding="utf-8")
+            self.assertIn("sync_mode=authoritative-reset", state_text)
+            backup_ref = next(line.split("=", 1)[1] for line in state_text.splitlines() if line.startswith("backup_ref="))
+            stash_rev = next(line.split("=", 1)[1] for line in state_text.splitlines() if line.startswith("stash_rev="))
+            self.assertTrue(backup_ref.startswith("refs/auto-update/backups/"))
+            self.assertTrue(stash_rev)
+            self.assertEqual(run("git", "rev-parse", backup_ref, cwd=work).stdout.strip(), local_only)
+            run("git", "cat-file", "-e", f"{stash_rev}^{{commit}}", cwd=work)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Безопасное автообновление GFS Profile Bot из рабочей ветки.
+# Надёжное автообновление GFS Profile Bot из рабочей ветки.
+# origin/<branch> является источником истины для deployment-checkout.
 # Предназначен для запуска root-oneshot service по systemd timer.
 
 set -Eeuo pipefail
@@ -23,13 +24,20 @@ DEPLOY_LOCK_FILE="${AUTO_UPDATE_DEPLOY_LOCK_FILE:-/run/lock/${SERVICE_NAME}.depl
 INNER_DEPLOY_LOCK_FILE="${AUTO_UPDATE_INNER_DEPLOY_LOCK_FILE:-/run/lock/${SERVICE_NAME}-auto-update-inner.deploy.lock}"
 DEPLOY_SCRIPT="${AUTO_UPDATE_DEPLOY_SCRIPT:-$REPO_ROOT/deploy_telegram_bot.sh}"
 BLOCK_RETRY_SECONDS="${AUTO_UPDATE_BLOCK_RETRY_SECONDS:-1800}"
+BACKUP_REF_PREFIX="${AUTO_UPDATE_BACKUP_REF_PREFIX:-refs/auto-update/backups}"
 blocked_at_epoch=""
+backup_ref=""
+stash_rev=""
+backup_dir=""
+sync_mode=""
 FORCE_RETRY=0
 STATUS_ONLY=0
 
 log() { printf '%s\n' "[auto-update] $*" >&2; }
+warn() { printf '%s\n' "[auto-update] WARNING: $*" >&2; }
 fail() { log "ERROR: $*"; return 1; }
 now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+backup_stamp() { date -u +%Y%m%dT%H%M%SZ; }
 
 usage() {
   cat <<EOF2
@@ -52,6 +60,7 @@ usage() {
   AUTO_UPDATE_DEPLOY_LOCK_FILE  общий lock штатного deploy
   AUTO_UPDATE_INNER_DEPLOY_LOCK_FILE  внутренний lock дочернего deploy
   AUTO_UPDATE_BLOCK_RETRY_SECONDS  повтор плохого SHA, по умолчанию 1800
+  AUTO_UPDATE_BACKUP_REF_PREFIX  namespace локальных backup refs
   AUTO_UPDATE_DEPLOY_SCRIPT  deploy-скрипт (для тестов/аварийной настройки)
 EOF2
 }
@@ -90,6 +99,10 @@ write_state() {
     printf 'deployed_rev=%s\n' "$deployed_rev"
     printf 'blocked_rev=%s\n' "$blocked_rev"
     printf 'blocked_at_epoch=%s\n' "$blocked_at_epoch"
+    printf 'sync_mode=%s\n' "$sync_mode"
+    printf 'backup_ref=%s\n' "$backup_ref"
+    printf 'stash_rev=%s\n' "$stash_rev"
+    printf 'backup_dir=%s\n' "$backup_dir"
     printf 'message=%s\n' "$(printf '%s' "$message" | tr '\n\r' '  ')"
   } >"$tmp"
   chmod 0644 "$tmp"
@@ -137,12 +150,6 @@ run_git() {
   fi
 }
 
-current_branch="$(run_git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
-local_rev="$(run_git rev-parse HEAD 2>/dev/null || true)"
-deployed_rev="$(state_value deployed_rev)"
-blocked_rev="$(state_value blocked_rev)"
-blocked_at_epoch="$(state_value blocked_at_epoch)"
-
 resolve_installed_rev() {
   local raw="" resolved=""
   if [[ -f "$INSTALL_DIR/.install-state" ]]; then
@@ -159,21 +166,65 @@ revision_matches() {
   [[ "$full" == "$known" || "$full" == "$known"* || "$known" == "$full"* ]]
 }
 
-if [[ -z "$deployed_rev" ]]; then
-  deployed_rev="$(resolve_installed_rev)"
-fi
+save_fallback_dirty_backup() {
+  local stamp="$1" untracked_list
+  backup_dir="$STATE_DIR/local-backups/$stamp"
+  mkdir -p "$backup_dir"
+  run_git diff >"$backup_dir/worktree.patch" 2>/dev/null || true
+  run_git diff --cached >"$backup_dir/index.patch" 2>/dev/null || true
+  untracked_list="$backup_dir/untracked.list"
+  run_git ls-files --others --exclude-standard -z >"$untracked_list" 2>/dev/null || true
+  if [[ -s "$untracked_list" ]]; then
+    tar -C "$REPO_ROOT" --null -T "$untracked_list" -czf "$backup_dir/untracked.tar.gz" 2>/dev/null || true
+  fi
+  warn "git stash не сработал; rescue-копия локальных изменений: $backup_dir"
+}
 
-if [[ "$current_branch" != "$BRANCH" ]]; then
-  write_state "wrong-branch" "$local_rev" "" "$deployed_rev" "$blocked_rev" "checkout=$current_branch; expected=$BRANCH"
-  fail "Checkout находится в ветке '$current_branch', требуется '$BRANCH'"
-  exit 1
-fi
+preserve_local_checkout() {
+  local local_rev="$1" remote_rev="$2" current_branch="$3" dirty="$4" stamp stash_message
+  stamp="$(backup_stamp)"
 
-if [[ -n "$(run_git status --porcelain --untracked-files=normal)" ]]; then
-  write_state "dirty-checkout" "$local_rev" "" "$deployed_rev" "$blocked_rev" "Рабочее дерево содержит локальные изменения"
-  fail "Рабочее дерево не чистое; автообновление отменено"
-  exit 1
-fi
+  if [[ -n "$local_rev" ]] && ! run_git merge-base --is-ancestor "$local_rev" "$remote_rev" >/dev/null 2>&1; then
+    backup_ref="${BACKUP_REF_PREFIX}/${stamp}-${local_rev:0:12}"
+    if run_git update-ref "$backup_ref" "$local_rev"; then
+      log "Сохранил локальную историю: $backup_ref -> ${local_rev:0:12}"
+    else
+      backup_ref=""
+      warn "Не удалось создать backup ref для ${local_rev:0:12}"
+    fi
+  fi
+
+  if [[ -n "$dirty" ]]; then
+    stash_message="auto-update backup ${stamp} branch=${current_branch:-detached} rev=${local_rev:0:12}"
+    if run_git stash push --include-untracked -m "$stash_message" >/dev/null 2>&1; then
+      stash_rev="$(run_git rev-parse refs/stash 2>/dev/null || true)"
+      log "Сохранил локальные изменения в stash ${stash_rev:0:12}"
+    else
+      save_fallback_dirty_backup "$stamp"
+    fi
+  fi
+}
+
+force_sync_checkout() {
+  local remote_rev="$1"
+  # Deployment-checkout однонаправленный: удалённая рабочая ветка является
+  # источником истины. Merge здесь не нужен и только создаёт конфликтные состояния.
+  run_git -c core.hooksPath=/dev/null checkout -f -B "$BRANCH" "$remote_rev" >/dev/null
+  run_git -c core.hooksPath=/dev/null reset --hard "$remote_rev" >/dev/null
+  run_git clean -fd >/dev/null
+
+  local actual_branch actual_rev dirty
+  actual_branch="$(run_git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  actual_rev="$(run_git rev-parse HEAD 2>/dev/null || true)"
+  dirty="$(run_git status --porcelain --untracked-files=normal)"
+  [[ "$actual_branch" == "$BRANCH" && "$actual_rev" == "$remote_rev" && -z "$dirty" ]]
+}
+
+current_branch="$(run_git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+local_rev="$(run_git rev-parse HEAD 2>/dev/null || true)"
+deployed_rev="$(state_value deployed_rev)"
+blocked_rev="$(state_value blocked_rev)"
+blocked_at_epoch="$(state_value blocked_at_epoch)"
 
 log "Проверяю $REMOTE/$BRANCH"
 if ! run_git fetch --prune "$REMOTE" "+refs/heads/$BRANCH:refs/remotes/$REMOTE/$BRANCH"; then
@@ -184,6 +235,10 @@ fi
 
 remote_rev="$(run_git rev-parse "refs/remotes/$REMOTE/$BRANCH")"
 local_rev="$(run_git rev-parse HEAD)"
+installed_rev="$(resolve_installed_rev)"
+if [[ -n "$installed_rev" ]]; then
+  deployed_rev="$installed_rev"
+fi
 
 if [[ "$remote_rev" == "$blocked_rev" && "$FORCE_RETRY" -ne 1 ]]; then
   now_epoch="$(date +%s)"
@@ -196,9 +251,6 @@ if [[ "$remote_rev" == "$blocked_rev" && "$FORCE_RETRY" -ne 1 ]]; then
   log "Истёк quarantine для ${remote_rev:0:12}; повторяю deploy автоматически"
 fi
 
-old_rev="$local_rev"
-candidate_rev="$local_rev"
-
 mkdir -p "$(dirname "$DEPLOY_LOCK_FILE")"
 exec 8>"$DEPLOY_LOCK_FILE"
 if ! flock -n 8; then
@@ -207,75 +259,95 @@ if ! flock -n 8; then
   exit 0
 fi
 
-if [[ "$remote_rev" == "$local_rev" ]]; then
-  if revision_matches "$local_rev" "$deployed_rev"; then
-    write_state "up-to-date" "$local_rev" "$remote_rev" "$deployed_rev" "$blocked_rev" "Checkout и /opt соответствуют одному commit"
-    log "Уже актуально и развёрнуто: ${local_rev:0:12}"
-    exit 0
+pre_sync_rev="$local_rev"
+pre_sync_branch="$current_branch"
+pre_sync_dirty="$(run_git status --porcelain --untracked-files=normal)"
+rollback_rev="$pre_sync_rev"
+if [[ -n "$deployed_rev" ]] && run_git cat-file -e "${deployed_rev}^{commit}" 2>/dev/null; then
+  rollback_rev="$(run_git rev-parse "${deployed_rev}^{commit}")"
+fi
+
+need_sync=0
+if [[ "$pre_sync_rev" != "$remote_rev" || "$pre_sync_branch" != "$BRANCH" || -n "$pre_sync_dirty" ]]; then
+  need_sync=1
+fi
+
+if [[ "$need_sync" -eq 1 ]]; then
+  preserve_local_checkout "$pre_sync_rev" "$remote_rev" "$pre_sync_branch" "$pre_sync_dirty"
+  if [[ "$pre_sync_rev" != "$remote_rev" ]] && run_git merge-base --is-ancestor "$pre_sync_rev" "$remote_rev" >/dev/null 2>&1; then
+    sync_mode="fast-forward-reset"
+  elif [[ "$pre_sync_rev" != "$remote_rev" ]]; then
+    sync_mode="authoritative-reset"
+  elif [[ "$pre_sync_branch" != "$BRANCH" ]]; then
+    sync_mode="branch-reset"
+  else
+    sync_mode="dirty-reset"
   fi
-  if [[ -n "$deployed_rev" ]] && run_git cat-file -e "${deployed_rev}^{commit}" 2>/dev/null; then
-    old_rev="$(run_git rev-parse "${deployed_rev}^{commit}")"
+  log "Синхронизирую checkout с $REMOTE/$BRANCH: ${pre_sync_rev:0:12} -> ${remote_rev:0:12} ($sync_mode)"
+  if ! force_sync_checkout "$remote_rev"; then
+    write_state "sync-error" "$(run_git rev-parse HEAD 2>/dev/null || true)" "$remote_rev" "$deployed_rev" "$blocked_rev" "Не удалось привести checkout точно к remote"
+    fail "Не удалось синхронизировать checkout с $REMOTE/$BRANCH"
+    exit 1
   fi
-  log "Checkout уже обновлён до ${local_rev:0:12}, но /opt отстаёт; запускаю deploy"
 else
-  if ! run_git merge-base --is-ancestor "$local_rev" "$remote_rev"; then
-    write_state "non-fast-forward" "$local_rev" "$remote_rev" "$deployed_rev" "$blocked_rev" "Remote не является fast-forward продолжением локальной ветки"
-    fail "Отказ: $REMOTE/$BRANCH нельзя применить fast-forward к локальному checkout"
-    exit 1
-  fi
+  sync_mode="already-synced"
+fi
 
-  old_rev="$local_rev"
-  log "Найден новый commit: ${old_rev:0:12} -> ${remote_rev:0:12}"
+candidate_rev="$(run_git rev-parse HEAD)"
+if [[ "$candidate_rev" != "$remote_rev" ]]; then
+  write_state "revision-mismatch" "$candidate_rev" "$remote_rev" "$deployed_rev" "$blocked_rev" "HEAD после синхронизации не совпал с remote"
+  fail "HEAD после обновления не совпадает с remote"
+  exit 1
+fi
 
-  # Не запускаем локальные post-merge hooks: deploy контролируется этим скриптом.
-  if ! run_git -c core.hooksPath=/dev/null merge --ff-only "$remote_rev"; then
-    write_state "merge-error" "$old_rev" "$remote_rev" "$deployed_rev" "$blocked_rev" "git merge --ff-only завершился ошибкой"
-    fail "Не удалось выполнить fast-forward"
-    exit 1
-  fi
-
-  candidate_rev="$(run_git rev-parse HEAD)"
-  if [[ "$candidate_rev" != "$remote_rev" ]]; then
-    write_state "revision-mismatch" "$candidate_rev" "$remote_rev" "$deployed_rev" "$blocked_rev" "HEAD после fast-forward не совпал с remote"
-    fail "HEAD после обновления не совпадает с remote"
-    exit 1
-  fi
+if revision_matches "$candidate_rev" "$deployed_rev"; then
+  write_state "up-to-date" "$candidate_rev" "$remote_rev" "$deployed_rev" "$blocked_rev" "Checkout принудительно синхронизирован с remote; /opt уже соответствует commit"
+  log "Уже актуально и развёрнуто: ${candidate_rev:0:12}"
+  exit 0
 fi
 
 log "Запускаю deploy ${candidate_rev:0:12}"
 if DEPLOY_LOCK_PATH="$INNER_DEPLOY_LOCK_FILE" bash "$DEPLOY_SCRIPT" --yes; then
   blocked_rev=""
   blocked_at_epoch=""
-  write_state "deployed" "$candidate_rev" "$remote_rev" "$candidate_rev" "" "Обновление и deploy завершены"
+  write_state "deployed" "$candidate_rev" "$remote_rev" "$candidate_rev" "" "Remote синхронизирован и deploy завершён"
   log "Готово: ${candidate_rev:0:12}"
   exit 0
 else
   deploy_code=$?
 fi
-log "Deploy ${candidate_rev:0:12} не прошёл; откатываю checkout на ${old_rev:0:12}"
 
-# Checkout изначально был чистым, поэтому hard reset безопасен и восстанавливает
-# ровно предыдущий уже работавший commit. Hooks отключены.
-if ! run_git -c core.hooksPath=/dev/null reset --hard "$old_rev"; then
-  write_state "rollback-git-failed" "$candidate_rev" "$remote_rev" "$deployed_rev" "$candidate_rev" "Не удалось вернуть checkout на предыдущий commit"
+if [[ -z "$rollback_rev" ]] || ! run_git cat-file -e "${rollback_rev}^{commit}" 2>/dev/null; then
+  blocked_rev="$candidate_rev"
+  blocked_at_epoch="$(date +%s)"
+  write_state "rollback-unavailable" "$candidate_rev" "$remote_rev" "$deployed_rev" "$candidate_rev" "Deploy не прошёл; предыдущий установленный commit недоступен в checkout"
+  fail "Deploy ${candidate_rev:0:12} не прошёл и нет доступного commit для rollback"
+  exit "$deploy_code"
+fi
+
+log "Deploy ${candidate_rev:0:12} не прошёл; откатываю checkout и /opt на ${rollback_rev:0:12}"
+if ! run_git -c core.hooksPath=/dev/null checkout -f -B "$BRANCH" "$rollback_rev" >/dev/null \
+  || ! run_git -c core.hooksPath=/dev/null reset --hard "$rollback_rev" >/dev/null; then
+  write_state "rollback-git-failed" "$candidate_rev" "$remote_rev" "$deployed_rev" "$candidate_rev" "Не удалось вернуть checkout на предыдущий установленный commit"
   fail "КРИТИЧНО: не удалось откатить git checkout"
   exit "$deploy_code"
 fi
+run_git clean -fd >/dev/null || true
 
 rollback_ok=0
 if DEPLOY_LOCK_PATH="$INNER_DEPLOY_LOCK_FILE" bash "$DEPLOY_SCRIPT" --yes; then
   rollback_ok=1
-  deployed_rev="$old_rev"
-  log "Rollback deploy завершён: ${old_rev:0:12}"
+  deployed_rev="$rollback_rev"
+  log "Rollback deploy завершён: ${rollback_rev:0:12}"
 else
-  log "КРИТИЧНО: rollback deploy тоже завершился ошибкой; checkout возвращён на старый commit"
+  log "КРИТИЧНО: rollback deploy тоже завершился ошибкой; checkout возвращён на предыдущий commit"
 fi
 
 blocked_rev="$candidate_rev"
 blocked_at_epoch="$(date +%s)"
 if [[ "$rollback_ok" -eq 1 ]]; then
-  write_state "rolled-back" "$old_rev" "$remote_rev" "$old_rev" "$candidate_rev" "Новый commit провалил deploy; повтор после quarantine или при новом remote SHA"
+  write_state "rolled-back" "$rollback_rev" "$remote_rev" "$rollback_rev" "$candidate_rev" "Новый commit провалил deploy; повтор после quarantine или при новом remote SHA"
 else
-  write_state "rollback-deploy-failed" "$old_rev" "$remote_rev" "$deployed_rev" "$candidate_rev" "Checkout откатан, но повторный deploy старой версии завершился ошибкой"
+  write_state "rollback-deploy-failed" "$rollback_rev" "$remote_rev" "$deployed_rev" "$candidate_rev" "Checkout откатан, но повторный deploy старой версии завершился ошибкой"
 fi
 exit "$deploy_code"
