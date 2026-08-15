@@ -93,9 +93,9 @@ def _output_prompt(source_id: str, days: int) -> str:
     source = source_for_id(source_id)
     kind = "ансамбль" if source.ensemble else "одна модель"
     return (
-        f"{source.label} · {kind} · {days} сут\\n"
-        "Выберите результат.\\n\\n"
-        "🖼 PNG — только метеограмма.\\n"
+        f"{source.label} · {kind} · {days} сут\n"
+        "Выберите результат.\n\n"
+        "🖼 PNG — только метеограмма.\n"
         "📄 DOCX / 🧾 PDF — сводка, таблицы по суткам и срокам, текст и метеограмма."
     )
 
@@ -174,10 +174,10 @@ def _summary(state: dict[str, object]) -> str:
     kind = "ансамбль" if source.ensemble else "одна модель"
     output_format = _normalise_output_format(state.get("output_format", "png"))
     return (
-        f"📊 Метеограмма\\n"
-        f"📍 {point.label} · {point.lat:.4f}, {point.lon:.4f}\\n"
-        f"Модель: {source.label} · {kind}\\n"
-        f"Период: {int(state['days'])} суток\\n"
+        f"📊 Метеограмма\n"
+        f"📍 {point.label} · {point.lat:.4f}, {point.lon:.4f}\n"
+        f"Модель: {source.label} · {kind}\n"
+        f"Период: {int(state['days'])} суток\n"
         f"Результат: {_output_label(output_format)}"
     )
 
@@ -224,12 +224,12 @@ async def _resolve_direct(message, raw: str, user) -> bool:
         await message.reply_text("Точка не найдена. Уточните город или координаты.")
         return False
     if len(candidates) > 1:
-        labels = "\\n".join(
+        labels = "\n".join(
             f"{index + 1}. {point.label}" for index, point in enumerate(candidates)
         )
         await message.reply_text(
             "Найдено несколько точек. Уточните запрос или используйте координаты:"
-            f"\\n\\n{labels}"
+            f"\n\n{labels}"
         )
         return False
     point = candidates[0]
@@ -255,8 +255,8 @@ async def _run_product(
     source = source_for_id(request.source_id)
     total_steps = 5 if output_format == "png" else 6
     status = await message.reply_text(
-        f"⏳ Метеограмма · {source.label}\\n"
-        f"📍 {point.label}\\n"
+        f"⏳ Метеограмма · {source.label}\n"
+        f"📍 {point.label}\n"
         f"1/{total_steps} Проверяю источник и период…"
     )
     started = time.perf_counter()
@@ -285,8 +285,8 @@ async def _run_product(
         last = ""
         while not stop:
             text = (
-                f"⏳ Метеограмма · {source.label}\\n"
-                f"📍 {point.label}\\n"
+                f"⏳ Метеограмма · {source.label}\n"
+                f"📍 {point.label}\n"
                 f"{progress_state['text']}"
             )
             if text != last:
@@ -334,7 +334,7 @@ async def _run_product(
         if source.ensemble:
             observed = series.member_count or 0
             expected = series.expected_member_count or observed
-            member_line = f"\\nАнсамбль: {observed}/{expected} членов"
+            member_line = f"\nАнсамбль: {observed}/{expected} членов"
             per_time = series.values("ensemble_member_count")
             finite_counts = per_time[np.isfinite(per_time)]
             minimum_per_time = (
@@ -342,7 +342,7 @@ async def _run_product(
             )
             if expected and minimum_per_time < expected:
                 warning_line = (
-                    f"\\n⚠️ На отдельных сроках доступно от "
+                    f"\n⚠️ На отдельных сроках доступно от "
                     f"{minimum_per_time}/{expected} членов."
                 )
 
@@ -352,17 +352,17 @@ async def _run_product(
             actual_format = report_result.format
             if report_result.fallback_reason:
                 fallback_line = (
-                    "\\n⚠️ PDF недоступен на сервере; отправляю полноценный DOCX."
+                    "\n⚠️ PDF недоступен на сервере; отправляю полноценный DOCX."
                 )
         await status.edit_text(
-            f"📊 {'Ансамблевая ' if source.ensemble else ''}метеограмма готова\\n"
-            f"📍 {point.label}\\n"
-            f"{source.model}\\n"
-            f"{source.provider}{member_line}\\n"
+            f"📊 {'Ансамблевая ' if source.ensemble else ''}метеограмма готова\n"
+            f"📍 {point.label}\n"
+            f"{source.model}\n"
+            f"{source.provider}{member_line}\n"
             f"{series.times[0]:%d.%m %H:%M} — "
             f"{series.times[-1]:%d.%m %H:%M} · местное время"
-            f"{warning_line}{fallback_line}\\n"
-            f"Результат: {_output_label(actual_format)}\\n"
+            f"{warning_line}{fallback_line}\n"
+            f"Результат: {_output_label(actual_format)}\n"
             "ℹ Модельный прогноз, не наблюдение."
         )
 
@@ -506,7 +506,7 @@ async def meteogram_callback(update: Update, context) -> None:
             pass
         if query.message:
             await query.message.reply_text(
-                "📊 Метеограмма\\n\\nУкажите город, координаты или отправьте геолокацию.",
+                "📊 Метеограмма\n\nУкажите город, координаты или отправьте геолокацию.",
                 reply_markup=_point_keyboard(
                     int(update.effective_user.id if update.effective_user else 0)
                 ),
@@ -539,7 +539,7 @@ async def meteogram_callback(update: Update, context) -> None:
         state.update({"point": _pack_point(point), "step": "type"})
         state.pop("candidates", None)
         await query.edit_message_text(
-            f"📍 {point.label}\\nВыберите тип прогноза.",
+            f"📍 {point.label}\nВыберите тип прогноза.",
             reply_markup=_type_keyboard(),
         )
     elif data.startswith("meteo:kind:"):
@@ -553,7 +553,7 @@ async def meteogram_callback(update: Update, context) -> None:
         source_id = data.rsplit(":", 1)[1]
         state.update({"source_id": source_id, "step": "period"})
         await query.edit_message_text(
-            f"{source_for_id(source_id).label}\\nВыберите период.",
+            f"{source_for_id(source_id).label}\nВыберите период.",
             reply_markup=_period_keyboard(source_id),
         )
     elif data.startswith("meteo:days:"):
@@ -587,7 +587,7 @@ async def meteogram_callback(update: Update, context) -> None:
     elif data == "meteo:back:period":
         state["step"] = "period"
         await query.edit_message_text(
-            f"{source_for_id(str(state['source_id'])).label}\\nВыберите период.",
+            f"{source_for_id(str(state['source_id'])).label}\nВыберите период.",
             reply_markup=_period_keyboard(str(state["source_id"])),
         )
     elif data == "meteo:back:format":
@@ -608,7 +608,7 @@ async def meteogram_callback(update: Update, context) -> None:
         )
         context.user_data.pop(SESSION_KEY, None)
         await query.edit_message_text(
-            f"📊 Запускаю метеограмму · {source_for_id(request.source_id).label}\\n"
+            f"📊 Запускаю метеограмму · {source_for_id(request.source_id).label}\n"
             f"Результат: {_output_label(output_format)}"
         )
         if query.message:

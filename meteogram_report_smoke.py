@@ -2,7 +2,6 @@ from __future__ import annotations
 
 """Local dependency/layout smoke for DOCX/PDF meteogram reports."""
 
-import shutil
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -110,19 +109,18 @@ def main() -> int:
         docx = write_meteogram_report(series, chart, "docx", output_dir=directory)
         if not docx.path.is_file() or docx.path.stat().st_size < 10_000:
             raise RuntimeError("DOCX smoke failed")
-        pdf_note = "PDF skipped: soffice not installed"
-        if shutil.which("soffice") or shutil.which("libreoffice"):
-            pdf = write_meteogram_report(
-                series,
-                chart,
-                "pdf",
-                output_dir=directory,
-                pdf_fallback_to_docx=False,
-            )
-            if not pdf.path.is_file() or pdf.path.stat().st_size < 10_000:
-                raise RuntimeError("PDF smoke failed")
-            pdf_note = "PDF OK"
-        print(f"Meteogram report smoke OK: DOCX OK; {pdf_note}")
+        pdf = write_meteogram_report(
+            series,
+            chart,
+            "pdf",
+            output_dir=directory,
+            pdf_fallback_to_docx=False,
+        )
+        if pdf.format != "pdf" or not pdf.path.is_file() or pdf.path.stat().st_size < 10_000:
+            raise RuntimeError("Native PDF smoke failed")
+        if pdf.path.read_bytes()[:5] != b"%PDF-":
+            raise RuntimeError("Native PDF magic header is invalid")
+        print("Meteogram report smoke OK: DOCX OK; native PDF OK")
     return 0
 
 

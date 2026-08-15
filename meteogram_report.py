@@ -5,8 +5,8 @@ from __future__ import annotations
 The module deliberately depends only on the public ``MeteogramSeries`` shape:
 ``source``, ``times``, ``values()``, ``statistic()`` and optional daily
 statistics.  It does not fetch data and never combines different ensemble
-systems.  PDF is produced from the same DOCX through LibreOffice so that both
-formats contain identical tables, narrative and meteogram image.
+systems.  DOCX and PDF are rendered from the same report data. PDF is rendered
+natively with Matplotlib; LibreOffice is retained only as an optional fallback.
 """
 
 import math
@@ -197,9 +197,9 @@ def write_meteogram_report(
 ) -> MeteogramReportResult:
     """Create a DOCX or PDF report and return all temporary paths for cleanup.
 
-    PDF is converted from the generated DOCX.  When LibreOffice is unavailable
-    and ``pdf_fallback_to_docx`` is true, the DOCX is returned with a clear
-    fallback reason instead of losing the already completed report.
+    DOCX and PDF use the same ``MeteogramReportData``. PDF is rendered
+    natively with Matplotlib, so normal operation does not require LibreOffice.
+    LibreOffice remains a secondary converter if the native renderer fails.
     """
 
     fmt = normalise_report_format(output_format)
@@ -223,18 +223,29 @@ def write_meteogram_report(
         )
 
     pdf_path = out_dir / f"{data.filename_stem}.pdf"
+    native_error: str | None = None
     try:
-        convert_docx_to_pdf(docx_path, pdf_path)
-    except MeteogramReportError as exc:
-        if not pdf_fallback_to_docx:
-            raise
-        return MeteogramReportResult(
-            path=docx_path,
-            format="docx",
-            docx_path=docx_path,
-            fallback_reason=str(exc),
-            cleanup_paths=tuple(cleanup),
-        )
+        from meteogram_pdf import MeteogramPdfError, write_meteogram_pdf
+
+        write_meteogram_pdf(data, chart, pdf_path)
+    except (MeteogramPdfError, OSError, ValueError) as exc:
+        native_error = str(exc)
+        try:
+            convert_docx_to_pdf(docx_path, pdf_path)
+        except MeteogramReportError as libreoffice_exc:
+            combined = (
+                f"Нативный PDF: {native_error}; "
+                f"резервный LibreOffice: {libreoffice_exc}"
+            )
+            if not pdf_fallback_to_docx:
+                raise MeteogramReportError(combined) from libreoffice_exc
+            return MeteogramReportResult(
+                path=docx_path,
+                format="docx",
+                docx_path=docx_path,
+                fallback_reason=combined,
+                cleanup_paths=tuple(cleanup),
+            )
 
     cleanup.append(pdf_path)
     return MeteogramReportResult(
