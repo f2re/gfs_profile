@@ -96,3 +96,7 @@ python meteogram_report_smoke.py
 ```
 
 Переменные: `LIBREOFFICE_BIN` — необязательный путь к `soffice`; `METEOGRAM_PDF_TIMEOUT` — таймаут конвертации, по умолчанию 90 секунд; `METEOGRAM_REPORT_FONT` — шрифт DOCX, по умолчанию Liberation Sans. Если LibreOffice отсутствует, DOCX остаётся доступным, а запрос PDF автоматически возвращает DOCX с предупреждением.
+
+## Сохранность расписаний
+
+Автоматические отправки хранятся в `.cache_gfs/telegram_schedules.json`. Штатный deploy уже сохраняет `.cache_gfs/`, поэтому переносить отдельную БД или сервис расписаний не требуется. После deploy достаточно обычной проверки `systemctl status`; фоновый планировщик запускается вместе с Telegram long polling.

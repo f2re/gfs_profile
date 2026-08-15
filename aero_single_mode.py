@@ -18,6 +18,7 @@ def _human_home_text() -> str:
         "☁️ /cloudgram — облака, осадки и грозы\n"
         "📊 /meteogram — прогноз по времени и ансамбль\n"
         "🗺️ /map — карта, серия или анимация\n"
+        "🕒 /schedule — автоматическая отправка\n"
         "🕒 /cycle — последний цикл GFS\n"
         "⚙️ /status — данные и кэш\n"
         "✖ /cancel — сброс выбора\n\n"
@@ -37,7 +38,8 @@ def _human_help_text() -> str:
         "<code>/aero Москва +24</code>\n"
         "<code>/cloudgram Москва to=72 mode=simple</code>\n"
         "<code>/meteogram Москва ensemble=gefs days=5 format=pdf</code>\n"
-        "<code>/map Москва from=0 to=24 step=3 mode=gif</code>"
+        "<code>/map Москва from=0 to=24 step=3 mode=gif</code>\n"
+        "<code>/schedule</code> — менеджер автоматических отправок"
     )
 
 

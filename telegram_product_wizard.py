@@ -260,7 +260,8 @@ def params_keyboard(state: dict[str, object]) -> InlineKeyboardMarkup:
         current_basemap = str(state.get("basemap", "places"))
         rows.append([InlineKeyboardButton(("✓ " if current_basemap == key else "") + label, callback_data=f"wiz:map:basemap:{key}") for key, label in MAP_BASEMAPS])
 
-    rows.append([InlineKeyboardButton("Построить", callback_data="wiz:run")])
+    run_label = "🕒 Далее: расписание" if state.get("_schedule_setup") else "Построить"
+    rows.append([InlineKeyboardButton(run_label, callback_data="wiz:run")])
     rows.append([InlineKeyboardButton("Другая точка", callback_data="wiz:point"), InlineKeyboardButton("Отмена", callback_data="wiz:cancel")])
     return InlineKeyboardMarkup(rows)
 

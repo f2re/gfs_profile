@@ -30,7 +30,8 @@ def home_text() -> str:
         "/windgram — ветер, температура или влажность по срокам\n"
         "/cloudgram — облака, осадки и грозы\n"
         "/meteogram — прогноз по времени и ансамбль\n"
-        "/map — карта, серия или анимация\n\n"
+        "/map — карта, серия или анимация\n"
+        "/schedule — автоматическая отправка\n\n"
         "Выберите продукт."
     )
 
@@ -46,6 +47,7 @@ def help_text() -> str:
         "<code>/cloudgram Москва to=72 mode=simple</code>\n"
         "<code>/meteogram Москва ensemble=gefs days=5 format=pdf</code>\n"
         "<code>/map Москва from=0 to=24 step=3 mode=gif</code>\n\n"
+        "/schedule — до 2 автоматических отправок на пользователя\n"
         "/cycle — последний цикл · /status — доступность · /cancel — сброс"
     )
 
@@ -68,6 +70,7 @@ def home_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("🗺️ Карта", callback_data="home:map"),
                 InlineKeyboardButton("❓ Как пользоваться", callback_data="home:help"),
             ],
+            [InlineKeyboardButton("🕒 Расписания", callback_data="home:schedule")],
         ]
     )
 

@@ -78,6 +78,7 @@ OPTIONAL_RUNTIME_MODULES = (
     "telegram_map",
     "telegram_route",
     "telegram_meteogram",
+    "telegram_schedules",
     "telegram_bot_core",
     "telegram_concise_ux",
     "telegram_result_copy",

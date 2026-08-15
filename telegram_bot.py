@@ -38,6 +38,8 @@ _core_clear_pending = _clear_pending
 def _clear_pending(context):
     _core_clear_pending(context)
     context.user_data.pop("meteogram_wizard", None)
+    context.user_data.pop("schedule_wizard", None)
+    context.user_data.pop("schedule_profile_setup", None)
 
 
 # A callback message is authored by the bot, so message.from_user cannot identify
@@ -61,6 +63,7 @@ async def _start_product_wizard(message, context, state):
 
 from telegram_route import register_route_handlers
 from telegram_meteogram import register_meteogram_handlers
+from telegram_schedules import register_schedule_handlers
 
 _core_build_application = build_application
 
@@ -81,6 +84,7 @@ def build_application():
     )
     telegram_concise_ux.register(application, globals())
     register_meteogram_handlers(application)
+    register_schedule_handlers(application, globals())
     register_route_handlers(
         application,
         gfs_semaphore=GFS_SEMAPHORE,
