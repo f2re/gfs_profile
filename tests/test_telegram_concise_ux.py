@@ -13,7 +13,7 @@ from telegram_ui import location_keyboard
 class TelegramConciseUxTests(unittest.TestCase):
     def test_start_text_is_short_and_explains_products(self) -> None:
         text = ux.home_text()
-        for command in ("/profile", "/route", "/aero", "/windgram", "/cloudgram", "/meteogram", "/map"):
+        for command in ("/profile", "/route", "/aero", "/windgram", "/cloudgram", "/meteogram", "/map", "/schedule"):
             self.assertIn(command, text)
         self.assertLess(len(text), 500)
         for redundant in ("не радар", "не наблюдение", "не радиозонд"):
@@ -27,6 +27,7 @@ class TelegramConciseUxTests(unittest.TestCase):
         self.assertIn("home:profile", callbacks)
         self.assertIn("home:route", callbacks)
         self.assertIn("home:map", callbacks)
+        self.assertIn("home:schedule", callbacks)
         self.assertIn("home:help", callbacks)
         self.assertEqual(callbacks.count("home:meteogram"), 1)
         meteogram_button = next(button for button in buttons if button.callback_data == "home:meteogram")

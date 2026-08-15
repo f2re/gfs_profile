@@ -78,3 +78,25 @@ Deploy не удаляет `.env`, `.install-state`, `.venv/`, `.cache_gfs/` и 
 ## Git hooks
 
 `install_git_hooks.sh` — только ускоритель после ручного `git pull`/`rebase`. Он не мониторит GitHub. Для автоматического обнаружения новых commit используйте `install_auto_update.sh`.
+
+## DOCX/PDF метеограммы
+
+Python-зависимость: `python-docx>=1.1,<2`. Для PDF на Debian/Astra требуется LibreOffice Writer и шрифт Liberation Sans:
+
+```bash
+sudo apt-get install -y --no-install-recommends libreoffice-writer fonts-liberation
+```
+
+Проверка:
+
+```bash
+python -c "import docx; print(docx.__version__)"
+command -v soffice
+python meteogram_report_smoke.py
+```
+
+Переменные: `LIBREOFFICE_BIN` — необязательный путь к `soffice`; `METEOGRAM_PDF_TIMEOUT` — таймаут конвертации, по умолчанию 90 секунд; `METEOGRAM_REPORT_FONT` — шрифт DOCX, по умолчанию Liberation Sans. Если LibreOffice отсутствует, DOCX остаётся доступным, а запрос PDF автоматически возвращает DOCX с предупреждением.
+
+## Сохранность расписаний
+
+Автоматические отправки хранятся в `.cache_gfs/telegram_schedules.json`. Штатный deploy уже сохраняет `.cache_gfs/`, поэтому переносить отдельную БД или сервис расписаний не требуется. После deploy достаточно обычной проверки `systemctl status`; фоновый планировщик запускается вместе с Telegram long polling.
