@@ -131,6 +131,7 @@ def build_meteogram_report_data(series: Any) -> MeteogramReportData:
     ensemble = bool(getattr(source, "ensemble", False))
     kind = "Ансамблевый модельный прогноз" if ensemble else "Модельный прогноз"
     point_label = _clean_text(getattr(series, "point_label", "Точка прогноза"))
+    point_label = re.sub(r"^(?:г\.?\s+)", "", point_label, flags=re.IGNORECASE)
     title = f"{kind}: {point_label}"
     subtitle = str(getattr(source, "model", getattr(source, "label", "Модель")))
 
@@ -214,6 +215,16 @@ def write_meteogram_report(
     write_meteogram_docx(series, chart, docx_path, report_data=data)
 
     cleanup = [docx_path]
+    report_chart = chart
+    if fmt == "pdf":
+        try:
+            from meteogram_plot import write_meteogram_png
+
+            report_chart = out_dir / f"{data.filename_stem}.report.png"
+            write_meteogram_png(series, report_chart, report_mode=True)
+            cleanup.append(report_chart)
+        except Exception:
+            report_chart = chart
     if fmt == "docx":
         return MeteogramReportResult(
             path=docx_path,
@@ -227,7 +238,7 @@ def write_meteogram_report(
     try:
         from meteogram_pdf import MeteogramPdfError, write_meteogram_pdf
 
-        write_meteogram_pdf(data, chart, pdf_path)
+        write_meteogram_pdf(data, report_chart, pdf_path)
     except (MeteogramPdfError, OSError, ValueError) as exc:
         native_error = str(exc)
         try:
