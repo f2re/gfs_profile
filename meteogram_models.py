@@ -43,7 +43,7 @@ SOURCES = (
         resolution="0.11°/0.25°",
     ),
     MeteogramSource("ecmwf_ifs", "ECMWF IFS", "ECMWF IFS 0.25° Open Data", "ECMWF через Open-Meteo", "https://api.open-meteo.com/v1/ecmwf", "ecmwf_ifs025", 15, resolution="0.25°"),
-    MeteogramSource("ecmwf_aifs", "ECMWF AIFS", "ECMWF AIFS 0.25° Single", "ECMWF через Open-Meteo", "https://api.open-meteo.com/v1/ecmwf", "ecmwf_aifs025_single", 15, resolution="0.25°"),
+    MeteogramSource("ecmwf_aifs", "ECMWF AIFS", "ECMWF AIFS 0.25°", "ECMWF через Open-Meteo", "https://api.open-meteo.com/v1/ecmwf", "ecmwf_aifs025_single", 15, resolution="0.25°"),
     MeteogramSource("icon_global", "ICON · DWD", "DWD ICON Global", "DWD через Open-Meteo", "https://api.open-meteo.com/v1/dwd-icon", "dwd_icon_global", 8, resolution="около 11 км"),
     MeteogramSource("gem_gdps", "GEM · ECCC", "ECCC GEM Global (GDPS)", "ECCC через Open-Meteo", "https://api.open-meteo.com/v1/gem", "cmc_gem_gdps", 10, resolution="около 15 км"),
     MeteogramSource("gefs", "GEFS 0.25° · NOAA/NCEP", "NOAA GEFS 0.25°", "NOAA/NCEP через Open-Meteo", "https://ensemble-api.open-meteo.com/v1/ensemble", "ncep_gefs025", 10, True, 31, "0.25°"),
