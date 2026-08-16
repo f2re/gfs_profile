@@ -64,6 +64,10 @@ async def _start_product_wizard(message, context, state):
 from telegram_route import register_route_handlers
 from telegram_meteogram import register_meteogram_handlers
 from telegram_schedules import register_schedule_handlers
+import telegram_schedule_ux  # noqa: E402
+
+# Install the schedule UX guard before Application handlers capture callbacks.
+telegram_schedule_ux.install(globals())
 
 _core_build_application = build_application
 
@@ -84,6 +88,7 @@ def build_application():
     )
     telegram_concise_ux.register(application, globals())
     register_meteogram_handlers(application)
+    telegram_schedule_ux.register_input_guards(application, globals())
     register_schedule_handlers(application, globals())
     register_route_handlers(
         application,
