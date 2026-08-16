@@ -12,6 +12,8 @@ jobs:
   review:
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      PYTHONPATH: .
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
