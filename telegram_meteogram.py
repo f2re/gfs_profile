@@ -96,7 +96,7 @@ def _output_prompt(source_id: str, days: int) -> str:
         f"{source.label} · {kind} · {days} сут\n"
         "Выберите результат.\n\n"
         "🖼 PNG — только метеограмма.\n"
-        "📄 DOCX / 🧾 PDF — сводка, таблицы по суткам и срокам, текст и метеограмма."
+        "📄 DOCX / 🧾 PDF — краткая сводка, таблицы по суткам и срокам и метеограмма."
     )
 
 
@@ -257,7 +257,7 @@ async def _run_product(
     status = await message.reply_text(
         f"⏳ Метеограмма · {source.label}\n"
         f"📍 {point.label}\n"
-        f"1/{total_steps} Проверяю источник и период…"
+        f"1/{total_steps} Загружаю прогноз…"
     )
     started = time.perf_counter()
     request_id = record_request_start(
@@ -272,7 +272,7 @@ async def _run_product(
     png_path: Path | None = None
     report_result = None
     report_dir: Path | None = None
-    progress_state = {"text": f"1/{total_steps} Проверяю источник и период…"}
+    progress_state = {"text": f"1/{total_steps} Загружаю прогноз…"}
     progress_step = 1
     stop = False
 
@@ -310,12 +310,12 @@ async def _run_product(
                 progress,
             )
             progress_state["text"] = (
-                f"4/{total_steps} Строю метеограмму без пересечений подписей…"
+                f"4/{total_steps} Строю метеограмму…"
             )
             png_path = Path(await asyncio.to_thread(write_meteogram_png, series))
             if output_format != "png":
                 progress_state["text"] = (
-                    f"5/{total_steps} Формирую {_output_label(output_format)}…"
+                    f"5/{total_steps} Формирую файл…"
                 )
                 report_dir = Path(tempfile.mkdtemp(prefix="gfs_meteogram_report_"))
                 report_result = await asyncio.to_thread(
@@ -327,7 +327,7 @@ async def _run_product(
                 )
 
         progress_state["text"] = (
-            f"{total_steps}/{total_steps} Отправляю результат…"
+            f"{total_steps}/{total_steps} Отправляю файл…"
         )
         member_line = ""
         warning_line = ""
@@ -352,7 +352,7 @@ async def _run_product(
             actual_format = report_result.format
             if report_result.fallback_reason:
                 fallback_line = (
-                    "\n⚠️ PDF недоступен на сервере; отправляю полноценный DOCX."
+                    "\n⚠️ PDF создать не удалось; отправляю DOCX."
                 )
         await status.edit_text(
             f"📊 {'Ансамблевая ' if source.ensemble else ''}метеограмма готова\n"

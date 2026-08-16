@@ -106,7 +106,7 @@ class MeteogramReportTests(unittest.TestCase):
         data = build_meteogram_report_data(_series())
         self.assertIn("Ансамблевый", data.title)
         self.assertGreaterEqual(len(data.daily_rows), 5)
-        self.assertGreaterEqual(len(data.control_rows), 15)
+        self.assertGreaterEqual(len(data.control_rows), 13)
         text = " ".join(
             [*data.main_lines]
             + [row.precipitation for row in data.daily_rows]

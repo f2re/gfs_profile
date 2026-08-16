@@ -365,7 +365,7 @@ def write_meteogram_docx(
     disclaimer.paragraph_format.space_before = Pt(2)
     disclaimer.paragraph_format.space_after = Pt(4)
     disclaimer_run = disclaimer.add_run(
-        "Важно: один модельный ансамбль или одна модель; не радиозонд, не станция и не официальный выпуск предупреждения."
+        "Модельный прогноз. Не наблюдение и не официальный выпуск предупреждений."
     )
     disclaimer_run.bold = True
     disclaimer_run.font.size = Pt(8)
@@ -431,7 +431,7 @@ def write_meteogram_docx(
     document.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
     document.add_heading("Прогноз по контрольным срокам", level=1)
     control_note = document.add_paragraph(
-        "Шаг: через 6 часов в первые 72 часа, далее через 12 часов. Значения относятся к ближайшему доступному сроку модели."
+        "Шаг: через 6 часов в первые сутки, далее через 12 часов. Значения относятся к ближайшему доступному сроку модели."
     )
     control_note.style = document.styles["Meteo Small"]
     control_headers = (
@@ -611,7 +611,7 @@ def _build_daily_rows(series: Any) -> list[ReportDay]:
             )
         elif ensemble and not has_daily_members:
             precipitation_text += "\nсумма центрального ряда"
-        probability_parts = _probability_parts(series, indices)
+        probability_parts = _probability_parts(series, indices) if ensemble else []
         if probability_parts:
             precipitation_text += "\n" + "\n".join(probability_parts)
 
@@ -697,7 +697,7 @@ def _build_control_rows(series: Any) -> list[ReportControlTime]:
         precipitation_text = (
             f"{_fmt(precip, 1)} мм{interval_label}" if precip is not None and precip >= 0.05 else "без существенных осадков"
         )
-        probability_parts = _probability_parts(series, [index])
+        probability_parts = _probability_parts(series, [index])[:1] if ensemble else []
         if probability_parts:
             precipitation_text += "\n" + "\n".join(probability_parts)
 
@@ -752,9 +752,8 @@ def _build_main_lines(series: Any, daily_rows: Sequence[ReportDay]) -> list[str]
     max_index = _nanargmax(temperature)
     if min_index is not None and max_index is not None:
         line = (
-            f"Температура центрального ряда: {_fmt_signed(temperature[min_index], 1)} °C "
-            f"({times[min_index]:%d.%m %H:%M}) - {_fmt_signed(temperature[max_index], 1)} °C "
-            f"({times[max_index]:%d.%m %H:%M})."
+            f"Температура: {_fmt_signed(temperature[min_index], 1)}…{_fmt_signed(temperature[max_index], 1)} °C; "
+            f"минимум {times[min_index]:%d.%m %H:%M}, максимум {times[max_index]:%d.%m %H:%M}."
         )
         if ensemble:
             q10 = _statistic(series, "temperature_2m", "q10")
@@ -762,7 +761,7 @@ def _build_main_lines(series: Any, daily_rows: Sequence[ReportDay]) -> list[str]
             low = _nanmin(q10)
             high = _nanmax(q90)
             if low is not None and high is not None:
-                line += f" Диапазон q10-q90 по срокам: {_fmt_signed(low, 1)}…{_fmt_signed(high, 1)} °C."
+                line += f" q10-q90: {_fmt_signed(low, 1)}…{_fmt_signed(high, 1)} °C."
         lines.append(line)
 
     daily_amounts: list[tuple[float, str]] = []
@@ -772,18 +771,16 @@ def _build_main_lines(series: Any, daily_rows: Sequence[ReportDay]) -> list[str]
             daily_amounts.append((float(match.group(1).replace(",", ".")), f"{row.day:%d.%m}"))
     if daily_amounts:
         amount, day_label = max(daily_amounts)
-        daily_kind = (
-            "суточная медиана осадков"
-            if ensemble and _has_daily_statistic(series, "precipitation", "q50")
-            else "сумма осадков центрального ряда"
-        )
-        line = f"Максимальная {daily_kind}: {_fmt(amount, 1)} мм {day_label}."
+        if ensemble and _has_daily_statistic(series, "precipitation", "q50"):
+            line = f"Осадки: максимальная суточная медиана {_fmt(amount, 1)} мм {day_label}."
+        else:
+            line = f"Осадки: наибольшая суточная сумма {_fmt(amount, 1)} мм {day_label}."
     else:
-        line = "Существенная суточная сумма осадков центрального ряда не выделяется."
+        line = "Осадки: существенной суточной суммы не выделяется."
     if ensemble:
         max_probability = _max_probability(series, range(len(times)))
         if max_probability is not None:
-            line += f" Максимальный сигнал осадков по членам: {_fmt(max_probability, 0)} % ({_signal_label(max_probability).lower()})."
+            line += f" Максимальная вероятность >=0,1 мм: {_fmt(max_probability, 0)} %."
     lines.append(line)
 
     max_wind_index = _nanargmax(wind)
@@ -791,61 +788,42 @@ def _build_main_lines(series: Any, daily_rows: Sequence[ReportDay]) -> list[str]
     max_gust_index = _nanargmax(risk_gust)
     wind_parts = []
     if max_wind_index is not None:
-        wind_parts.append(
-            f"средний ветер до {_fmt(wind[max_wind_index], 1)} м/с {times[max_wind_index]:%d.%m %H:%M}"
-        )
+        wind_parts.append(f"до {_fmt(wind[max_wind_index], 1)} м/с {times[max_wind_index]:%d.%m %H:%M}")
     if max_gust_index is not None:
-        prefix = "q90 порывов" if ensemble else "порывы"
-        wind_parts.append(
-            f"{prefix} до {_fmt(risk_gust[max_gust_index], 1)} м/с {times[max_gust_index]:%d.%m %H:%M}"
-        )
+        label = "q90 порывов" if ensemble else "порывы"
+        wind_parts.append(f"{label} до {_fmt(risk_gust[max_gust_index], 1)} м/с {times[max_gust_index]:%d.%m %H:%M}")
     if wind_parts:
         lines.append("Ветер: " + "; ".join(wind_parts) + ".")
 
     high_humidity = np.flatnonzero(np.isfinite(humidity) & (humidity >= 95.0))
     if high_humidity.size:
         first = int(high_humidity[0])
-        lines.append(
-            f"Относительная влажность достигает 95 % или выше начиная с {times[first]:%d.%m %H:%M}; это модельный индикатор, а не наблюдение тумана."
-        )
+        lines.append(f"Высокая влажность: RH >=95 % с {times[first]:%d.%m %H:%M}.")
 
     if ensemble:
         counts = _values(series, "ensemble_member_count")
         minimum = _nanmin(counts)
         observed = int(round(minimum)) if minimum is not None else int(getattr(series, "member_count", 0) or 0)
         expected = int(getattr(series, "expected_member_count", 0) or observed)
-        lines.append(
-            f"Полнота ансамбля по срокам: не менее {observed}/{expected or observed} членов. "
-            "Оценка описывает разброс внутри одной ансамблевой системы и не является межмодельным консенсусом."
-        )
-    return lines[:6]
-
+        lines.append(f"Ансамбль: не менее {observed}/{expected or observed} членов на срок.")
+    return lines[:5]
 
 def _build_method_lines(series: Any) -> list[str]:
     ensemble = bool(getattr(series.source, "ensemble", False))
     lines = [
-        "Все сроки и суточные границы приведены к местному времени точки.",
-        "Осадки показаны за исходный интервал и не сглаживаются; графические тренды не повышают разрешение модели.",
-        "Направление ветра метеорологическое - откуда дует.",
-        "Источник и расчётная точка указаны в заголовке; профиль не является наблюдением или радиозондом.",
+        "Время и суточные границы - местные.",
+        "Осадки - за исходный интервал модели; ветер - направление, откуда дует.",
     ]
     if ensemble:
-        lines.insert(
-            1,
-            "Центр ансамбля: среднее для T/Td/давления и медиана для остальных параметров; полосы - q25-q75 и q10-q90.",
-        )
-        lines.append(
-            "Вероятности осадков - доля доступных членов выбранного ансамбля, превысивших порог за исходный интервал."
-        )
+        lines.append("Центр ансамбля: среднее для T/Td/давления, медиана для остальных параметров; диапазоны q25-q75 и q10-q90.")
+        lines.append("Вероятность осадков - доля доступных членов ансамбля, превысивших порог.")
         if not _has_daily_statistic(series, "precipitation", "q50"):
-            lines.append(
-                "Поставщик не передал member-by-member суточную статистику; в таблице дана сумма центрального ряда, явно отмеченная в ячейке."
-            )
+            lines.append("Суточная статистика по отдельным членам недоступна; в таблице используется сумма центрального ряда.")
     sampling = str(getattr(series, "sampling_mode", ""))
     if sampling == "raw_model_grid":
-        lines.append("Использована модельная ячейка; высотная коррекция поставщика отключена.")
+        lines.append("Расчёт выполнен для модельной ячейки без высотной коррекции.")
+    lines.append("Модельный прогноз, не наблюдение.")
     return lines
-
 
 def _build_warning_lines(series: Any) -> list[str]:
     result = []
@@ -973,14 +951,18 @@ def _control_indices(times: Sequence[datetime]) -> list[int]:
     start = seconds[0]
     end_hours = max(0.0, (seconds[-1] - start) / 3600.0)
     targets: list[float] = []
+
+    # Near-term detail is useful; farther out, 12-hour checkpoints keep the
+    # report readable without repeating essentially the same information.
     hour = 0.0
-    while hour <= min(72.0, end_hours) + 0.01:
+    while hour <= min(24.0, end_hours) + 0.01:
         targets.append(hour)
         hour += 6.0
-    hour = 84.0
+    hour = 36.0
     while hour <= end_hours + 0.01:
         targets.append(hour)
         hour += 12.0
+
     indices: list[int] = []
     for target in targets:
         index = int(np.argmin(np.abs((seconds - start) / 3600.0 - target)))
@@ -989,7 +971,6 @@ def _control_indices(times: Sequence[datetime]) -> list[int]:
     if indices and indices[-1] != len(times) - 1 and end_hours - targets[-1] >= 6.0:
         indices.append(len(times) - 1)
     return indices
-
 
 def _format_wind(max_wind: float | None, max_gust: float | None, q90_gust: float | None) -> str:
     parts = []
