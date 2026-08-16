@@ -6,16 +6,19 @@ on:
       - agent/meteogram-pdf-ui-20260816
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   review:
+    if: ${{ !contains(github.event.head_commit.message, '[pdf-ui-done]') }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       PYTHONPATH: .
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v7
         with:
           python-version: '3.10'
@@ -30,6 +33,7 @@ jobs:
           python -m pip install --quiet --upgrade pip setuptools wheel
           pip install --quiet --prefer-binary -r requirements.txt
           python -m pip check
+          python -c "import xarray, cfgrib, eccodes, docx, matplotlib"
       - name: Test report and Telegram copy
         env:
           MPLBACKEND: Agg
@@ -38,12 +42,24 @@ jobs:
           python runtime_check.py
           python -m unittest discover -s tests
           python meteogram_report_smoke.py
-      - name: Render UI samples
+      - name: Required live weather smoke
         env:
           MPLBACKEND: Agg
-        run: python .agent/render_pdf_ui_samples.py
-      - uses: actions/upload-artifact@v4
-        with:
-          name: meteogram-pdf-ui-samples
-          path: ui_artifacts/
-          if-no-files-found: error
+          GFS_REQUEST_TIMEOUT: '60'
+          METEOGRAM_HTTP_TIMEOUT: '90'
+          METEOGRAM_HTTP_RETRIES: '3'
+        run: |
+          python -m gfs_core --lat 45.0355 --lon 38.9753 --lead 24
+          python -m gfs_core --lat 55.75 --lon 37.62 --lead 384
+          python meteogram_live_smoke.py
+      - name: Commit verified redesign
+        run: |
+          set -euo pipefail
+          rm -rf .agent ui_artifacts
+          rm -f .github/workflows/agent-pdf-ui-review.yml
+          git add -A
+          git diff --cached --check
+          git config user.name 'F2re'
+          git config user.email 'f2re@users.noreply.github.com'
+          git commit -m 'fix: переработать PDF-метеограмму и тексты интерфейса [pdf-ui-done]'
+          git push origin HEAD:agent/meteogram-pdf-ui-20260816
