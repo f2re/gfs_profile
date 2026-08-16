@@ -22,6 +22,7 @@ jobs:
       - name: Apply PDF UI redesign
         run: |
           python .agent/apply_pdf_ui_redesign.py
+          python .agent/refine_pdf_ui.py
           python .agent/fix_eof.py
           git diff --check
       - name: Install dependencies
