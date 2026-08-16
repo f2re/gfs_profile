@@ -80,6 +80,7 @@ OPTIONAL_RUNTIME_MODULES = (
     "telegram_route",
     "telegram_meteogram",
     "telegram_schedules",
+    "telegram_schedule_ux",
     "telegram_bot_core",
     "telegram_concise_ux",
     "telegram_result_copy",
@@ -115,7 +116,7 @@ def main() -> int:
 
     print(
         "Runtime check OK: GFS/GRIB, DaData, Skew-T, route, "
-        "model/ensemble meteograms and Telegram UX import successfully"
+        "model/ensemble meteograms, schedules and Telegram UX import successfully"
     )
     return 0
 
