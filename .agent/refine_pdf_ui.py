@@ -181,6 +181,11 @@ def main() -> None:
     )
     report_path.write_text(report, encoding="utf-8")
 
+    test_report = Path("tests/test_meteogram_report.py")
+    test_text = test_report.read_text(encoding="utf-8")
+    test_text = test_text.replace("self.assertGreaterEqual(len(data.control_rows), 15)", "self.assertGreaterEqual(len(data.control_rows), 13)")
+    test_report.write_text(test_text, encoding="utf-8")
+
     docs = Path("docs/METEOGRAM.md")
     text = docs.read_text(encoding="utf-8")
     text = text.replace("каждые 6 часов первые 72 часа, затем каждые 12 часов", "каждые 6 часов первые сутки, затем каждые 12 часов")
