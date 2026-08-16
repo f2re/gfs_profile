@@ -1,0 +1,20 @@
+Title:           Ансамблевый модельный прогноз: Санкт-Петербург
+Subject:         Модельный метеорологический прогноз
+Author:          GFS Profile Bot
+Creator:         Matplotlib v3.10.9, https://matplotlib.org
+Producer:        Matplotlib pdf backend v3.10.9
+CreationDate:    Sun Aug 16 06:43:19 2026 UTC
+Custom Metadata: no
+Metadata Stream: no
+Tagged:          no
+UserProperties:  no
+Suspects:        no
+Form:            none
+JavaScript:      no
+Pages:           2
+Encrypted:       no
+Page size:       841.68 x 595.44 pts (A4)
+Page rot:        0
+File size:       309844 bytes
+Optimized:       no
+PDF version:     1.4
