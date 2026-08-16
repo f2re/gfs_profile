@@ -40,13 +40,16 @@ class FormatterTests(unittest.TestCase):
         self.assertIn("<pre>", summary)
         self.assertIn("pгПа Zgкм", summary)
         self.assertIn("T/Td°C", summary)
+        self.assertIn("Ветер°/мс", summary)
         self.assertIn("❄ 0/-10/-20°C", summary)
-        self.assertIn("🌬 max", summary)
+        self.assertIn("🌬 макс.", summary)
         self.assertIn("NOMADS subset", summary)
         self.assertIn("MSL", summary)
+        self.assertIn("откуда°/м/с", summary)
         self.assertNotIn("температура", summary)
         self.assertNotIn("точка росы", summary)
         self.assertNotIn("Макс. ветер", summary)
+        self.assertNotIn("🌬 max", summary)
         self.assertNotIn("Действительно на", summary)
         self.assertNotIn("Max wind", summary)
         self.assertNotIn("Valid:", summary)
@@ -63,13 +66,29 @@ class FormatterTests(unittest.TestCase):
         for line in level_lines:
             self.assertLessEqual(len(line), 42)
 
-    def test_csv_is_written(self) -> None:
+    def test_csv_is_human_readable_profile_report(self) -> None:
         path = write_profile_csv(self._result())
         try:
             self.assertTrue(path.exists())
-            content = path.read_text(encoding="utf-8")
-            self.assertIn("pressure_hpa", content)
-            self.assertIn("geopotential_height_km", content)
+            self.assertTrue(path.read_bytes().startswith(b"\xef\xbb\xbf"))
+            self.assertIn("20260630_06Z_f024", path.name)
+            dataframe = pd.read_csv(path)
+            self.assertEqual(
+                list(dataframe.columns),
+                ["p_hPa", "Zg_m_MSL", "T_C", "Td_C", "RH_pct", "wind_from_deg", "wind_speed_ms"],
+            )
+            self.assertEqual(int(dataframe.loc[0, "p_hPa"]), 1000)
+            self.assertAlmostEqual(float(dataframe.loc[0, "T_C"]), 12.0, places=1)
+            for raw_column in (
+                "temperature_k",
+                "temperature_c",
+                "u_wind_ms",
+                "v_wind_ms",
+                "geopotential_height_m",
+                "geopotential_height_km",
+                "theta_k",
+            ):
+                self.assertNotIn(raw_column, dataframe.columns)
         finally:
             path.unlink(missing_ok=True)
 

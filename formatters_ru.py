@@ -11,6 +11,15 @@ from gfs_core import DEFAULT_PROFILE_LEVELS_HPA, ProfileResult
 
 PROFILE_LEVELS_HPA = DEFAULT_PROFILE_LEVELS_HPA
 ISOTHERM_TARGETS_C = (0.0, -10.0, -20.0)
+PROFILE_CSV_COLUMNS = (
+    "p_hPa",
+    "Zg_m_MSL",
+    "T_C",
+    "Td_C",
+    "RH_pct",
+    "wind_from_deg",
+    "wind_speed_ms",
+)
 
 
 def _nearest_level_row(df: pd.DataFrame, pressure_hpa: int) -> pd.Series | None:
@@ -93,7 +102,7 @@ def _format_isotherms(result: ProfileResult) -> str:
 
 def _compact_table(result: ProfileResult) -> str:
     df = result.dataframe
-    rows = ["pгПа Zgкм T/Td°C     RH  Ветер", "---- ---- ----------- --- -------"]
+    rows = ["pгПа Zgкм T/Td°C     RH  Ветер°/мс", "---- ---- ----------- --- ----------"]
     seen_pressures: set[int] = set()
     for level in PROFILE_LEVELS_HPA:
         row = _nearest_level_row(df, level)
@@ -127,23 +136,59 @@ def format_profile_summary(result: ProfileResult) -> str:
         lines.extend(
             [
                 _format_isotherms(result),
-                f"🌬 max: {max_wind:.1f} м/с @ {max_wind_level} гПа ({max_wind_height_km:.1f} км MSL)",
+                f"🌬 макс.: {max_wind:.1f} м/с @ {max_wind_level} гПа ({max_wind_height_km:.1f} км MSL)",
                 f"📄 уровней: {len(df)}",
             ]
         )
 
-    lines.append("ℹ NOMADS subset • Zg — геопотенциальная высота MSL • GFS grid, не радиозонд")
+    lines.append("ℹ NOMADS subset • Zg — геопотенциальная высота MSL • ветер — откуда°/м/с • GFS grid, не радиозонд")
     return "\n".join(lines)
 
 
+def _profile_csv_dataframe(result: ProfileResult) -> pd.DataFrame:
+    df = result.dataframe
+    source_columns = (
+        "pressure_hpa",
+        "geopotential_height_m",
+        "temperature_c",
+        "dewpoint_c",
+        "relative_humidity_pct",
+        "wind_dir_deg",
+        "wind_speed_ms",
+    )
+    missing = [column for column in source_columns if column not in df.columns]
+    if missing:
+        raise ValueError(f"Профиль не содержит полей для CSV: {', '.join(missing)}")
+
+    export = df.loc[:, source_columns].rename(
+        columns={
+            "pressure_hpa": "p_hPa",
+            "geopotential_height_m": "Zg_m_MSL",
+            "temperature_c": "T_C",
+            "dewpoint_c": "Td_C",
+            "relative_humidity_pct": "RH_pct",
+            "wind_dir_deg": "wind_from_deg",
+            "wind_speed_ms": "wind_speed_ms",
+        }
+    ).copy()
+    export["p_hPa"] = export["p_hPa"].round().astype("Int64")
+    export["Zg_m_MSL"] = export["Zg_m_MSL"].round().astype("Int64")
+    export["T_C"] = export["T_C"].round(1)
+    export["Td_C"] = export["Td_C"].round(1)
+    export["RH_pct"] = export["RH_pct"].round(1)
+    export["wind_from_deg"] = (export["wind_from_deg"].round() % 360).astype("Int64")
+    export["wind_speed_ms"] = export["wind_speed_ms"].round(1)
+    return export.loc[:, PROFILE_CSV_COLUMNS]
+
+
 def write_profile_csv(result: ProfileResult) -> Path:
-    suffix = f"_{result.run.date}_{result.run.cycle}_f{result.lead_hour:03d}_{result.grid_lat:.3f}_{result.grid_lon:.3f}.csv"
-    safe_suffix = suffix.replace("-", "m").replace(" ", "_")
-    out = tempfile.NamedTemporaryFile(prefix="gfs_profile", suffix=safe_suffix, delete=False)
+    safe_grid = f"{result.grid_lat:.3f}_{result.grid_lon:.3f}".replace("-", "m")
+    prefix = f"gfs_profile_{result.run.date}_{result.run.cycle}Z_f{result.lead_hour:03d}_{safe_grid}_"
+    out = tempfile.NamedTemporaryFile(prefix=prefix, suffix=".csv", delete=False)
     out_path = Path(out.name)
     out.close()
     try:
-        result.dataframe.round(3).to_csv(out_path, index=False)
+        _profile_csv_dataframe(result).to_csv(out_path, index=False, encoding="utf-8-sig")
     except Exception:
         out_path.unlink(missing_ok=True)
         raise
