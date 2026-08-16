@@ -1,0 +1,78 @@
+name: agent-pdf-readability
+
+on:
+  push:
+    branches:
+      - agent/meteogram-pdf-readability-final-20260816
+
+permissions:
+  contents: write
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTHONPATH: .
+      MPLBACKEND: Agg
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.10'
+      - name: Apply PDF readability fix
+        run: |
+          set -euo pipefail
+          python .agent/apply_pdf_readability_fix.py
+          git diff --check
+      - name: Install dependencies
+        run: |
+          python -m pip install --quiet --upgrade pip setuptools wheel
+          pip install --quiet --prefer-binary -r requirements.txt
+          python -m pip check
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq poppler-utils
+      - name: Test report and regressions
+        run: |
+          python -m compileall -q .
+          python runtime_check.py
+          python -m unittest discover -s tests
+          python meteogram_report_smoke.py
+      - name: Required live weather smoke
+        env:
+          GFS_REQUEST_TIMEOUT: '60'
+          METEOGRAM_HTTP_TIMEOUT: '90'
+          METEOGRAM_HTTP_RETRIES: '3'
+        run: |
+          python -m gfs_core --lat 45.0355 --lon 38.9753 --lead 24
+          python -m gfs_core --lat 55.75 --lon 37.62 --lead 384
+          python meteogram_live_smoke.py
+      - name: Render audited AIFS ENS PDF
+        run: |
+          python .agent/render_pdf_readability.py
+          pdfinfo ui_artifacts/aifs_ens_spb_3d.pdf | tee ui_artifacts/pdfinfo.txt
+          pages=$(pdfinfo ui_artifacts/aifs_ens_spb_3d.pdf | awk '/^Pages:/ {print $2}')
+          test -n "$pages"
+          test "$pages" -le 3
+          mkdir -p ui_artifacts/pages
+          pdftoppm -png -r 110 ui_artifacts/aifs_ens_spb_3d.pdf ui_artifacts/pages/page >/dev/null 2>&1
+          test -s ui_artifacts/pages/page-1.png
+          test -s ui_artifacts/pages/page-2.png
+      - uses: actions/upload-artifact@v4
+        with:
+          name: meteogram-pdf-readability
+          path: ui_artifacts/
+          if-no-files-found: error
+      - name: Commit verified fix
+        run: |
+          set -euo pipefail
+          rm -rf .agent
+          rm -f .github/workflows/agent-pdf-readability.yml
+          git add -A
+          git diff --cached --check
+          git config user.name 'F2re'
+          git config user.email 'f2re@users.noreply.github.com'
+          git commit -m 'fix: улучшить читаемость PDF-метеограммы [pdf-readability-done]'
+          git push origin HEAD:agent/meteogram-pdf-readability-final-20260816
