@@ -255,7 +255,7 @@ def _solar_elevation(value: datetime, latitude: float, longitude: float) -> floa
     )
     return float(np.rad2deg(np.arcsin(np.clip(cosine, -1, 1))))
 
-def _finish_axes(figure: Figure, axes, series: MeteogramSeries, tracked) -> None:
+def _finish_axes(figure: Figure, axes, series: MeteogramSeries, tracked, *, report_mode: bool = False) -> None:
     timezone = series.times[0].tzinfo
     duration_days = (
         series.times[-1].timestamp() - series.times[0].timestamp()
@@ -269,15 +269,17 @@ def _finish_axes(figure: Figure, axes, series: MeteogramSeries, tracked) -> None
 
     axes[-1].xaxis.set_major_formatter(plt.FuncFormatter(day_label))
     minor_hours = (6, 12, 18) if duration_days <= 8 else (12,)
-    axes[-1].xaxis.set_minor_locator(
-        mdates.HourLocator(byhour=minor_hours, tz=timezone)
-    )
+    axes[-1].xaxis.set_minor_locator(mdates.HourLocator(byhour=minor_hours, tz=timezone))
     axes[-1].xaxis.set_minor_formatter(mdates.DateFormatter("%H", tz=timezone))
     axes[-1].tick_params(axis="x", which="major", labelsize=6.9, pad=5)
     axes[-1].tick_params(axis="x", which="minor", labelsize=5.8, pad=2)
     axes[-1].set_xlim(series.times[0], series.times[-1])
     for axis in axes[:-1]:
         axis.tick_params(axis="x", labelbottom=False)
+
+    if report_mode:
+        figure.subplots_adjust(left=0.078, right=0.895, top=0.955, bottom=0.115)
+        return
 
     distance = grid_distance_km(series)
     grid = ""
@@ -287,64 +289,25 @@ def _finish_axes(figure: Figure, axes, series: MeteogramSeries, tracked) -> None
             grid += f" ({distance:.1f} км)"
     generated = datetime.now(dt_timezone.utc)
     footer1 = figure.text(
-        0.063,
-        0.096,
+        0.063, 0.096,
         f"Запрошено {series.requested_lat:.4f},{series.requested_lon:.4f}{grid}",
-        ha="left",
-        va="bottom",
-        fontsize=6.35,
-        color=COLORS["muted"],
+        ha="left", va="bottom", fontsize=6.35, color=COLORS["muted"],
     )
     footer2 = figure.text(
-        0.063,
-        0.074,
-        (
-            f"Получено {series.retrieved_at_utc:%d.%m.%Y %H:%M} UTC · "
-            f"PNG {generated:%d.%m.%Y %H:%M} UTC · модельный прогноз, не наблюдение"
-        ),
-        ha="left",
-        va="bottom",
-        fontsize=6.35,
-        color=COLORS["muted"],
+        0.063, 0.074,
+        f"Получено {series.retrieved_at_utc:%d.%m.%Y %H:%M} UTC · PNG {generated:%d.%m.%Y %H:%M} UTC · модельный прогноз, не наблюдение",
+        ha="left", va="bottom", fontsize=6.35, color=COLORS["muted"],
     )
     explanation = (
-        "T/Td/p — среднее; направление — круговое среднее; прочее — медиана; "
-        "q25–q75/q10–q90; P — доля членов за исходный интервал"
+        "T/Td/p — среднее; направление — круговое среднее; прочее — медиана; q25–q75/q10–q90; P — доля членов за исходный интервал"
         if series.source.ensemble
         else "непрерывные поля сглажены PCHIP; осадки показаны без сглаживания"
     )
-    footer3 = figure.text(
-        0.063,
-        0.052,
-        explanation,
-        ha="left",
-        va="bottom",
-        fontsize=6.15,
-        color=COLORS["muted"],
-    )
-    footer4 = figure.text(
-        0.063,
-        0.030,
-        "Пунктир — среднее за 24 ч; мин./макс. T — по доступным срокам местных суток.",
-        ha="left",
-        va="bottom",
-        fontsize=5.95,
-        color=COLORS["muted"],
-    )
-    footer5 = figure.text(
-        0.063,
-        0.008,
-        "Красный ромб — диагностический порог: T ≤−20/≥+35 °C; RH ≥95%; осадки ≥5 мм/ч; ветер ≥10; порывы ≥14 м/с.",
-        ha="left",
-        va="bottom",
-        fontsize=5.80,
-        color=COLORS["muted"],
-    )
-    tracked.extend(
-        ((footer1, 100), (footer2, 100), (footer3, 100), (footer4, 100), (footer5, 100))
-    )
+    footer3 = figure.text(0.063, 0.052, explanation, ha="left", va="bottom", fontsize=6.15, color=COLORS["muted"])
+    footer4 = figure.text(0.063, 0.030, "Пунктир — среднее за 24 ч; мин./макс. T — по доступным срокам местных суток.", ha="left", va="bottom", fontsize=5.95, color=COLORS["muted"])
+    footer5 = figure.text(0.063, 0.008, "Красный ромб — диагностический порог: T ≤−20/≥+35 °C; RH ≥95%; осадки ≥5 мм/ч; ветер ≥10; порывы ≥14 м/с.", ha="left", va="bottom", fontsize=5.80, color=COLORS["muted"])
+    tracked.extend(((footer1, 100), (footer2, 100), (footer3, 100), (footer4, 100), (footer5, 100)))
     figure.subplots_adjust(left=0.078, right=0.895, top=0.855, bottom=0.185)
-
 
 def _line(axis, x, values, color, width, label, style="-") -> None:
     sx, sy = _smooth(x, values)

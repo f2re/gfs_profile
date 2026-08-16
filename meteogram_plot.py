@@ -29,8 +29,10 @@ from meteogram_precip_style import add_precipitation_upper_layer
 def write_meteogram_png(
     series: MeteogramSeries,
     output_path: Path | None = None,
+    *,
+    report_mode: bool = False,
 ) -> Path:
-    figure, _axes, _tracked = build_meteogram_figure(series)
+    figure, _axes, _tracked = build_meteogram_figure(series, report_mode=report_mode)
     dpi = int(os.getenv("METEOGRAM_DPI", "170"))
     if output_path is None:
         handle = tempfile.NamedTemporaryFile(
@@ -46,6 +48,8 @@ def write_meteogram_png(
 
 def build_meteogram_figure(
     series: MeteogramSeries,
+    *,
+    report_mode: bool = False,
 ) -> tuple[Figure, tuple, list[tuple[Artist, int]]]:
     if len(series.times) < 2:
         raise MeteogramError("Для метеограммы требуется не менее двух сроков")
@@ -82,7 +86,8 @@ def build_meteogram_figure(
     x = mdates.date2num(series.times)
     tracked: list[tuple[Artist, int]] = []
 
-    _draw_header(figure, series, tracked)
+    if not report_mode:
+        _draw_header(figure, series, tracked)
     _shade_night(axes, series, x)
     _draw_clouds(axes[0], x, series)
     _draw_temperature(axes[1], x, series, tracked)
@@ -90,7 +95,7 @@ def build_meteogram_figure(
     _draw_precipitation(axes[3], x, series, tracked)
     add_precipitation_upper_layer(axes[3], x, series)
     _draw_wind_pressure(axes[4], x, series, tracked)
-    _finish_axes(figure, axes, series, tracked)
+    _finish_axes(figure, axes, series, tracked, report_mode=report_mode)
     _resolve_overlaps(figure, tracked)
     return figure, axes, tracked
 
