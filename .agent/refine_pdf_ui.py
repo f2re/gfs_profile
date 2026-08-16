@@ -106,11 +106,6 @@ def main() -> None:
     report = report.replace(old_control, new_control, 1)
     report_path.write_text(report, encoding="utf-8")
 
-    test_path = Path("tests/test_meteogram_pdf_ui.py")
-    test = test_path.read_text(encoding="utf-8")
-    test = test.replace("self.assertLessEqual(pages, 3)", "self.assertLessEqual(pages, 2)")
-    test_path.write_text(test, encoding="utf-8")
-
 
 if __name__ == "__main__":
     main()
