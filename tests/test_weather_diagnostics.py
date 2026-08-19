@@ -2,7 +2,14 @@ from __future__ import annotations
 
 import unittest
 
-from weather_diagnostics import DASH, precipitation_code, thunder_score, visibility_km, weather_code
+from weather_diagnostics import (
+    DASH,
+    instant_weather_code,
+    precipitation_code,
+    thunder_score,
+    visibility_km,
+    weather_code,
+)
 
 
 class WeatherDiagnosticsTests(unittest.TestCase):
@@ -76,10 +83,34 @@ class WeatherDiagnosticsTests(unittest.TestCase):
     def test_precipitation_codes(self) -> None:
         self.assertEqual(precipitation_code(True, False, False, False), "R")
         self.assertEqual(precipitation_code(False, True, False, False), "S")
+        self.assertEqual(precipitation_code(True, True, False, False), "R/S")
+        self.assertEqual(precipitation_code(False, False, False, True), "IP")
         self.assertEqual(weather_code(0.0, DASH, 0, 0.5), "FG")
         self.assertEqual(weather_code(1.0, "FZ", 0, 8.0), "FZRA")
         self.assertEqual(weather_code(1.0, "S", 0, 8.0), "SN")
         self.assertEqual(weather_code(1.0, "R", 0, 8.0), "RA")
+
+    def test_instant_rain_requires_rate_and_explicit_rain_category(self) -> None:
+        self.assertEqual(instant_weather_code(None, "R", 0, 10.0), DASH)
+        self.assertEqual(instant_weather_code(0.09, "R", 0, 10.0), DASH)
+        self.assertEqual(instant_weather_code(0.10, "R", 0, 10.0), "RA")
+        self.assertEqual(instant_weather_code(0.40, DASH, 0, 10.0), "UP")
+
+    def test_instant_phase_identification_is_not_forced_to_rain(self) -> None:
+        self.assertEqual(instant_weather_code(0.5, "S", 0, 10.0), "SN")
+        self.assertEqual(instant_weather_code(0.5, "FZ", 0, 10.0), "FZRA")
+        self.assertEqual(instant_weather_code(0.5, "IP", 0, 10.0), "IP")
+        self.assertEqual(instant_weather_code(0.5, "R/S", 0, 10.0), "RASN")
+
+    def test_instant_thunder_requires_active_precipitation(self) -> None:
+        self.assertEqual(instant_weather_code(0.19, "R", 3, 10.0), "RA")
+        self.assertEqual(instant_weather_code(0.20, "R", 3, 10.0), "TSRA")
+        self.assertEqual(instant_weather_code(0.50, "S", 3, 10.0), "TSSN")
+        self.assertEqual(instant_weather_code(0.50, DASH, 3, 10.0), "TS")
+
+    def test_instant_fog_is_shown_only_without_active_precipitation(self) -> None:
+        self.assertEqual(instant_weather_code(0.0, DASH, 0, 0.5), "FG")
+        self.assertEqual(instant_weather_code(0.4, "R", 0, 0.5), "RA")
 
 
 if __name__ == "__main__":

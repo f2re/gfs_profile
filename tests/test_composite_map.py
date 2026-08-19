@@ -1,15 +1,23 @@
 from __future__ import annotations
 
+import inspect
 import tempfile
 import unittest
 from pathlib import Path
 
 import numpy as np
-import xarray as xr
 
-from composite_map import _area_subset_url, _field, _storm_grid, _xy_km, area_box_from_radius, weather_code_icon, write_composite_map_png
+from composite_map import (
+    _area_subset_url,
+    _xy_km,
+    area_box_from_radius,
+    weather_code_icon,
+    write_composite_map_png,
+)
+from composite_map_render import _draw_phenomena_cells
 from geocode import GeoPoint
 from gfs_core import GfsRun
+from weather_diagnostics import DASH
 
 
 class CompositeMapTests(unittest.TestCase):
@@ -34,55 +42,45 @@ class CompositeMapTests(unittest.TestCase):
         x, _, _ = _xy_km(lat, lon, 0.0, 179.8)
         self.assertLess(abs(float(x[0, 1])), 100.0)
 
-    def test_storm_grid_uses_shared_diagnostic_thresholds(self) -> None:
-        cape = np.array([[1200.0, 100.0]])
-        cin = np.array([[-50.0, -300.0]])
-        conv = np.array([[0.5, 0.0]])
-        cloud = np.array([[40.0, 10.0]])
-        rate = np.array([[4.0, 0.0]])
-        storm = _storm_grid(cape, cin, conv, cloud, rate)
-        self.assertEqual(float(storm[0, 0]), 3.0)
-        self.assertEqual(float(storm[0, 1]), 0.0)
-
-    def test_composite_map_has_no_runtime_overpass_code(self) -> None:
-        source = Path("composite_map.py").read_text(encoding="utf-8")
-        forbidden = ("OVERPASS_ENDPOINTS", "_overpass_query", "overpass-api.de", "overpass.kumi.systems", "openstreetmap.ru", "requests.post")
+    def test_composite_map_has_no_runtime_overpass_or_legacy_grib_reader(self) -> None:
+        source = "\n".join(Path(name).read_text(encoding="utf-8") for name in ("composite_map.py", "composite_map_io.py", "composite_map_render.py"))
+        forbidden = (
+            "OVERPASS_ENDPOINTS",
+            "_overpass_query",
+            "overpass-api.de",
+            "overpass.kumi.systems",
+            "openstreetmap.ru",
+            "requests.post",
+            "cfgrib.open_datasets",
+            "def _field(",
+            "def _storm_grid(",
+            "def _bool_field(",
+        )
         for token in forbidden:
             self.assertNotIn(token, source)
 
-    def test_at500_field_extraction_accepts_isobaric_in_pa_and_uppercase_names(self) -> None:
-        lat = np.array([45.0, 45.25])
-        lon = np.array([39.0, 39.25])
-        u_values = np.ones((1, 2, 2), dtype=float) * 12.0
-        v_values = np.ones((1, 2, 2), dtype=float) * -4.0
-        ds = xr.Dataset(
-            {
-                "UGRD": (("isobaricInPa", "latitude", "longitude"), u_values),
-                "VGRD": (("isobaricInPa", "latitude", "longitude"), v_values),
-            },
-            coords={"isobaricInPa": [50000.0], "latitude": lat, "longitude": lon},
-        )
-        u_item = _field([ds], ("u", "ugrd", "UGRD"), level_hpa=500)
-        v_item = _field([ds], ("v", "vgrd", "VGRD"), level_hpa=500)
-        self.assertIsNotNone(u_item)
-        self.assertIsNotNone(v_item)
-        self.assertEqual(float(u_item[0][0, 0]), 12.0)
-        self.assertEqual(float(v_item[0][0, 0]), -4.0)
+    def test_weather_codes_are_rendered_as_unambiguous_icons(self) -> None:
+        expected = {
+            "RA": "☔",
+            "SN": "❄",
+            "FZRA": "❄☔",
+            "IP": "◆",
+            "RASN": "☔❄",
+            "UP": "◇",
+            "FG": "≋",
+            "TS": "⚡",
+            "TSRA": "⚡",
+            "TSSN": "⚡",
+        }
+        for code, icon in expected.items():
+            self.assertEqual(weather_code_icon(code), icon)
+            self.assertNotEqual(icon, code)
 
-        wrong_level = xr.Dataset(
-            {"UGRD": (("isobaricInhPa", "latitude", "longitude"), u_values)},
-            coords={"isobaricInhPa": [700.0], "latitude": lat, "longitude": lon},
-        )
-        self.assertIsNone(_field([wrong_level], ("u", "ugrd", "UGRD"), level_hpa=500))
-
-    def test_weather_codes_are_rendered_as_icons(self) -> None:
-        self.assertEqual(weather_code_icon("RA"), "☔")
-        self.assertEqual(weather_code_icon("SN"), "❄")
-        self.assertEqual(weather_code_icon("FZRA"), "❄")
-        self.assertEqual(weather_code_icon("FG"), "≋")
-        self.assertEqual(weather_code_icon("TSRA"), "⚡")
-        for raw in ("RA", "SN", "FZRA", "FG", "TSRA"):
-            self.assertNotEqual(weather_code_icon(raw), raw)
+    def test_surface_phenomenon_symbols_are_not_stride_sampled_or_truncated(self) -> None:
+        source = inspect.getsource(_draw_phenomena_cells)
+        self.assertIn("np.argwhere(mask)", source)
+        self.assertNotIn("used >=", source)
+        self.assertNotIn("range(0, rows, step)", source)
 
     def test_renderer_smoke_with_synthetic_grid(self) -> None:
         run = GfsRun("20260702", "00")
@@ -92,6 +90,12 @@ class CompositeMapTests(unittest.TestCase):
         mask = np.sqrt(x * x + y * y) <= 100.0
         lat = 45.0 + y / 110.574
         lon = 39.0 + x / (111.320 * np.cos(np.radians(45.0)))
+        precip = np.maximum(0.0, 8.0 - np.sqrt(x * x + y * y) / 20.0)
+        precip_rate = np.maximum(0.0, 2.0 - np.sqrt(x * x + y * y) / 70.0)
+        phenomena = np.full(x.shape, DASH, dtype=object)
+        phenomena[(precip_rate >= 0.1) & mask] = "RA"
+        phenomena[(x > 20) & (y > 20) & (precip_rate >= 0.2) & mask] = "TSRA"
+        phenomena[(x < -60) & mask] = "FG"
         data = {
             "run": run,
             "lead_hour": 24,
@@ -106,9 +110,14 @@ class CompositeMapTests(unittest.TestCase):
             "mask": mask,
             "lat": lat,
             "lon": lon,
-            "precip": np.maximum(0.0, 8.0 - np.sqrt(x * x + y * y) / 20.0),
+            "precip": precip,
+            "precip_interval_hours": 1.0,
+            "precip_source": "APCP accumulation",
+            "precip_rate_mmh": precip_rate,
+            "phenomenon_rate_threshold_mmh": 0.1,
+            "phenomenon_code": phenomena,
             "cloud": np.clip(80.0 - y / 3.0, 0.0, 100.0),
-            "storm": np.where((x > 0) & (y > 0), 2.0, 0.0),
+            "storm": np.where((x > 0) & (y > 0), 3.0, 0.0),
             "visibility": np.where(x < -40.0, 3.0, 12.0),
             "u500": np.full_like(x, 12.0),
             "v500": np.full_like(y, -4.0),
