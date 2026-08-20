@@ -22,6 +22,7 @@ class TelegramCommandTests(unittest.TestCase):
                 "meteogram",
                 "map",
                 "schedule",
+                "settings",
                 "cycle",
                 "status",
                 "cancel",
