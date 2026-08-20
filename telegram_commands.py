@@ -13,6 +13,7 @@ BOT_COMMANDS: tuple[BotCommand, ...] = (
     BotCommand("meteogram", "📊 Метеограмма и отчёт DOCX/PDF"),
     BotCommand("map", "🗺️ Карта, серия, анимация"),
     BotCommand("schedule", "🕒 Автоматическая отправка"),
+    BotCommand("settings", "⚙️ Мои точки и параметры"),
     BotCommand("cycle", "🕒 Последний цикл GFS"),
     BotCommand("status", "⚙️ Доступность и кэш"),
     BotCommand("cancel", "✖ Сброс сценария"),

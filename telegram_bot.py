@@ -44,7 +44,7 @@ def _clear_pending(context):
 
 # A callback message is authored by the bot, so message.from_user cannot identify
 # the person who opened a product from the inline home menu. Capture the actual
-# callback user for the point-selection keyboard and recent locations.
+# callback user for the point-selection keyboard and persistent defaults.
 _concise_start_product_wizard = _start_product_wizard
 
 
@@ -66,8 +66,13 @@ from telegram_meteogram import register_meteogram_handlers
 from telegram_schedules import register_schedule_handlers
 import telegram_schedule_ux  # noqa: E402
 
-# Install the schedule UX guard before Application handlers capture callbacks.
+# Install the schedule guard first. Personal UX then wraps the final product
+# runners, so scheduled deliveries remain snapshots and never change defaults.
 telegram_schedule_ux.install(globals())
+
+import telegram_personal_ux  # noqa: E402
+
+telegram_personal_ux.install(globals())
 
 _core_build_application = build_application
 
@@ -86,6 +91,7 @@ def build_application():
         ),
         group=-3,
     )
+    telegram_personal_ux.register(application, globals())
     telegram_concise_ux.register(application, globals())
     register_meteogram_handlers(application)
     telegram_schedule_ux.register_input_guards(application, globals())

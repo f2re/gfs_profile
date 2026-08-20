@@ -1,15 +1,26 @@
 from __future__ import annotations
 
+"""Compatibility facade for persistent Telegram locations."""
+
 import re
-import time
 from dataclasses import dataclass
 
 from geocode import GeoPoint
+from telegram_user_state import (
+    clear_locations as _clear_locations,
+    get_active_location as _get_active_location,
+    get_recent_locations as _get_recent_locations,
+    remember_location as _remember_location,
+)
 
 RECENT_LOCATION_LIMIT = 4
 RECENT_LOCATION_PREFIX = "🕘 "
 RECENT_LOCATION_BUTTON_CHARS = 30
-LEGACY_RECENT_LOCATION_INDEX_RE = re.compile(rf"^{re.escape(RECENT_LOCATION_PREFIX)}[1-9]\.\s*(?P<label>.+)$")
+LEGACY_RECENT_LOCATION_INDEX_RE = re.compile(
+    rf"^{re.escape(RECENT_LOCATION_PREFIX)}[1-9]\.\s*(?P<label>.+)$"
+)
+
+# Retained for import compatibility. SQLite is the source of truth.
 RECENT_LOCATIONS: dict[int, list["RecentLocation"]] = {}
 
 
@@ -19,7 +30,7 @@ class RecentLocation:
     lon: float
     label: str
     source: str
-    updated_at: float
+    updated_at: float = 0.0
 
     def to_point(self) -> GeoPoint:
         return GeoPoint(self.lat, self.lon, self.label, self.source)
@@ -30,42 +41,66 @@ def _clean_label(label: str | None, lat: float, lon: float) -> str:
     return value if value else f"{lat:.4f}, {lon:.4f}"
 
 
-def _is_duplicate(existing: RecentLocation, point: GeoPoint) -> bool:
-    close = abs(existing.lat - point.lat) <= 0.01 and abs(existing.lon - point.lon) <= 0.01
-    same_label = existing.label.casefold() == _clean_label(point.label, point.lat, point.lon).casefold()
-    return close or (same_label and abs(existing.lat - point.lat) <= 0.05 and abs(existing.lon - point.lon) <= 0.05)
-
-
 def _truncate_label(label: str, max_chars: int) -> str:
     if len(label) <= max_chars:
         return label
     return label[: max(1, max_chars - 1)] + "…"
 
 
-def remember_location(user_id: int, point: GeoPoint) -> None:
-    if user_id <= 0:
+def remember_location(user_id: int, point: GeoPoint, *, activate: bool = True) -> None:
+    """Persist a location and, by default, make it the active point."""
+
+    if int(user_id) <= 0:
         return
-    label = _clean_label(point.label, point.lat, point.lon)
-    entry = RecentLocation(float(point.lat), float(point.lon), label, str(point.source or "manual"), time.time())
-    current = RECENT_LOCATIONS.get(user_id, [])
-    kept = [item for item in current if not _is_duplicate(item, point)]
-    RECENT_LOCATIONS[user_id] = [entry, *kept][:RECENT_LOCATION_LIMIT]
+    _remember_location(int(user_id), point, activate=activate)
 
 
-def get_recent_locations(user_id: int, limit: int = RECENT_LOCATION_LIMIT) -> list[GeoPoint]:
-    if user_id <= 0:
+def remember_location_without_activation(user_id: int, point: GeoPoint) -> None:
+    """Remember a route endpoint without changing the point used by products."""
+
+    remember_location(user_id, point, activate=False)
+
+
+def get_recent_locations(
+    user_id: int,
+    limit: int = RECENT_LOCATION_LIMIT,
+) -> list[GeoPoint]:
+    if int(user_id) <= 0:
         return []
-    return [entry.to_point() for entry in RECENT_LOCATIONS.get(user_id, [])[: max(0, int(limit))]]
+    return [
+        GeoPoint(item.lat, item.lon, item.label, item.source)
+        for item in _get_recent_locations(int(user_id), max(0, int(limit)))
+    ]
+
+
+def get_active_location(user_id: int) -> GeoPoint | None:
+    if int(user_id) <= 0:
+        return None
+    item = _get_active_location(int(user_id))
+    if item is None:
+        return None
+    return GeoPoint(item.lat, item.lon, item.label, item.source)
 
 
 def clear_recent_locations(user_id: int) -> None:
-    RECENT_LOCATIONS.pop(user_id, None)
+    RECENT_LOCATIONS.pop(int(user_id), None)
+    _clear_locations(int(user_id))
 
 
-def recent_location_button_label(point: GeoPoint, max_chars: int = RECENT_LOCATION_BUTTON_CHARS, index: int | None = None) -> str:
+def recent_location_button_label(
+    point: GeoPoint,
+    max_chars: int = RECENT_LOCATION_BUTTON_CHARS,
+    index: int | None = None,
+) -> str:
     del index
     label = _clean_label(point.label, point.lat, point.lon)
-    if label.lower() in {"точка", "геолокация telegram", "telegram location"}:
+    if label.lower() in {
+        "точка",
+        "геолокация telegram",
+        "telegram location",
+        "текущая геолокация",
+        "последняя геолокация",
+    }:
         label = f"{point.lat:.4f}, {point.lon:.4f}"
     return RECENT_LOCATION_PREFIX + _truncate_label(label, max_chars)
 
@@ -88,8 +123,17 @@ def match_recent_location_button(user_id: int, text: str) -> GeoPoint | None:
         return None
     candidates = _candidate_button_texts(value)
     for point in get_recent_locations(user_id):
-        labels = {recent_location_button_label(point), recent_location_button_label(point, max_chars=28)}
-        labels.update(recent_location_button_label(point, max_chars=_received_label_width(candidate)) for candidate in candidates)
+        labels = {
+            recent_location_button_label(point),
+            recent_location_button_label(point, max_chars=28),
+        }
+        labels.update(
+            recent_location_button_label(
+                point,
+                max_chars=_received_label_width(candidate),
+            )
+            for candidate in candidates
+        )
         if any(label in candidates for label in labels):
             return point
     return None
