@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 
 DASH = "—"
 
@@ -71,9 +72,72 @@ def precipitation_code(rain: bool, snow: bool, cold_rain: bool, ice_pellets: boo
     return "/".join(parts) if parts else DASH
 
 
+def _phase_weather_code(precip_code: str) -> str:
+    parts = {part for part in str(precip_code or "").split("/") if part and part != DASH}
+    if "FZ" in parts:
+        return "FZRA"
+    if "R" in parts and "S" in parts:
+        return "RASN"
+    if "IP" in parts:
+        return "IP"
+    if "S" in parts:
+        return "SN"
+    if "R" in parts:
+        return "RA"
+    return "UP"
+
+
+def instant_weather_code(
+    precip_rate_mmh: float | None,
+    precip_code: str,
+    storm_score: int,
+    vis_km: float | None,
+    *,
+    min_rate_mmh: float = 0.1,
+    thunder_min_rate_mmh: float = 0.2,
+) -> str:
+    """Classify the phenomenon valid at a GFS forecast time.
+
+    Unlike accumulated-precipitation diagnostics, this function never turns an
+    APCP amount into a current rain symbol. Active precipitation requires a
+    finite precipitation-rate field at the valid time. The categorical GFS
+    surface flags determine phase; if rate is present but phase is not, ``UP``
+    is returned instead of inventing rain.
+    """
+
+    rate = None
+    if precip_rate_mmh is not None:
+        try:
+            candidate = float(precip_rate_mmh)
+            if math.isfinite(candidate):
+                rate = max(0.0, candidate)
+        except (TypeError, ValueError):
+            pass
+
+    active = rate is not None and rate >= max(0.0, float(min_rate_mmh))
+    if active:
+        phase = _phase_weather_code(precip_code)
+        if storm_score >= 3 and rate >= max(0.0, float(thunder_min_rate_mmh)):
+            if phase in {"RA", "RASN"}:
+                return "TSRA"
+            if phase == "SN":
+                return "TSSN"
+            return "TS"
+        return phase
+
+    if vis_km is not None:
+        try:
+            visibility = float(vis_km)
+            if math.isfinite(visibility) and visibility < 1.0:
+                return "FG"
+        except (TypeError, ValueError):
+            pass
+    return DASH
+
+
 def weather_code(precip_mm: float | None, precip_code: str, storm_score: int, vis_km: float | None) -> str:
-    # TSRA is a model diagnosis, not an observation. A strong convective score
-    # must coincide with measurable precipitation.
+    # Interval products retain their amount-based contract. TSRA is a model
+    # diagnosis, not an observation, and must coincide with measurable amount.
     if storm_score >= 3 and precip_mm is not None and precip_mm > 0.2:
         return "TSRA"
     if vis_km is not None and vis_km < 1.0:

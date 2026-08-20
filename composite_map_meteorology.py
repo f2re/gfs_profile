@@ -1,21 +1,20 @@
 from __future__ import annotations
 
 import tempfile
-import time
 from datetime import timedelta
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
 
 import composite_map as base
 from geocode import GeoPoint
 from gfs_core import GfsProfileError, GfsRun, ProgressCallback
 from gfs_subset import GribFieldSelector, open_grib_datasets, select_grib_field
-from weather_diagnostics import thunder_score, visibility_km
-
+from weather_diagnostics import DASH, instant_weather_code, precipitation_code, thunder_score, visibility_km
 
 CAPE_LAYER_PA = 18000.0
+MAP_ACTIVE_PRECIP_RATE_MMH = 0.1
+MAP_THUNDER_PRECIP_RATE_MMH = 0.2
 
 
 def _emit(progress_callback: ProgressCallback | None, **payload) -> None:
@@ -126,6 +125,59 @@ def _storm_grid(cape, cin, conv_precip, conv_cloud, conv_rate, conv_precip_inter
     )
 
 
+def _phenomenon_grid(
+    precip_rate_mmh,
+    rain,
+    snow,
+    freezing,
+    ice_pellets,
+    convective_score,
+    visibility,
+    *,
+    min_rate_mmh: float = MAP_ACTIVE_PRECIP_RATE_MMH,
+):
+    reference = next(
+        (
+            value
+            for value in (precip_rate_mmh, rain, snow, freezing, ice_pellets, convective_score, visibility)
+            if value is not None
+        ),
+        None,
+    )
+    if reference is None:
+        return None
+    shape = np.asarray(reference).shape
+    codes = np.full(shape, DASH, dtype=object)
+
+    def value_at(values, row, col, default=None):
+        if values is None:
+            return default
+        return np.asarray(values)[row, col]
+
+    for row, col in np.ndindex(shape):
+        rate = value_at(precip_rate_mmh, row, col)
+        rate_value = None if rate is None or not np.isfinite(float(rate)) else float(rate)
+        vis = value_at(visibility, row, col)
+        vis_value = None if vis is None or not np.isfinite(float(vis)) else float(vis)
+        score = value_at(convective_score, row, col, 0.0)
+        score_value = int(round(float(score))) if score is not None and np.isfinite(float(score)) else 0
+        phase = precipitation_code(
+            bool(value_at(rain, row, col, False)),
+            bool(value_at(snow, row, col, False)),
+            bool(value_at(freezing, row, col, False)),
+            bool(value_at(ice_pellets, row, col, False)),
+        )
+        codes[row, col] = instant_weather_code(
+            rate_value,
+            phase,
+            score_value,
+            vis_value,
+            min_rate_mmh=min_rate_mmh,
+            thunder_min_rate_mmh=MAP_THUNDER_PRECIP_RATE_MMH,
+        )
+    return codes
+
+
 def build_composite_map(
     run: GfsRun,
     lead_hour: int,
@@ -134,11 +186,26 @@ def build_composite_map(
     basemap: str = base.MAP_BASEMAP_DEFAULT,
     progress_callback: ProgressCallback | None = None,
 ) -> dict:
-    """Build a map with metadata-exact GFS fields and consistent units."""
+    """Build the map from metadata-exact GFS fields.
+
+    The green field is interval precipitation amount. Surface phenomenon symbols
+    are a separate valid-time layer: an icon is emitted for the exact GFS grid
+    cell only when PRATE reaches the measurable threshold and the instantaneous
+    categorical phase fields identify the precipitation type. No accumulated
+    APCP value is allowed to invent a current rain symbol.
+    """
 
     basemap = base._validate_basemap(basemap)
     _emit(progress_callback, stage="map_cycle", message="Выбираю опубликованный цикл GFS")
-    path, box = base.download_area_subset(run.date, run.cycle, lead_hour, point.lat, point.lon, radius_km, progress_callback)
+    path, box = base.download_area_subset(
+        run.date,
+        run.cycle,
+        lead_hour,
+        point.lat,
+        point.lon,
+        radius_km,
+        progress_callback,
+    )
     _emit(progress_callback, stage="map_parse", message="Читаю GRIB2 и проверяю уровни/интервалы")
     missing: set[str] = set()
     expected_interval = _forecast_interval_hours(lead_hour)
@@ -158,7 +225,12 @@ def build_composite_map(
             step_types=("accum",),
             interval_hours=expected_interval,
         )
-        prate_item = _field(datasets, ("prate",), type_of_level=("surface",), step_types=("instant",))
+        prate_item = _field(
+            datasets,
+            ("prate",),
+            type_of_level=("surface",),
+            step_types=("instant",),
+        )
         u_item = _field(
             datasets,
             ("u", "ugrd"),
@@ -194,9 +266,19 @@ def build_composite_map(
             step_types=("accum",),
             interval_hours=expected_interval,
         )
-        cprat_item = _field(datasets, ("cprat",), type_of_level=("surface",), step_types=("instant",))
+        cprat_item = _field(
+            datasets,
+            ("cprat",),
+            type_of_level=("surface",),
+            step_types=("instant",),
+        )
         cape_item, cin_item, cape_layer = _cape_cin(datasets)
-        vis_item = _field(datasets, ("vis", "visibility"), type_of_level=("surface",), step_types=("instant",))
+        vis_item = _field(
+            datasets,
+            ("vis", "visibility"),
+            type_of_level=("surface",),
+            step_types=("instant",),
+        )
 
         precip_interval = expected_interval
         precip_source = "none"
@@ -210,6 +292,7 @@ def build_composite_map(
         else:
             precip = None
 
+        precip_rate_mmh = np.maximum(0.0, prate_item[0] * 3600.0) if prate_item is not None else None
         cloud = np.clip(cloud_item[0], 0.0, 100.0) if cloud_item is not None else None
         conv_cloud = np.clip(conv_cloud_item[0], 0.0, 100.0) if conv_cloud_item is not None else None
         conv_precip = np.maximum(0.0, acpcp_item[0]) if acpcp_item is not None else None
@@ -222,12 +305,6 @@ def build_composite_map(
         v500 = v_item[0] if v_item is not None else None
 
         convective_score = _storm_grid(cape, cin, conv_precip, conv_cloud, conv_rate, conv_interval)
-        if convective_score is None:
-            confirmed_storm = None
-        else:
-            precip_for_storm = precip if precip is not None else np.zeros_like(convective_score)
-            confirmed_storm = np.where((convective_score >= 3.0) & (precip_for_storm > 0.2), 3.0, 0.0)
-
         rain = _bool_grid(datasets, ("crain",))
         snow = _bool_grid(datasets, ("csnow",))
         cold = _bool_grid(datasets, ("cfrzr",))
@@ -237,8 +314,27 @@ def build_composite_map(
         cold_grid = cold[0] if cold is not None else np.zeros_like(lat2d, dtype=bool)
         ice_grid = ice[0] if ice is not None else np.zeros_like(lat2d, dtype=bool)
 
+        phenomenon_code = _phenomenon_grid(
+            precip_rate_mmh,
+            rain_grid,
+            snow_grid,
+            cold_grid,
+            ice_grid,
+            convective_score,
+            visibility,
+        )
+        if convective_score is None or precip_rate_mmh is None:
+            confirmed_storm = None
+        else:
+            confirmed_storm = np.where(
+                (convective_score >= 3.0) & (precip_rate_mmh >= MAP_THUNDER_PRECIP_RATE_MMH),
+                3.0,
+                0.0,
+            )
+
     for name, value in {
         "осадки": precip,
+        "интенсивность осадков": precip_rate_mmh,
         "облачность": cloud,
         "конвективная облачность": conv_cloud,
         "гроза": confirmed_storm,
@@ -268,6 +364,11 @@ def build_composite_map(
         "precip": precip,
         "precip_interval_hours": float(precip_interval),
         "precip_source": precip_source,
+        "precip_rate_mmh": precip_rate_mmh,
+        "precip_rate_source": "PRATE forecast" if precip_rate_mmh is not None else "unavailable",
+        "phenomenon_rate_threshold_mmh": MAP_ACTIVE_PRECIP_RATE_MMH,
+        "phenomenon_code": phenomenon_code,
+        "phenomenon_source": "PRATE forecast + CRAIN/CSNOW/CFRZR/CICEP forecast",
         "cloud": cloud,
         "convective_cloud": conv_cloud,
         "convective_score": convective_score,
@@ -287,42 +388,6 @@ def build_composite_map(
     }
 
 
-def _draw_legend(fig, ax) -> None:
-    fig.text(0.06, 0.065, "Осадки за интервал, мм: APCP; резерв PRATE×Δt · шкала 0.1 0.5 1 3 7 15+", fontsize=9, color="#263238")
-    fig.text(0.06, 0.04, "Облачность TCDC entire atmosphere, %: 20 40 60 80 100", fontsize=9, color="#263238")
-    fig.text(0.06, 0.018, "⚡ только модельный TSRA · стрелки: ветер 500 гПа · подпись VIS в км", fontsize=9, color="#263238")
-
-
-base._draw_legend = _draw_legend
-
-
-def write_composite_map_png(data: dict, path: Path | None = None, **kwargs) -> Path:
-    return base.write_composite_map_png(data, path, **kwargs)
-
-
-def write_composite_map_gif(frames: list[dict], path: Path | None = None, progress_callback: ProgressCallback | None = None) -> Path:
-    if not frames:
-        raise GfsProfileError("Нет кадров для анимации")
-    if len(frames) > base.MAP_MAX_ANIMATION_FRAMES:
-        raise GfsProfileError(f"Для Telegram-анимации допускается не больше {base.MAP_MAX_ANIMATION_FRAMES} кадров")
-    if path is None:
-        first = frames[0]
-        path = base.CACHE_DIR / f"map_{first['run'].date}_{first['run'].cycle}_anim_{int(time.time())}.gif"
-    basemap = base._validate_basemap(str(frames[0].get("basemap", base.MAP_BASEMAP_DEFAULT)))
-    point: GeoPoint = frames[0]["point"]
-    basemap_overlay = base.local_basemap_overlay(point.lat, point.lon, float(frames[0]["radius_km"]), basemap)
-    images: list[Image.Image] = []
-    with tempfile.TemporaryDirectory() as tmp:
-        for index, frame in enumerate(frames, start=1):
-            _emit(progress_callback, stage="map_animation_frame", message=f"Строю кадр {index}/{len(frames)}", index=index, total=len(frames), lead_hour=frame["lead_hour"])
-            png_path = Path(tmp) / f"frame_{index:03d}.png"
-            write_composite_map_png(frame, png_path, pixel_size=960, basemap_overlay=basemap_overlay)
-            images.append(Image.open(png_path).convert("P", palette=Image.ADAPTIVE, colors=96))
-        images[0].save(path, save_all=True, append_images=images[1:], duration=650, loop=0, optimize=True)
-    _emit(progress_callback, stage="map_animation_done", message="Анимация готова")
-    return path
-
-
 def build_composite_map_frames(
     run: GfsRun,
     leads: list[int],
@@ -333,6 +398,22 @@ def build_composite_map_frames(
 ) -> list[dict]:
     frames: list[dict] = []
     for index, lead in enumerate(leads, start=1):
-        _emit(progress_callback, stage="map_step", message=f"Готовлю срок +{lead} ч", index=index, total=len(leads), lead_hour=lead)
-        frames.append(build_composite_map(run, lead, point, radius_km=radius_km, basemap=basemap, progress_callback=progress_callback))
+        _emit(
+            progress_callback,
+            stage="map_step",
+            message=f"Готовлю срок +{lead} ч",
+            index=index,
+            total=len(leads),
+            lead_hour=lead,
+        )
+        frames.append(
+            build_composite_map(
+                run,
+                lead,
+                point,
+                radius_km=radius_km,
+                basemap=basemap,
+                progress_callback=progress_callback,
+            )
+        )
     return frames

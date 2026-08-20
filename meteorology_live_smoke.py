@@ -7,12 +7,13 @@ fixtures; this smoke verifies that current GFS/NOMADS inventory exposes the
 shortNames, levels and step metadata expected by the implementation.
 """
 
+import numpy as np
+
 from diagnostic_profile import build_diagnostic_profile
 from cloudgram_product import _read_cloudgram_cell
 from composite_map_meteorology import build_composite_map
 from geocode import GeoPoint
 from gfs_core import build_profile, latest_available_run_for_lead
-
 
 POINT = GeoPoint(45.0355, 38.9753, "Краснодар", "smoke")
 PROFILE_LEVELS = (1000, 925, 850, 700, 500)
@@ -74,10 +75,14 @@ def main() -> int:
     _require(map_data["visibility"] is not None, "Map VIS surface не прочитан")
     _require(map_data["u500"] is not None and map_data["v500"] is not None, "Map U/V 500 hPa не прочитаны")
     _require(map_data["precip_interval_hours"] > 0, "Map precipitation interval отсутствует")
+    _require(map_data["precip_rate_mmh"] is not None, "Map PRATE forecast не прочитан: нельзя достоверно ставить значки текущих осадков")
+    _require(map_data["phenomenon_code"] is not None, "Map phenomenon grid отсутствует")
+    _require(np.asarray(map_data["phenomenon_code"]).shape == np.asarray(map_data["x"]).shape, "Map phenomenon grid не совпадает с GFS grid")
     print(
         "map fields: "
         f"shape={map_data['x'].shape}, precip={map_data['precip_source']} "
-        f"Δt={map_data['precip_interval_hours']:g} h, missing={sorted(map_data['missing'])}"
+        f"Δt={map_data['precip_interval_hours']:g} h, rate={map_data['precip_rate_source']}, "
+        f"phenomena={map_data['phenomenon_source']}, missing={sorted(map_data['missing'])}"
     )
 
     run384 = latest_available_run_for_lead(384)
