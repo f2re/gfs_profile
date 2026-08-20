@@ -18,6 +18,7 @@ Telegram-бот и веб-интерфейс для вертикальных, в
 - 📊 `/meteogram` — полноценная временная метеограмма одной модели или ансамбля с PNG/DOCX/PDF.
 - 🗺️ `/map` — одна карта, серия PNG или MP4-анимация.
 - 🕒 `/schedule` — автоматическая отправка продукции по расписанию.
+- ⚙️ `/settings` — основная точка, сохранённые параметры и быстрые действия.
 
 ## Методика и аудит параметров
 
@@ -25,6 +26,7 @@ Telegram-бот и веб-интерфейс для вертикальных, в
 - [`docs/METEOROLOGICAL_PARAMETERS_AUDIT.md`](docs/METEOROLOGICAL_PARAMETERS_AUDIT.md) — исходный аудит, на основании которого исправлены P0/P1-дефекты.
 - [`docs/METEOGRAM.md`](docs/METEOGRAM.md) — модели, ансамблевая статистика, компоновка и ограничения `/meteogram`.
 - [`docs/AUTO_UPDATE.md`](docs/AUTO_UPDATE.md) — автообновление `telegram-bot`, резервирование локальных расхождений, rollback и эксплуатация systemd timer.
+- [`docs/TELEGRAM_PERSONAL_UX.md`](docs/TELEGRAM_PERSONAL_UX.md) — сохранение точек, параметров, быстрые действия и default карты 48 часов.
 
 Критические изменения реализации: `VIS` всегда переводится из метров в километры; GRIB-поля выбираются по shortName/слою/stepType/интервалу; CAPE/CIN берутся с 180–0 гПа AGL; `HGT cloud ceiling` используется как нативная высота AGL, а 20 000 м трактуется как «потолка нет»; общие и конвективные облака/осадки не смешиваются; Aero и Route загружают изобарические гидрометеоры GFS.
 
@@ -74,9 +76,14 @@ sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
 
 ## Telegram UX
 
-`/start` простыми словами перечисляет все пользовательские продукты и показывает постоянную inline-кнопку `📊 Метеограмма`. Кнопка отправки геолокации появляется только при выборе точки и удаляется после ввода.
+`/start` показывает стабильное меню продуктов, основную точку и до двух быстрых действий из последних успешных расчётов. Кнопка отправки геолокации появляется только при выборе точки и удаляется после ввода. Выбранные точки и параметры переживают перезапуск и deploy.
 
-Подробно: [`docs/TELEGRAM_UX_MESSAGES.md`](docs/TELEGRAM_UX_MESSAGES.md).
+Карта нового пользователя по умолчанию — анимация `+0…+48 ч` с шагом 3 часа. Команда `/map Москва +24` по-прежнему означает одну карту, а `/map Москва` использует сохранённый вариант или default 48 часов.
+
+Подробно:
+
+- [`docs/TELEGRAM_UX_MESSAGES.md`](docs/TELEGRAM_UX_MESSAGES.md)
+- [`docs/TELEGRAM_PERSONAL_UX.md`](docs/TELEGRAM_PERSONAL_UX.md)
 
 ## Геокодирование
 
@@ -109,6 +116,7 @@ DADATA_SUGGEST_URL=https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest/
 /meteogram   временной прогноз модели или ансамбля
 /map         карта, серия или анимация
 /schedule    автоматическая отправка
+/settings    точки и сохранённые параметры
 /cycle       последний цикл
 /status      доступность и кэш
 /cancel      сброс сценария
@@ -207,6 +215,18 @@ Open-Meteo не сообщает надёжный исходный цикл пе
 - [`docs/ROUTE_PROFILE_RENDERING.md`](docs/ROUTE_PROFILE_RENDERING.md)
 - [`docs/ROUTE_PROFILE_VISUAL_REQUIREMENTS.md`](docs/ROUTE_PROFILE_VISUAL_REQUIREMENTS.md)
 - [`docs/ROUTE_RISK_CONTRACT.md`](docs/ROUTE_RISK_CONTRACT.md)
+
+## Персональные точки и параметры
+
+Состояние хранится в SQLite:
+
+```env
+TELEGRAM_PREFERENCES_DB=.cache_gfs/telegram_preferences.sqlite3
+```
+
+Сохраняются основная точка, последние точки и валидированные параметры каждого продукта. Временные `run/cycle`, кандидаты геокодинга и Telegram callback state не сохраняются. Автоматические расписания используют собственные снимки и не изменяют интерактивные defaults.
+
+`/cancel` не удаляет пользовательские параметры. Сброс отдельного продукта и полное удаление персональных данных выполняются через `/settings`.
 
 ## Скрытая команда администратора
 
