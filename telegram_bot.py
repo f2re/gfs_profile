@@ -74,6 +74,10 @@ import telegram_personal_ux  # noqa: E402
 
 telegram_personal_ux.install(globals())
 
+import telegram_personal_wizard_policy  # noqa: E402
+
+telegram_personal_wizard_policy.install()
+
 _core_build_application = build_application
 
 
