@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from dataclasses import dataclass
 from threading import Lock
 from typing import Any, Callable
@@ -53,11 +54,15 @@ class MessengerRouter:
         sessions: InMemorySessionStore | None = None,
         default_lead: int = 24,
         progress_interval_seconds: float = 1.5,
+        max_concurrent_gfs: int | None = None,
     ) -> None:
         self.deps = dependencies
         self.sessions = sessions or InMemorySessionStore()
         self.default_lead = int(default_lead)
         self.progress_interval_seconds = max(0.25, float(progress_interval_seconds))
+        if max_concurrent_gfs is None:
+            max_concurrent_gfs = int(os.getenv("MAX_CONCURRENT_GFS", "2"))
+        self.gfs_semaphore = asyncio.Semaphore(max(1, int(max_concurrent_gfs)))
 
     @classmethod
     def default(cls, **kwargs: Any) -> "MessengerRouter":
@@ -297,7 +302,14 @@ class MessengerRouter:
         reporter_task = asyncio.create_task(reporter())
         result = None
         try:
-            result = await asyncio.to_thread(self.deps.profile_builder, point, lead, run, progress_callback=progress)
+            async with self.gfs_semaphore:
+                result = await asyncio.to_thread(
+                    self.deps.profile_builder,
+                    point,
+                    lead,
+                    run,
+                    progress_callback=progress,
+                )
             stop = True
             await reporter_task
             await gateway.edit_text(event.chat_id, status.message_id, result.summary)

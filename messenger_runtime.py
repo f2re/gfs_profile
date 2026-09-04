@@ -22,6 +22,8 @@ SERVICE = MessengerWebhookService.from_env()
 async def lifespan(app: FastAPI):
     telegram_application = build_application()
     await telegram_application.initialize()
+    if telegram_application.post_init:
+        await telegram_application.post_init(telegram_application)
     if telegram_application.updater is None:
         raise RuntimeError("Telegram updater is unavailable")
     await telegram_application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
@@ -33,7 +35,11 @@ async def lifespan(app: FastAPI):
         await SERVICE.tasks.shutdown()
         await telegram_application.updater.stop()
         await telegram_application.stop()
+        if telegram_application.post_stop:
+            await telegram_application.post_stop(telegram_application)
         await telegram_application.shutdown()
+        if telegram_application.post_shutdown:
+            await telegram_application.post_shutdown(telegram_application)
 
 
 app = FastAPI(title="GFS Profile Messenger Runtime", lifespan=lifespan)

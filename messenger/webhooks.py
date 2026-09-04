@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import hmac
+import json
 import logging
 import os
 import time
@@ -20,16 +21,24 @@ LOG = logging.getLogger(__name__)
 MAX_WEBHOOK_BODY_BYTES = 1_048_576
 
 
-def _validate_body_size(request: Request) -> None:
-    raw = request.headers.get("content-length")
-    if not raw:
-        return
-    try:
-        size = int(raw)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="invalid content-length")
-    if size > MAX_WEBHOOK_BODY_BYTES:
+async def _read_json_body(request: Request) -> dict[str, Any]:
+    raw_length = request.headers.get("content-length")
+    if raw_length:
+        try:
+            if int(raw_length) > MAX_WEBHOOK_BODY_BYTES:
+                raise HTTPException(status_code=413, detail="webhook body is too large")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="invalid content-length") from exc
+    body = await request.body()
+    if len(body) > MAX_WEBHOOK_BODY_BYTES:
         raise HTTPException(status_code=413, detail="webhook body is too large")
+    try:
+        payload = json.loads(body or b"{}")
+    except (TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="invalid webhook JSON") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="webhook JSON must be an object")
+    return payload
 
 
 class EventDeduplicator:
@@ -139,14 +148,13 @@ class MessengerWebhookService:
 
         @api.post("/webhooks/max")
         async def max_webhook(request: Request):
-            _validate_body_size(request)
             if self.max_gateway is None:
                 raise HTTPException(status_code=503, detail="MAX gateway is not configured")
             if self.max_secret:
                 supplied = request.headers.get("X-Max-Bot-Api-Secret", "")
                 if not hmac.compare_digest(supplied, self.max_secret):
                     raise HTTPException(status_code=401, detail="invalid MAX webhook secret")
-            payload = await request.json()
+            payload = await _read_json_body(request)
             event = normalize_max_update(payload)
             if event and self.deduplicator.accept("max", event.raw_event_id):
                 self.tasks.spawn(self.router.handle(event, self.max_gateway))
@@ -154,8 +162,7 @@ class MessengerWebhookService:
 
         @api.post("/webhooks/vk")
         async def vk_webhook(request: Request):
-            _validate_body_size(request)
-            payload = await request.json()
+            payload = await _read_json_body(request)
             group_id = str(payload.get("group_id") or "")
             if self.vk_group_id and group_id != self.vk_group_id:
                 raise HTTPException(status_code=403, detail="invalid VK group_id")
