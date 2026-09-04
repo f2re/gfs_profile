@@ -57,20 +57,24 @@ def _result_actions_keyboard(recipe: UserRecipe | None, *, include_schedule: boo
 
 
 def _home_text(user_id: int) -> str:
+    quick = _store().quick(_PLATFORM, user_id, limit=2)
+    if not quick:
+        return personal._SAVED_RECIPES_ORIGINAL_HOME_TEXT(user_id)
     active = user_state.get_active_location(user_id)
     lines = ["🌦 GFS 0.25 · модельные прогнозы",
              f"📍 {active.label} · {active.lat:.4f}, {active.lon:.4f}" if active else "📍 Основная точка ещё не выбрана"]
-    quick = _store().quick(_PLATFORM, user_id, limit=2)
-    if quick:
-        lines += ["", "Быстрые сценарии:", *(_summary(x) for x in quick)]
+    lines += ["", "Быстрые сценарии:", *(_summary(x) for x in quick)]
     return "\n".join([*lines, "", "Выберите продукт.", "ℹ GFS grid, не наблюдение и не радиозонд."])
 
 
 def _home_keyboard(user_id: int) -> InlineKeyboardMarkup:
     base = personal._SAVED_RECIPES_ORIGINAL_HOME_KEYBOARD(user_id)
+    recipes = _store().quick(_PLATFORM, user_id, limit=2)
+    if not recipes:
+        return base
     rows = [list(row) for row in base.inline_keyboard if not any(str(b.callback_data or "").startswith("quick:") for b in row)]
     quick = [[InlineKeyboardButton(("★ " if r.pinned else "▶ ") + _summary(r)[:58], callback_data=f"recipe:run:{r.recipe_id}")]
-             for r in _store().quick(_PLATFORM, user_id, limit=2)]
+             for r in recipes]
     return InlineKeyboardMarkup([*quick, *rows])
 
 
@@ -128,12 +132,23 @@ def _clear_user(user_id: int, *, db_path=None) -> None:
 def _patch_schedule() -> None:
     import telegram_schedule_ux as sx
     async def offer(message, context, spec, user_id: int) -> bool:
-        if user_id <= 0 or not sx._valid_spec(spec) or sx._is_scheduled_message(message): return False
+        if user_id <= 0 or not sx._valid_spec(spec) or sx._is_scheduled_message(message):
+            return False
+        try:
+            free = len(sx.schedules.schedule_store().list_for_user(user_id)) < sx.schedules.MAX_SCHEDULES_PER_USER
+        except Exception:
+            return False
+        if not free:
+            context.user_data.pop(sx.QUICK_SPEC_KEY, None)
+            return False
+        context.user_data[sx.QUICK_SPEC_KEY] = {
+            "product": str(spec["product"]),
+            "point": dict(spec["point"]),
+            "params": dict(spec["params"]),
+        }
         recipe = _store().find_matching(_PLATFORM, user_id, str(spec["product"]), dict(spec["params"]), dict(spec["point"])) or _store().latest_for_product(_PLATFORM, user_id, str(spec["product"]))
-        try: free = len(sx.schedules.schedule_store().list_for_user(user_id)) < sx.schedules.MAX_SCHEDULES_PER_USER
-        except Exception: free = False
-        await message.reply_text("Действия с результатом:", reply_markup=_result_actions_keyboard(recipe, include_schedule=free))
-        return free
+        await message.reply_text("Действия с результатом:", reply_markup=_result_actions_keyboard(recipe, include_schedule=True))
+        return True
     sx.offer_schedule_for_result = offer
 
 
@@ -154,6 +169,7 @@ def install(namespace: dict[str, Any]) -> None:
     global _INSTALLED
     if _INSTALLED: return
     _INSTALLED = True
+    personal._SAVED_RECIPES_ORIGINAL_HOME_TEXT = personal.home_text
     personal._SAVED_RECIPES_ORIGINAL_HOME_KEYBOARD = personal.home_keyboard
     personal._SAVED_RECIPES_ORIGINAL_SETTINGS_TEXT = personal._settings_text
     personal._SAVED_RECIPES_ORIGINAL_SETTINGS_KEYBOARD = personal._settings_keyboard
