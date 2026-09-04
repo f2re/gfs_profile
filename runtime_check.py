@@ -13,6 +13,8 @@ REQUIRED_MODULES = (
     "cfgrib",
     "eccodes",
     "telegram",
+    "fastapi",
+    "uvicorn",
     "matplotlib",
     "shapefile",
     "PIL",
@@ -84,7 +86,22 @@ OPTIONAL_RUNTIME_MODULES = (
     "telegram_bot_core",
     "telegram_concise_ux",
     "telegram_result_copy",
+    "messenger.contracts",
+    "messenger.callback_codec",
+    "messenger.state",
+    "messenger.profile_service",
+    "messenger.router",
+    "messenger.max.client",
+    "messenger.max.adapter",
+    "messenger.max.gateway",
+    "messenger.vk.client",
+    "messenger.vk.adapter",
+    "messenger.vk.gateway",
+    "messenger.webhooks",
+    "telegram_profile_common",
     "telegram_bot",
+    "messenger_launcher",
+    "messenger_runtime",
 )
 
 
@@ -115,8 +132,8 @@ def main() -> int:
         return 1
 
     print(
-        "Runtime check OK: GFS/GRIB, DaData, Skew-T, route, "
-        "model/ensemble meteograms, schedules and Telegram UX import successfully"
+        "Runtime check OK: GFS/GRIB, DaData, Skew-T, route, model/ensemble "
+        "meteograms, schedules and Telegram/MAX/VK gateway modules import successfully"
     )
     return 0
 
