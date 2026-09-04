@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from gfs_core import GfsRun, latest_available_run_for_lead, validate_lead
+
 from .contracts import CommonProductResult, ProductAttachment, ProgressEvent
 
 AERO_DIAGRAM_TYPE = "skewt"
@@ -27,7 +29,7 @@ LEAD_RE = re.compile(
 class ParsedAeroInput:
     location_query: str
     lead_hour: int
-    run: Any | None
+    run: GfsRun | None
     lead_from_user: bool
     diagram_type: str = AERO_DIAGRAM_TYPE
 
@@ -39,14 +41,12 @@ def parse_aero_input(raw_text: str, default_lead: int = 24) -> ParsedAeroInput:
     compatibility and ignored. The public product is always Skew-T log-P.
     """
 
-    from gfs_core import GfsRun, validate_lead
-
     text = str(raw_text or "").strip()
     type_match = AERO_TYPE_RE.search(text)
     if type_match:
         text = (text[: type_match.start()] + text[type_match.end() :]).strip()
 
-    run = None
+    run: GfsRun | None = None
     run_match = RUN_RE.search(text)
     if run_match:
         run = GfsRun(date=run_match.group("date"), cycle=run_match.group("cycle"))
@@ -115,7 +115,7 @@ def format_aero_summary(result: Any, point: Any) -> str:
 def build_aero_product_result(
     point: Any,
     lead_hour: int,
-    run: Any | None = None,
+    run: GfsRun | None = None,
     *,
     progress_callback: Callable[[ProgressEvent], None] | None = None,
 ) -> CommonProductResult:
@@ -126,7 +126,6 @@ def build_aero_product_result(
     """
 
     from aero_product import build_aero_product
-    from gfs_core import latest_available_run_for_lead, validate_lead
 
     lead_hour = validate_lead(int(lead_hour))
     if progress_callback:

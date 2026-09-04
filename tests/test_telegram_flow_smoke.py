@@ -174,7 +174,7 @@ class TelegramFlowSmokeTests(unittest.TestCase):
             semaphore = asyncio.Semaphore(1)
             cases = [
                 (
-                    "telegram_aero.latest_available_run_for_lead",
+                    "messenger.aero_service.latest_available_run_for_lead",
                     lambda message: run_aero_product(message, point, ParsedAeroRequest("Москва", 24, None), semaphore),
                 ),
                 (
