@@ -159,7 +159,14 @@ class MaxApiClient:
         token = payload.get("token") or slot.get("token")
         if not token:
             raise PlatformPermanentError("MAX upload returned no token")
+        # MAX attachments accept the media token in attachments.payload.token.
+        # Do not leak upload-host processing fields such as retval into message JSON.
         return {"token": str(token)}
+
+    def list_subscriptions(self) -> list[dict[str, Any]]:
+        payload = self._request("GET", "/subscriptions")
+        items = payload.get("subscriptions") or []
+        return [dict(item) for item in items if isinstance(item, dict)]
 
     def subscribe(self, url: str, secret: str, update_types: list[str]) -> dict[str, Any]:
         return self._request(

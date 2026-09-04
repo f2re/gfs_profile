@@ -102,6 +102,7 @@ OPTIONAL_RUNTIME_MODULES = (
     "telegram_bot",
     "messenger_launcher",
     "messenger_runtime",
+    "register_messenger_webhooks",
 )
 
 
