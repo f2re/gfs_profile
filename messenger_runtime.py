@@ -2,8 +2,9 @@ from __future__ import annotations
 
 """Single-process Telegram + MAX + VK runtime candidate.
 
-The current deploy still starts telegram_bot.py. This module is intentionally
-not activated until gateway CI and server webhook configuration are complete.
+The current deploy still starts telegram_bot.py unless the multi-messenger
+runtime flag is enabled. MAX/VK use the same persistent recipe service for the
+currently implemented common profile vertical slice.
 """
 
 from contextlib import asynccontextmanager
@@ -12,10 +13,11 @@ from fastapi import FastAPI
 from telegram import Update
 
 from app import app as legacy_web_app
+from messenger.personal_router import PersonalMessengerRouter
 from messenger.webhooks import MessengerWebhookService
 from telegram_bot import build_application
 
-SERVICE = MessengerWebhookService.from_env()
+SERVICE = MessengerWebhookService.from_env(router=PersonalMessengerRouter.default())
 
 
 @asynccontextmanager

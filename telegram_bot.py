@@ -76,6 +76,10 @@ import telegram_personal_ux  # noqa: E402
 
 telegram_personal_ux.install(globals())
 
+import telegram_saved_recipes  # noqa: E402
+
+telegram_saved_recipes.install(globals())
+
 import telegram_personal_wizard_policy  # noqa: E402
 
 telegram_personal_wizard_policy.install()
@@ -97,6 +101,7 @@ def build_application():
         ),
         group=-3,
     )
+    telegram_saved_recipes.register(application, globals())
     telegram_personal_ux.register(application, globals())
     telegram_concise_ux.register(application, globals())
     register_meteogram_handlers(application)
