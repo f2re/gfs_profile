@@ -90,7 +90,11 @@ OPTIONAL_RUNTIME_MODULES = (
     "messenger.callback_codec",
     "messenger.state",
     "messenger.profile_service",
+    "messenger.aero_service",
     "messenger.router",
+    "messenger.personal_router",
+    "messenger.aero_router",
+    "messenger.user_recipes",
     "messenger.max.client",
     "messenger.max.adapter",
     "messenger.max.gateway",
@@ -99,6 +103,7 @@ OPTIONAL_RUNTIME_MODULES = (
     "messenger.vk.gateway",
     "messenger.webhooks",
     "telegram_profile_common",
+    "telegram_saved_recipes",
     "telegram_bot",
     "messenger_launcher",
     "messenger_runtime",
@@ -133,8 +138,8 @@ def main() -> int:
         return 1
 
     print(
-        "Runtime check OK: GFS/GRIB, DaData, Skew-T, route, model/ensemble "
-        "meteograms, schedules and Telegram/MAX/VK gateway modules import successfully"
+        "Runtime check OK: GFS/GRIB, DaData, common profile/aero services, "
+        "route, model/ensemble meteograms, schedules and Telegram/MAX/VK gateways import successfully"
     )
     return 0
 

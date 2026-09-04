@@ -10,7 +10,7 @@ platform + user + product + point + params
 
 ## Контракт
 
-Каждый recipe получает устойчивый `recipe_id`. В подпись и хранилище не попадают `run/cycle`, message/status ids, callback ids, кандидаты геокодинга, wizard step и schedule setup state. Поэтому повтор всегда выполняет тот же пользовательский сценарий на актуальном доступном запуске модели.
+Каждый recipe получает устойчивый `recipe_id`. В подпись и хранилище не попадают `run/cycle`, message/status ids, callback ids, кандидаты геокодинга, wizard step и schedule setup state. Поэтому повтор выполняет тот же пользовательский сценарий на актуальном доступном запуске модели.
 
 Одинаковый recipe дедуплицируется: увеличивается `success_count` и обновляется `last_success_at`. Для одного пользователя/платформы хранятся до 24 recent и до 8 закреплённых сценариев.
 
@@ -47,7 +47,23 @@ TELEGRAM_PREFERENCES_DB=.cache_gfs/telegram_preferences.sqlite3
 MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
 ```
 
-На текущем этапе saved recipe UX подключён к уже реализованному общему `/profile` vertical slice MAX/VK: успешный профиль сохраняется, `/start` показывает быстрые profile recipes, `/profile` без аргументов открывает закреплённый/последний сценарий, а callbacks используют `recipe_id` и не требуют живого RAM-state.
+Saved recipe UX подключён к двум общим vertical slices:
+
+### `/profile`
+
+Успешный профиль сохраняет точку и lead. `/start` показывает быстрый recipe, `/profile` без аргументов открывает закреплённый/последний вариант, repeat запускает новый опубликованный GFS run.
+
+### `/aero`
+
+Успешная аэродиаграмма сохраняет:
+
+```text
+product=aero
+point={lat, lon, label}
+params={lead, diagram_type=skewt}
+```
+
+`run/cycle` не сохраняются. `/aero` без аргументов открывает закреплённый или последний успешный сценарий; pin/repeat используют тот же устойчивый `recipe_id`, что профиль. Repeat передаёт `run=None` и выбирает свежий опубликованный цикл.
 
 Для остальных продуктов recipe UX в MAX/VK подключается одновременно с переносом соответствующего продукта в общий messenger service. Telegram уже поддерживает recipes для существующих продуктов.
 
@@ -62,4 +78,5 @@ MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
 - Telegram/MAX/VK изолированы по platform;
 - callback работает после очистки session state;
 - repeat использует новый run;
+- `/profile` и `/aero` MAX/VK используют общий recipe store;
 - schedule использует точный snapshot recipe.

@@ -1,10 +1,10 @@
 # 🌦️ Профиль атмосферы GFS 0.25
 
-Telegram-бот и веб-интерфейс для вертикальных, временных и маршрутных продуктов GFS 0.25. Это профессиональный модельный инструмент, а не наблюдение.
+Telegram-бот, MAX/VK messenger runtime и веб-интерфейс для вертикальных, временных и маршрутных продуктов GFS 0.25. Это профессиональный модельный инструмент, а не наблюдение.
 
 ## Что умеет
 
-- 📍 Точка по координатам, городу или Telegram-геолокации.
+- 📍 Точка по координатам, городу или геолокации мессенджера.
 - 🇷🇺 DaData Suggestions — основной геокодер; локальный справочник и Nominatim — резерв.
 - ⏱️ Сроки GFS до `+384 ч`.
 - 🔄 Progress для загрузки GRIB2, чтения `cfgrib/eccodes` и построения продукции.
@@ -20,6 +20,8 @@ Telegram-бот и веб-интерфейс для вертикальных, в
 - 🕒 `/schedule` — автоматическая отправка продукции по расписанию.
 - ⚙️ `/settings` — основная точка, сохранённые параметры и быстрые действия.
 
+Telegram поддерживает весь текущий набор продуктов. В общем Telegram+MAX+VK messenger service уже вынесены `/profile` и `/aero`; следующие продукты подключаются по одному vertical slice без дублирования метеорологической логики.
+
 ## Методика и аудит параметров
 
 - [`docs/METEOROLOGICAL_METHODS.md`](docs/METEOROLOGICAL_METHODS.md) — действующая реализация: точные поля GFS, формулы, единицы, пороги, тесты и ограничения.
@@ -27,6 +29,8 @@ Telegram-бот и веб-интерфейс для вертикальных, в
 - [`docs/METEOGRAM.md`](docs/METEOGRAM.md) — модели, ансамблевая статистика, компоновка и ограничения `/meteogram`.
 - [`docs/AUTO_UPDATE.md`](docs/AUTO_UPDATE.md) — автообновление `telegram-bot`, резервирование локальных расхождений, rollback и эксплуатация systemd timer.
 - [`docs/TELEGRAM_PERSONAL_UX.md`](docs/TELEGRAM_PERSONAL_UX.md) — сохранение точек, параметров, быстрые действия и default карты 48 часов.
+- [`docs/MESSENGER_RUNTIME.md`](docs/MESSENGER_RUNTIME.md) — единый runtime Telegram+MAX+VK и фактический паритет продуктов.
+- [`docs/MESSENGER_AERO_SERVICE.md`](docs/MESSENGER_AERO_SERVICE.md) — общий `/aero`, progress/result contract и saved recipes для MAX/VK.
 
 Критические изменения реализации: `VIS` всегда переводится из метров в километры; GRIB-поля выбираются по shortName/слою/stepType/интервалу; CAPE/CIN берутся с 180–0 гПа AGL; `HGT cloud ceiling` используется как нативная высота AGL, а 20 000 м трактуется как «потолка нет»; общие и конвективные облака/осадки не смешиваются; Aero и Route загружают изобарические гидрометеоры GFS.
 
@@ -84,6 +88,17 @@ sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
 
 - [`docs/TELEGRAM_UX_MESSAGES.md`](docs/TELEGRAM_UX_MESSAGES.md)
 - [`docs/TELEGRAM_PERSONAL_UX.md`](docs/TELEGRAM_PERSONAL_UX.md)
+
+## MAX/VK parity
+
+Общий messenger runtime использует одни и те же `profile_service` и `aero_service` для Telegram/MAX/VK. Для `/profile` и `/aero` в MAX/VK работают город/координаты, неоднозначный город, native location, прямой `Москва +24`, быстрые сроки, пагинация до `+384`, редактируемый progress и saved recipes. Repeat не сохраняет старый `run/cycle`, поэтому по умолчанию выбирается свежий опубликованный GFS cycle.
+
+Подробно:
+
+- [`MAX_BOT.md`](MAX_BOT.md)
+- [`VK_BOT.md`](VK_BOT.md)
+- [`docs/MESSENGER_RUNTIME.md`](docs/MESSENGER_RUNTIME.md)
+- [`docs/MESSENGER_SAVED_RECIPES.md`](docs/MESSENGER_SAVED_RECIPES.md)
 
 ## Геокодирование
 
@@ -172,6 +187,8 @@ Open-Meteo не сообщает надёжный исходный цикл пе
 /aero 59.939 30.316 run=20260714/00 +12
 ```
 
+`/aero` использует общий `messenger/aero_service.py`: выбор актуального run, progress и `CommonProductResult` едины для Telegram, MAX и VK. Telegram остаётся renderer/adapter, а не отдельной реализацией расчёта.
+
 Продукт содержит:
 
 - красную кривую температуры среды;
@@ -188,6 +205,7 @@ Open-Meteo не сообщает надёжный исходный цикл пе
 Подробно:
 
 - [`docs/AERO_DIAGRAM.md`](docs/AERO_DIAGRAM.md)
+- [`docs/MESSENGER_AERO_SERVICE.md`](docs/MESSENGER_AERO_SERVICE.md)
 - [`docs/METEOROLOGICAL_METHODS.md`](docs/METEOROLOGICAL_METHODS.md)
 
 ## Маршрутный профиль `/route`

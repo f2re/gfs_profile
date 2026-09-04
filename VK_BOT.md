@@ -1,6 +1,6 @@
 # VK Bot — текущее состояние и эксплуатация
 
-Статус на 2026-09-04: Callback API transport, общий `/profile` vertical slice и сохранённые profile-сценарии реализованы в ветке `telegram-bot`. Остальные продукты переносятся в общий messenger service по тем же контрактам, без копирования метеорологической логики.
+Статус на 2026-09-04: Callback API transport, общие `/profile` и `/aero` vertical slices и сохранённые сценарии этих продуктов реализованы в рабочей ветке `telegram-bot`. Остальные продукты переносятся в общий messenger service без копирования метеорологической логики.
 
 ## Архитектура
 
@@ -56,27 +56,48 @@ v1|recipe|toggle|<id>
 v1|recipe|change|<id>
 ```
 
-`recipe_id` позволяет повторять и закреплять сценарий после рестарта процесса без process-local wizard state.
+`recipe_id` позволяет повторять и закреплять сценарий после restart процесса без process-local wizard state.
 
-## Реализованный `/profile` flow
+## Реализованный `/profile`
 
-Через общий service работают:
+Через общий service работают город/координаты, `Москва +24`, неоднозначный город, native geo/location, быстрые сроки, все сроки до `+384`, редактируемый progress, общий GFS run selection и одинаковая итоговая сводка PNG/CSV.
 
-- `/start`;
-- `/profile`;
-- город/координаты;
-- `Москва` → выбор срока;
-- `Москва +24` → немедленный профиль;
-- неоднозначный город → callback-выбор;
-- native geo/location;
-- быстрые `+0,+3,+6,+12,+24,+48`;
-- все сроки до `+384`;
-- `/status`, `/cancel`;
-- редактируемый progress/status message;
-- общий GFS run selection;
-- одинаковая итоговая сводка, PNG и CSV.
+## Реализованный `/aero`
 
-## Сохранённые profile-сценарии
+VK использует тот же `messenger/aero_service.py`, что Telegram и MAX. Расчётная часть не находится в VK adapter/gateway.
+
+Flow:
+
+```text
+/aero Москва +24
+→ сразу расчёт
+
+/aero
+→ город / координаты / геолокация
+→ неоднозначный город при необходимости
+→ срок
+→ расчёт
+```
+
+Доступны быстрые `+0,+3,+6,+12,+24,+48` и пагинация канонических сроков до `+384`.
+
+Результат одинаков с MAX/Telegram по метеорологическому contract:
+
+- фактический GFS run/cycle UTC;
+- lead и valid UTC;
+- requested point;
+- GFS grid point;
+- Skew-T log-P;
+- годограф;
+- PNG;
+- GFS явно обозначен как модель;
+- icing/CAT обозначены как модельные прокси.
+
+`/aero` всегда строит Skew-T log-P с годографом; отдельного переключателя Stüve/Emagram нет.
+
+Подробно: `docs/MESSENGER_AERO_SERVICE.md` и `docs/AERO_DIAGRAM.md`.
+
+## Сохранённые сценарии
 
 MAX/VK используют общий messenger-neutral store:
 
@@ -84,11 +105,9 @@ MAX/VK используют общий messenger-neutral store:
 MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
 ```
 
-Успешный профиль сохраняет точку и lead. `run/cycle` не входит в recipe. `/start` показывает до двух быстрых profile-сценариев; `/profile` без аргументов открывает закреплённый или последний успешный. Повтор всегда запускает актуальный опубликованный GFS run.
+Для `/profile` и `/aero` успешный результат сохраняет точку и параметры. `run/cycle` не входит в recipe. `/start` показывает до двух быстрых сценариев; команда продукта без аргументов открывает закреплённый или последний успешный вариант. Repeat выбирает актуальный опубликованный GFS run.
 
 Recipes изолированы по `platform + user_id`, поэтому одинаковый числовой ID в MAX и VK не означает одного пользователя.
-
-Подробно: `docs/MESSENGER_SAVED_RECIPES.md`.
 
 ## Media
 
@@ -96,11 +115,9 @@ VK gateway отвечает за platform upload flow для изображен�
 
 ## Следующий этап паритета
 
-Последовательно вынести в общий service:
+Следующий vertical slice — `/windgram`, затем:
 
 ```text
-/aero
-/windgram
 /cloudgram
 /meteogram
 /map
