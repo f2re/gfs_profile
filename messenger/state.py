@@ -13,6 +13,7 @@ class FlowState:
     point: Any | None = None
     candidates: list[Any] = field(default_factory=list)
     pending_lead: int | None = None
+    pending_run: Any | None = None
     lead_page: int = 0
     updated_at: float = field(default_factory=time.time)
 
