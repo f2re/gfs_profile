@@ -80,6 +80,10 @@ import telegram_saved_recipes  # noqa: E402
 
 telegram_saved_recipes.install(globals())
 
+import telegram_saved_recipes_schedule_compat  # noqa: E402
+
+telegram_saved_recipes_schedule_compat.install()
+
 import telegram_personal_wizard_policy  # noqa: E402
 
 telegram_personal_wizard_policy.install()
