@@ -22,6 +22,7 @@ import route_profile_rendering  # noqa: F401,E402
 import telegram_concise_ux  # noqa: E402
 import telegram_result_copy  # noqa: E402
 import meteorological_policy  # noqa: E402
+import telegram_profile_common  # noqa: E402
 
 # Presentation and product policies are applied before handlers are built.
 telegram_concise_ux.install(globals())
@@ -29,6 +30,7 @@ telegram_result_copy.install()
 aero_single_mode.install(globals())
 admin_product_policy.install(globals())
 meteorological_policy.install(globals())
+telegram_profile_common.install(globals())
 
 # All product switches, /start and /cancel must also discard the independent
 # meteogram wizard, otherwise a later plain-text message could resume stale state.
