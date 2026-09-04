@@ -42,7 +42,7 @@ class AeroServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             png = Path(tmp) / "aero.png"
             png.write_bytes(b"png")
-            with patch("gfs_core.latest_available_run_for_lead", return_value=run) as latest:
+            with patch("messenger.aero_service.latest_available_run_for_lead", return_value=run) as latest:
                 with patch("aero_product.build_aero_product", return_value=(profile, png)) as builder:
                     result = build_aero_product_result(
                         point,
@@ -83,7 +83,7 @@ class AeroServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             png = Path(tmp) / "aero.png"
             png.write_bytes(b"png")
-            with patch("gfs_core.latest_available_run_for_lead") as latest:
+            with patch("messenger.aero_service.latest_available_run_for_lead") as latest:
                 with patch("aero_product.build_aero_product", return_value=(profile, png)):
                     result = build_aero_product_result(point, 12, run)
             latest.assert_not_called()
