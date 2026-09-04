@@ -1,6 +1,6 @@
 # MAX Bot — текущее состояние и эксплуатация
 
-Статус на 2026-09-04: transport/webhook, общий `/profile` vertical slice и сохранённые profile-сценарии реализованы в ветке `telegram-bot`. Остальные продукты последовательно переносятся в общий messenger service; отдельной метеорологической логики MAX не содержит.
+Статус на 2026-09-04: transport/webhook, общие `/profile` и `/aero` vertical slices и сохранённые сценарии этих продуктов реализованы в рабочей ветке `telegram-bot`. Остальные продукты последовательно переносятся в общий messenger service; отдельной метеорологической логики MAX не содержит.
 
 ## Архитектура
 
@@ -23,7 +23,7 @@ MAX Update
 https://platform-api2.max.ru
 ```
 
-Токен передаётся заголовком `Authorization`. Production использует Webhook через `POST /subscriptions`; при активной подписке Long Polling не работает. Webhook должен быть HTTPS с доверенным TLS, а при указанном `secret` проверяется `X-Max-Bot-Api-Secret`.
+Токен передаётся заголовком `Authorization`. Production использует Webhook через `POST /subscriptions`; при активной подписке Long Polling не используется. Webhook должен быть HTTPS с доверенным TLS, а при указанном `secret` проверяется `X-Max-Bot-Api-Secret`.
 
 Основные источники:
 
@@ -48,7 +48,7 @@ Adapter нормализует текст, команды, location, callback pa
 
 Renderer поддерживает native callback и `request_geo_location`. Callback payload versioned и не зависит только от RAM-state.
 
-Для сохранённых сценариев используется устойчивый `recipe_id`:
+Saved recipe callbacks используют устойчивый `recipe_id`:
 
 ```text
 v1|recipe|run|<id>
@@ -56,38 +56,68 @@ v1|recipe|toggle|<id>
 v1|recipe|change|<id>
 ```
 
-Поэтому повтор/закрепление работает после рестарта процесса и не требует живого wizard state.
+Поэтому repeat/pin работают после restart процесса.
 
-## Реализованный `/profile` flow
+## Реализованный `/profile`
 
-В MAX через общий service работают:
+Через общий service работают:
 
-- `/start`;
 - `/profile`;
 - `Москва` → выбор срока;
 - `Москва +24` → немедленный расчёт;
-- неоднозначный город → inline/callback выбор;
-- location → выбор срока;
+- неоднозначный город;
+- native location;
 - быстрые `+0,+3,+6,+12,+24,+48`;
-- все сроки до `+384` с пагинацией;
-- `/status`, `/cancel`;
+- все сроки до `+384`;
 - одно редактируемое status message;
-- актуальный GFS run для требуемого lead;
-- общая сводка, PNG и CSV.
+- общий GFS run selection;
+- одинаковая сводка, PNG и CSV.
 
-## Сохранённые profile-сценарии
+## Реализованный `/aero`
 
-Успешный профиль сохраняется в messenger-neutral SQLite:
+MAX использует тот же `messenger/aero_service.py`, что Telegram и VK. Метеорологическое ядро остаётся в существующих `aero_product.py`/`diagnostic_profile`.
+
+Flow:
+
+```text
+/aero Москва +24
+→ сразу Skew-T
+
+/aero
+→ город / координаты / геолокация
+→ неоднозначность при необходимости
+→ срок
+→ Skew-T
+```
+
+Поддерживаются быстрые сроки `+0,+3,+6,+12,+24,+48` и все сроки до `+384` с пагинацией.
+
+Результат содержит:
+
+- фактический GFS run/cycle UTC;
+- lead и valid UTC;
+- requested point;
+- GFS grid point;
+- Skew-T log-P и годограф;
+- PNG;
+- явную маркировку GFS как модели;
+- icing/CAT только как модельные прокси.
+
+Тип диаграммы пользователь не выбирает: `/aero` всегда означает Skew-T log-P с годографом.
+
+Подробно: `docs/MESSENGER_AERO_SERVICE.md` и `docs/AERO_DIAGRAM.md`.
+
+## Сохранённые сценарии
+
+Messenger-neutral SQLite:
 
 ```env
 MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
 ```
 
-Сценарий содержит точку и срок, но не `run/cycle`. `/start` показывает до двух быстрых profile recipes. `/profile` без аргументов открывает последний закреплённый сценарий, иначе последний успешный. Повтор передаёт `run=None`, поэтому выбирается свежий опубликованный цикл.
+Для `/profile` и `/aero` успешный расчёт сохраняет точку и параметры, но не `run/cycle`. `/start` показывает до двух быстрых сценариев. Команда без аргументов открывает закреплённый или последний успешный вариант. Repeat передаёт `run=None`, поэтому выбирается свежий опубликованный цикл.
 
-Можно закреплять/откреплять сценарии; callbacks stateless по `recipe_id`. Хранилище изолировано по `platform + user_id`, поэтому MAX и VK не смешивают пользовательское состояние.
-
-Подробно: `docs/MESSENGER_SAVED_RECIPES.md`.
+Хранилище изолировано по `platform + user_id`, поэтому MAX и VK не смешивают пользовательское состояние.
 
 ## Media
 
@@ -100,7 +130,7 @@ POST /uploads
 → POST /messages с attachment
 ```
 
-Поддерживаются PNG/CSV и animation/video transport по возможностям gateway. Retry/backoff применяется к `429`, `5xx` и network errors.
+PNG отправляется как image attachment; файловые продукты используют file attachment. Retry/backoff применяется к `429`, `5xx` и network errors.
 
 ## Конфигурация
 
@@ -116,11 +146,9 @@ Runtime слушает loopback; публичный HTTPS завершается
 
 ## Следующий этап паритета
 
-В общий service последовательно переносятся:
+Следующий vertical slice — `/windgram`, затем:
 
 ```text
-/aero
-/windgram
 /cloudgram
 /meteogram
 /map
@@ -129,4 +157,4 @@ Runtime слушает loopback; публичный HTTPS завершается
 /schedule
 ```
 
-Каждый новый продукт должен сразу использовать общий result contract, progress contract и `UserRecipeStore`. Telegram-only копирование бизнес-логики запрещено.
+Каждый новый продукт должен использовать общий result contract, progress contract и `UserRecipeStore`. MAX-копии GFS/geocoder/product logic запрещены.
