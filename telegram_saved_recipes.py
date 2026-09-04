@@ -195,8 +195,8 @@ def register(application, namespace: dict[str, Any]) -> None:
         except ValueError: await query.answer("Сценарий устарел"); raise ApplicationHandlerStop
         recipe=store.get(_PLATFORM,uid,rid)
         if not recipe: await query.answer("Сценарий недоступен"); raise ApplicationHandlerStop
-        if action=="view": await query.answer(); text,kb=_card(recipe); await query.edit_message_text(text,reply_markup=kb); raise AplicationHandlerStop
-        if action=="run": await query.answer(); await query.edit_message_text(f"Запускаю: {_summary(recipe)}…"�; await _run(update,context,namespace,recipe); raise ApplicationHandlerStop
+        if action=="view": await query.answer(); text,kb=_card(recipe); await query.edit_message_text(text,reply_markup=kb); raise ApplicationHandlerStop
+        if action=="run": await query.answer(); await query.edit_message_text(f"Запускаю: {_summary(recipe)}…"); await _run(update,context,namespace,recipe); raise ApplicationHandlerStop
         if action=="edit": await query.answer(); await personal._edit_preference_card(update,context,namespace,_pref(recipe)); raise ApplicationHandlerStop
         if action=="toggle":
             try: updated=store.toggle_pinned(_PLATFORM,uid,rid)
@@ -204,7 +204,7 @@ def register(application, namespace: dict[str, Any]) -> None:
             await query.answer("Закреплено" if updated and updated.pinned else "Откреплено"); text,kb=_card(updated or recipe); await query.edit_message_text(text,reply_markup=kb); raise ApplicationHandlerStop
         if action=="schedule":
             await query.answer(); import telegram_schedule_ux as sx; import telegram_schedules as schedules
-            if not _schedulable(recipe) or not recipe.point: raise AplicationHandlerStop
+            if not _schedulable(recipe) or not recipe.point: raise ApplicationHandlerStop
             try:
                 if len(schedules.schedule_store().list_for_user(uid)) >= schedules.MAX_SCHEDULES_PER_USER: await schedules._show_manager(query,uid); raise ApplicationHandlerStop
             except schedules.ScheduleError: await schedules._show_manager(query,uid); raise ApplicationHandlerStop
