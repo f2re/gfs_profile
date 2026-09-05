@@ -1,6 +1,6 @@
 # MAX Bot — текущее состояние и эксплуатация
 
-Статус на 2026-09-04: transport/webhook, общие `/profile` и `/aero` vertical slices и сохранённые сценарии этих продуктов реализованы в рабочей ветке `telegram-bot`. Остальные продукты последовательно переносятся в общий messenger service; отдельной метеорологической логики MAX не содержит.
+Статус на 2026-09-05: MAX transport/webhook, общие `/profile` и `/aero` vertical slices, saved recipes и штатный production multi-messenger runtime реализованы в рабочей ветке `telegram-bot`. Остальные продукты последовательно переносятся в общий messenger service; отдельной метеорологической логики MAX не содержит.
 
 ## Архитектура
 
@@ -33,6 +33,43 @@ https://platform-api2.max.ru
 - https://dev.max.ru/docs-api/changelog-api
 
 Перед существенным изменением transport/client повторно сверять reference и changelog.
+
+## Production install/deploy
+
+MAX больше не включается отдельным runtime-скриптом после Telegram deploy. Штатные:
+
+```bash
+bash install_telegram_bot.sh
+sudo bash deploy_telegram_bot.sh --yes
+```
+
+устанавливают systemd entrypoint:
+
+```text
+messenger_launcher.py
+```
+
+При `MESSENGER_RUNTIME_ENABLED=1` тот же процесс одновременно держит Telegram polling, MAX/VK webhook и web/API.
+
+Порядок MAX deploy:
+
+```text
+offline env preflight
+→ restart launcher
+→ GET /ready
+→ register_messenger_webhooks.py
+→ POST /subscriptions
+```
+
+То есть MAX subscription не создаётся до готовности локального runtime endpoint.
+
+Публичный URL должен быть проксирован Nginx/HAProxy на:
+
+```text
+127.0.0.1:8081/webhooks/max
+```
+
+или на другой `MESSENGER_RUNTIME_HOST/PORT`.
 
 ## Поддерживаемые события
 
@@ -119,6 +156,18 @@ MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
 
 Хранилище изолировано по `platform + user_id`, поэтому MAX и VK не смешивают пользовательское состояние.
 
+## Общие лимиты ресурсов
+
+MAX не получает отдельную квоту поверх Telegram. В production runtime используются process-wide параметры:
+
+```env
+MAX_CONCURRENT_GFS=2
+MAX_CONCURRENT_GEOCODE=2
+MAX_CONCURRENT_METEOGRAM=2
+```
+
+Например, при GFS limit=2 два расчёта суммарно по Telegram/MAX/VK/web могут выполняться, третий ждёт permit.
+
 ## Media
 
 Client/gateway использует схему:
@@ -142,6 +191,14 @@ MAX_WEBHOOK_SECRET=
 MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
 ```
 
+Проверка после deploy:
+
+```bash
+curl -fsS http://127.0.0.1:8081/ready
+sudo bash deploy_telegram_bot.sh --status
+sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
+```
+
 Runtime слушает loopback; публичный HTTPS завершается Nginx/HAProxy. MAX и Telegram работают в одном Python process, без Redis/Celery.
 
 ## Следующий этап паритета
@@ -150,11 +207,11 @@ Runtime слушает loopback; публичный HTTPS завершается
 
 ```text
 /cloudgram
-/meteogram
 /map
+/meteogram
 /route
 /settings
 /schedule
 ```
 
-Каждый новый продукт должен использовать общий result contract, progress contract и `UserRecipeStore`. MAX-копии GFS/geocoder/product logic запрещены.
+Каждый новый продукт должен использовать общий result contract, progress contract, `RuntimeResources` и `UserRecipeStore`. MAX-копии GFS/geocoder/product logic запрещены.

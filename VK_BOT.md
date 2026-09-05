@@ -1,6 +1,6 @@
 # VK Bot — текущее состояние и эксплуатация
 
-Статус на 2026-09-04: Callback API transport, общие `/profile` и `/aero` vertical slices и сохранённые сценарии этих продуктов реализованы в рабочей ветке `telegram-bot`. Остальные продукты переносятся в общий messenger service без копирования метеорологической логики.
+Статус на 2026-09-05: Callback API transport, общие `/profile` и `/aero` vertical slices, saved recipes и штатный production multi-messenger runtime реализованы в рабочей ветке `telegram-bot`. Остальные продукты переносятся в общий messenger service без копирования метеорологической логики.
 
 ## Архитектура
 
@@ -29,6 +29,34 @@ message_event
 
 Webhook проверяет `group_id`, configured callback secret, выполняет dedupe по platform event id и быстро возвращает VK success response. Долгий GFS-расчёт не выполняется внутри HTTP request lifecycle.
 
+## Production install/deploy
+
+Обычные install/deploy теперь сразу используют `messenger_launcher.py`:
+
+```bash
+bash install_telegram_bot.sh
+sudo bash deploy_telegram_bot.sh --yes
+```
+
+При `MESSENGER_RUNTIME_ENABLED=1` один systemd-процесс содержит Telegram polling, MAX/VK webhook и web/API. Старый Telegram-only unit автоматически мигрируется при deploy.
+
+VK регистрация выполняется только после локального `GET /ready`:
+
+```text
+offline env preflight
+→ restart
+→ /ready = 200
+→ groups.getCallbackConfirmationCode
+→ add/update callback server
+→ groups.setCallbackSettings
+```
+
+Публичный HTTPS URL обычно проксируется Nginx/HAProxy на:
+
+```text
+127.0.0.1:8081/webhooks/vk
+```
+
 ## Конфигурация
 
 ```env
@@ -42,7 +70,7 @@ VK_API_VERSION=5.199
 MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
 ```
 
-Версия API задаётся конфигурацией и не размазывается литералом по коду.
+Версия API задаётся конфигурацией и не размазывается литералом по коду. Пустой `VK_BOT_TOKEN` отключает VK gateway без отключения Telegram/runtime.
 
 ## Кнопки и callbacks
 
@@ -109,9 +137,31 @@ MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
 
 Recipes изолированы по `platform + user_id`, поэтому одинаковый числовой ID в MAX и VK не означает одного пользователя.
 
+## Общие лимиты ресурсов
+
+VK использует тот же process-wide pool, что Telegram/MAX/web:
+
+```env
+MAX_CONCURRENT_GFS=2
+MAX_CONCURRENT_GEOCODE=2
+MAX_CONCURRENT_METEOGRAM=2
+```
+
+Платформа не создаёт свой отдельный semaphore и не может обойти общий серверный лимит.
+
 ## Media
 
 VK gateway отвечает за platform upload flow для изображений/файлов и отправку attachment через `messages.send`. Общий product service возвращает platform-neutral attachments; метеорологический код ничего не знает про VK attachment ids.
+
+## Проверка
+
+```bash
+curl -fsS http://127.0.0.1:8081/ready
+sudo bash deploy_telegram_bot.sh --status
+sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
+```
+
+`register_messenger_webhooks.py` проверяет confirmation code и актуализирует callback server/settings после каждого штатного deploy.
 
 ## Следующий этап паритета
 
@@ -119,11 +169,11 @@ VK gateway отвечает за platform upload flow для изображен�
 
 ```text
 /cloudgram
-/meteogram
 /map
+/meteogram
 /route
 /settings
 /schedule
 ```
 
-Каждый vertical slice должен использовать общие contracts, formatter, run selection, progress и `UserRecipeStore`. Локальные VK-копии GFS/geocoder/product logic не допускаются.
+Каждый vertical slice должен использовать общие contracts, formatter, run selection, progress, `RuntimeResources` и `UserRecipeStore`. Локальные VK-копии GFS/geocoder/product logic не допускаются.
