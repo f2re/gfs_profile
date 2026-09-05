@@ -2,26 +2,29 @@ from __future__ import annotations
 
 import asyncio
 import html
-import re
-from pathlib import Path
+from threading import Lock
 from typing import NamedTuple
 
 from telegram.constants import ParseMode
 
-from cloudgram_render import write_cloudgram_png
-from cloudgram_product import CLOUDGRAM_DEFAULT_STEP, CLOUDGRAM_DEFAULT_TO, CloudgramData, build_cloudgram_data, cloudgram_leads
+from cloudgram_product import CloudgramData, cloudgram_leads
 from geocode import GeocodeError, GeoPoint
 from geocode_choices import search_location_candidates
 from gfs_core import GfsProfileError, GfsRun, latest_available_run_for_lead
-from product_progress import run_product_with_progress
+from messenger.cloudgram_service import (
+    MODE_DESCRIPTIONS,
+    MODE_TITLES,
+    ParsedCloudgramInput,
+    build_cloudgram_product_result,
+    cloudgram_repeat_command,
+    hazard_label,
+    normalize_cloudgram_mode,
+    parse_cloudgram_input,
+)
+from messenger.contracts import ProgressEvent
+from messenger.profile_service import cleanup_product_result
 from telegram_file_send import reply_png_file
 from user_location_session import remember_location
-
-RUN_RE = re.compile(r"\brun=(?P<date>\d{8})[/-]?(?P<cycle>00|06|12|18)\b", re.IGNORECASE)
-FROM_RE = re.compile(r"\bfrom=(?P<value>\d{1,3})\b", re.IGNORECASE)
-TO_RE = re.compile(r"\bto=(?P<value>\d{1,3})\b", re.IGNORECASE)
-STEP_RE = re.compile(r"\bstep=(?P<value>\d{1,2})\b", re.IGNORECASE)
-MODE_RE = re.compile(r"\bmode=(?P<value>[\wа-яё-]+)\b", re.IGNORECASE)
 
 
 class ParsedCloudgramRequest(NamedTuple):
@@ -33,67 +36,28 @@ class ParsedCloudgramRequest(NamedTuple):
     mode: str = "pro"
 
 
-def normalize_cloudgram_mode(value: str | None) -> str:
-    raw = (value or "pro").strip().lower().replace("ё", "е")
-    if raw in {"simple", "simp", "easy", "lite", "user", "простои", "простой", "упрощенно", "упрощенныи", "упрощенный"}:
-        return "simple"
-    if raw in {"pro", "prof", "professional", "meteo", "профи", "профессионально"}:
-        return "pro"
-    raise GfsProfileError("mode должен быть pro или simple")
-
-
-def _pop_int(pattern: re.Pattern[str], text: str, default: int) -> tuple[int, str]:
-    match = pattern.search(text)
-    if not match:
-        return default, text
-    value = int(match.group("value"))
-    return value, (text[: match.start()] + text[match.end() :]).strip()
-
-
-def _pop_mode(text: str) -> tuple[str, str]:
-    match = MODE_RE.search(text)
-    if not match:
-        return "pro", text
-    mode = normalize_cloudgram_mode(match.group("value"))
-    return mode, (text[: match.start()] + text[match.end() :]).strip()
-
-
 def parse_cloudgram_request(raw_text: str) -> ParsedCloudgramRequest:
-    text = raw_text.strip()
-    run: GfsRun | None = None
-    run_match = RUN_RE.search(text)
-    if run_match:
-        run = GfsRun(date=run_match.group("date"), cycle=run_match.group("cycle"))
-        text = (text[: run_match.start()] + text[run_match.end() :]).strip()
-
-    mode, text = _pop_mode(text)
-    lead_from, text = _pop_int(FROM_RE, text, 0)
-    lead_to, text = _pop_int(TO_RE, text, CLOUDGRAM_DEFAULT_TO)
-    step, text = _pop_int(STEP_RE, text, CLOUDGRAM_DEFAULT_STEP)
-    cloudgram_leads(lead_from, lead_to, step)
-    if not text:
-        raise ValueError("Не указана точка. Пример: /cloudgram Москва to=72 step=3 mode=simple")
-    return ParsedCloudgramRequest(text, run, lead_from, lead_to, step, mode)
+    parsed: ParsedCloudgramInput = parse_cloudgram_input(raw_text)
+    return ParsedCloudgramRequest(
+        parsed.location_query,
+        parsed.run,
+        parsed.lead_from,
+        parsed.lead_to,
+        parsed.step,
+        parsed.mode,
+    )
 
 
 def _mode_title(mode: str) -> str:
-    return "SIMPLE" if mode == "simple" else "PRO"
+    return "SIMPLE" if normalize_cloudgram_mode(mode) == "simple" else "PRO"
 
 
 def _mode_description(mode: str) -> str:
-    if mode == "simple":
-        return "облака по ярусам, осадки/явления, гроза, видимость, опасность"
-    return "облачность H/M/L, осадки, явления, видимость, ВНГО, грозовой риск, опасность"
+    return MODE_DESCRIPTIONS[normalize_cloudgram_mode(mode)]
 
 
 def _hazard_label(value: int) -> str:
-    return {
-        0: "0/4 — спокойно",
-        1: "1/4 — слабые явления",
-        2: "2/4 — ограничения",
-        3: "3/4 — опасно",
-        4: "4/4 — гроза / очень опасно",
-    }.get(max(0, min(int(value), 4)), f"{value}/4")
+    return hazard_label(value)
 
 
 def _lead_step(data: CloudgramData) -> int:
@@ -119,70 +83,133 @@ def format_cloudgram_file_caption(data: CloudgramData, mode: str = "pro") -> str
 
 
 def repeat_cloudgram_command(point: GeoPoint, parsed: ParsedCloudgramRequest, run: GfsRun) -> str:
-    return (
-        f"/cloudgram {point.lat:.4f} {point.lon:.4f} run={run.date}/{run.cycle} "
-        f"from={parsed.lead_from} to={parsed.lead_to} step={parsed.step} mode={parsed.mode}"
+    return cloudgram_repeat_command(
+        point,
+        run=run,
+        lead_from=parsed.lead_from,
+        lead_to=parsed.lead_to,
+        step=parsed.step,
+        mode=parsed.mode,
     )
 
 
 def format_repeat_cloudgram_message(point: GeoPoint, parsed: ParsedCloudgramRequest, run: GfsRun) -> str:
     command = html.escape(repeat_cloudgram_command(point, parsed, run))
-    return (
-        "📋 Повторить этот расчёт:\n"
-        f"<code>{command}</code>\n\n"
-        "Нажмите на строку команды и скопируйте её целиком."
+    return "📋 Повторить этот расчёт:\n" f"<code>{command}</code>\n\n" "Нажмите на строку команды и скопируйте её целиком."
+
+
+def _progress_text(point: GeoPoint, parsed: ParsedCloudgramRequest, event: ProgressEvent) -> str:
+    data = dict(event.data)
+    header = (
+        "⏳ Облака и явления GFS\n"
+        f"📍 {point.label}\n"
+        f"+{parsed.lead_from}…+{parsed.lead_to} ч · шаг {parsed.step} ч · {MODE_TITLES[parsed.mode]}\n"
     )
+    if event.stage in {"check", "run"}:
+        body = "1/6 Проверяю опубликованный цикл GFS…"
+        if event.stage == "run" and data.get("run_date") and data.get("run_cycle"):
+            body = f"1/6 GFS {data['run_date']} {data['run_cycle']}Z"
+    elif event.stage == "grid":
+        body = f"2/6 Узел GFS: {data.get('grid_lat')}, {data.get('grid_lon')}"
+    elif event.stage in {"cloudgram_step", "download_start", "download", "download_done", "cache"}:
+        current = data.get("index") or event.current
+        total = data.get("total") or event.total
+        lead = data.get("lead_hour")
+        suffix = f" · +{lead} ч" if lead is not None else ""
+        body = f"3/6 Загружаю сроки: {current}/{total}{suffix}" if current and total else "3/6 Загружаю модельные поля…"
+    elif event.stage in {"parse_start", "parse_done", "done"}:
+        body = "4/6 Считаю облачность, явления и риски…"
+    elif event.stage in {"plot_start", "plot_done"}:
+        body = "5/6 Формирую PNG…"
+    else:
+        body = event.message or "Выполняю расчёт…"
+    return header + body
 
 
 async def run_cloudgram_product(message, point: GeoPoint, parsed: ParsedCloudgramRequest, gfs_semaphore) -> bool:
     status = await message.reply_text(
-        f"⏳ Cloudgram {_mode_title(parsed.mode)}\n"
+        "⏳ Облака и явления GFS\n"
         f"📍 {point.label}\n"
-        f"🕒 GFS +{parsed.lead_from}…+{parsed.lead_to} ч, шаг {parsed.step} ч\n"
-        "1/6 выбираю опубликованный цикл GFS…"
+        f"+{parsed.lead_from}…+{parsed.lead_to} ч · шаг {parsed.step} ч\n"
+        "1/6 Проверяю опубликованный цикл GFS…"
     )
-    png_path: Path | None = None
-    selected_run: GfsRun | None = None
-    success = False
+    state = {"event": ProgressEvent(stage="check", message="Проверяю данные")}
+    lock = Lock()
+    stop = asyncio.Event()
+    last_text = ""
+    common_result = None
+
+    def progress(event: ProgressEvent) -> None:
+        with lock:
+            state["event"] = event
+
+    async def reporter() -> None:
+        nonlocal last_text
+        while not stop.is_set():
+            with lock:
+                event = state["event"]
+            text = _progress_text(point, parsed, event)
+            if text != last_text:
+                try:
+                    await status.edit_text(text)
+                    last_text = text
+                except Exception:
+                    pass
+            try:
+                await asyncio.wait_for(stop.wait(), timeout=1.5)
+            except asyncio.TimeoutError:
+                pass
+
+    reporter_task = asyncio.create_task(reporter())
     try:
-        leads = cloudgram_leads(parsed.lead_from, parsed.lead_to, parsed.step)
-        selected_run = parsed.run or await asyncio.to_thread(latest_available_run_for_lead, max(leads))
         async with gfs_semaphore:
-            header = (
-                f"☁️ CLOUDGRAM {_mode_title(parsed.mode)}\n"
-                f"GFS {selected_run.date} {selected_run.cycle}Z · UTC · +{leads[0]}…+{leads[-1]} ч · шаг {parsed.step} ч\n"
-                f"{point.label}\n{point.lat:.4f}, {point.lon:.4f}"
+            common_result = await asyncio.to_thread(
+                build_cloudgram_product_result,
+                point,
+                parsed.lead_from,
+                parsed.lead_to,
+                parsed.step,
+                parsed.mode,
+                parsed.run,
+                progress_callback=progress,
+                run_selector=latest_available_run_for_lead,
             )
-
-            def worker(progress_callback):
-                data = build_cloudgram_data(
-                    selected_run,
-                    point.lat,
-                    point.lon,
-                    lead_from=parsed.lead_from,
-                    lead_to=parsed.lead_to,
-                    step=parsed.step,
-                    progress_callback=progress_callback,
+        stop.set()
+        await reporter_task
+        await status.edit_text(common_result.summary)
+        leads = cloudgram_leads(parsed.lead_from, parsed.lead_to, parsed.step)
+        for attachment in common_result.attachments:
+            if attachment.kind == "image":
+                await reply_png_file(
+                    message,
+                    attachment.path,
+                    caption=attachment.caption,
+                    prefer_photo=len(leads) <= 12,
                 )
-                progress_callback({"stage": "plot_start", "message": "строю PNG"})
-                path = write_cloudgram_png(data, mode=parsed.mode)
-                progress_callback({"stage": "plot_done", "message": "PNG готов", "file": str(path)})
-                return data, path
-
-            data, png_path = await run_product_with_progress(status, header, worker)
-        await status.edit_text(format_cloudgram_caption(data, parsed.mode))
-        if png_path:
-            await reply_png_file(message, png_path, caption=format_cloudgram_file_caption(data, parsed.mode), prefer_photo=len(leads) <= 12)
-        await message.reply_text(format_repeat_cloudgram_message(point, parsed, selected_run), parse_mode=ParseMode.HTML)
-        success = True
+            else:
+                with attachment.path.open("rb") as file_obj:
+                    await message.reply_document(document=file_obj, filename=attachment.filename, caption=attachment.caption)
+        if common_result.repeat_command:
+            await message.reply_text(
+                f"📋 <code>{html.escape(common_result.repeat_command)}</code>",
+                parse_mode=ParseMode.HTML,
+            )
+        return True
     except (GfsProfileError, GeocodeError, ValueError) as exc:
+        stop.set()
+        await reporter_task
         await status.edit_text(f"Ошибка: {exc}")
     except Exception as exc:
+        stop.set()
+        await reporter_task
         await status.edit_text(f"Непредвиденная ошибка: {exc}")
     finally:
-        if png_path:
-            png_path.unlink(missing_ok=True)
-    return success
+        stop.set()
+        if not reporter_task.done():
+            await reporter_task
+        if common_result is not None:
+            cleanup_product_result(common_result)
+    return False
 
 
 async def resolve_cloudgram_request(message, raw: str, gfs_semaphore, geocode_semaphore, user_id: int = 0) -> bool:

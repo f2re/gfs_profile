@@ -26,6 +26,7 @@ class RegistrationResult:
     platform: str
     url: str
     detail: str
+    ok: bool = True
 
 
 def _https_url(value: str, name: str) -> str:
@@ -65,7 +66,7 @@ def _probe_vk(url: str, group_id: int, secret: str, confirmation_code: str, time
         )
 
 
-def register_max(*, probe: bool = True, client: MaxApiClient | None = None) -> RegistrationResult:
+def _max_env() -> tuple[str, str, str]:
     token = os.getenv("MAX_BOT_TOKEN", "").strip()
     if not token:
         raise WebhookConfigError("MAX_BOT_TOKEN не задан")
@@ -73,6 +74,11 @@ def register_max(*, probe: bool = True, client: MaxApiClient | None = None) -> R
     secret = os.getenv("MAX_WEBHOOK_SECRET", "").strip()
     if not MAX_SECRET_RE.fullmatch(secret):
         raise WebhookConfigError("MAX_WEBHOOK_SECRET: 5..256 символов A-Z/a-z/0-9/_/-")
+    return token, url, secret
+
+
+def register_max(*, probe: bool = True, client: MaxApiClient | None = None) -> RegistrationResult:
+    token, url, secret = _max_env()
     if probe:
         _probe_max(url, secret)
     client = client or MaxApiClient(token)
@@ -81,6 +87,21 @@ def register_max(*, probe: bool = True, client: MaxApiClient | None = None) -> R
     client.subscribe(url, secret, MAX_UPDATE_TYPES)
     matched = any(str(item.get("url") or "") == url for item in existing)
     return RegistrationResult("max", url, "подписка обновлена" if matched else "подписка создана")
+
+
+def status_max(*, client: MaxApiClient | None = None) -> RegistrationResult:
+    token, url, _ = _max_env()
+    client = client or MaxApiClient(token)
+    items = client.list_subscriptions()
+    matched = next((item for item in items if str(item.get("url") or "") == url), None)
+    if matched is None:
+        return RegistrationResult("max", url, "подписка не найдена", False)
+    raw_types = matched.get("update_types") or matched.get("updateTypes") or []
+    if isinstance(raw_types, list) and raw_types:
+        missing = sorted(set(MAX_UPDATE_TYPES) - {str(value) for value in raw_types})
+        if missing:
+            return RegistrationResult("max", url, f"подписка есть, но нет событий: {', '.join(missing)}", False)
+    return RegistrationResult("max", url, "подписка активна")
 
 
 def _vk_confirmation_code(client: VkApiClient, group_id: int) -> str:
@@ -102,7 +123,7 @@ def _vk_server_id(payload: Any, url: str) -> int | None:
     return None
 
 
-def register_vk(*, probe: bool = True, client: VkApiClient | None = None) -> RegistrationResult:
+def _vk_env() -> tuple[str, int, str, str, str, str]:
     token = os.getenv("VK_BOT_TOKEN", "").strip()
     if not token:
         raise WebhookConfigError("VK_BOT_TOKEN не задан")
@@ -115,12 +136,16 @@ def register_vk(*, probe: bool = True, client: VkApiClient | None = None) -> Reg
     url = _https_url(os.getenv("VK_CALLBACK_URL", ""), "VK_CALLBACK_URL")
     secret = os.getenv("VK_CALLBACK_SECRET", "").strip()
     if not secret:
-        raise WebhookConfigError("VK_CALLBACK_SECRET не задан")
-    configured_code = os.getenv("VK_CONFIRMATION_CODE", "").strip()
-    if not configured_code:
-        raise WebhookConfigError("VK_CONFIRMATION_CODE не задан")
+        raise WebhookConfigError("VK_CALLBACK_SECRET не задан; запустите prepare_messenger_config.py")
+    confirmation_code = os.getenv("VK_CONFIRMATION_CODE", "").strip()
+    if not confirmation_code:
+        raise WebhookConfigError("VK_CONFIRMATION_CODE не задан; запустите prepare_messenger_config.py")
+    api_version = os.getenv("VK_API_VERSION", "5.199").strip() or "5.199"
+    return token, group_id, url, secret, confirmation_code, api_version
 
-    api_version = os.getenv("VK_API_VERSION", "5.199")
+
+def register_vk(*, probe: bool = True, client: VkApiClient | None = None) -> RegistrationResult:
+    token, group_id, url, secret, configured_code, api_version = _vk_env()
     client = client or VkApiClient(token, api_version=api_version)
     actual_code = _vk_confirmation_code(client, group_id)
     if configured_code != actual_code:
@@ -155,10 +180,30 @@ def register_vk(*, probe: bool = True, client: VkApiClient | None = None) -> Reg
     return RegistrationResult("vk", url, f"{detail}; message_new/message_event включены")
 
 
+def status_vk(*, client: VkApiClient | None = None) -> RegistrationResult:
+    token, group_id, url, _, configured_code, api_version = _vk_env()
+    client = client or VkApiClient(token, api_version=api_version)
+    actual_code = _vk_confirmation_code(client, group_id)
+    if configured_code != actual_code:
+        return RegistrationResult("vk", url, "confirmation code не совпадает с VK API", False)
+    servers = client.call("groups.getCallbackServers", group_id=group_id)
+    server_id = _vk_server_id(servers, url)
+    if server_id is None:
+        return RegistrationResult("vk", url, "callback server не найден", False)
+    settings = client.call("groups.getCallbackSettings", group_id=group_id, server_id=server_id)
+    events = settings.get("events") if isinstance(settings, dict) else None
+    if isinstance(events, dict):
+        missing = [name for name in ("message_new", "message_event") if not events.get(name)]
+        if missing:
+            return RegistrationResult("vk", url, f"server есть, но выключены события: {', '.join(missing)}", False)
+    return RegistrationResult("vk", url, f"callback server активен · id={server_id}")
+
+
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Регистрация MAX/VK webhook для GFS Profile")
-    parser.add_argument("--max", action="store_true", dest="only_max", help="настроить только MAX")
-    parser.add_argument("--vk", action="store_true", dest="only_vk", help="настроить только VK")
+    parser = argparse.ArgumentParser(description="Регистрация/проверка MAX/VK webhook для GFS Profile")
+    parser.add_argument("--max", action="store_true", dest="only_max", help="только MAX")
+    parser.add_argument("--vk", action="store_true", dest="only_vk", help="только VK")
+    parser.add_argument("--status", action="store_true", help="только проверить текущую регистрацию")
     parser.add_argument("--no-probe", action="store_true", help="не проверять публичный URL перед API регистрацией")
     args = parser.parse_args()
     selected_max = args.only_max or not (args.only_max or args.only_vk)
@@ -166,22 +211,23 @@ def main() -> int:
     results: list[RegistrationResult] = []
     try:
         if selected_max and os.getenv("MAX_BOT_TOKEN", "").strip():
-            results.append(register_max(probe=not args.no_probe))
+            results.append(status_max() if args.status else register_max(probe=not args.no_probe))
         elif args.only_max:
             raise WebhookConfigError("MAX_BOT_TOKEN не задан")
         if selected_vk and os.getenv("VK_BOT_TOKEN", "").strip():
-            results.append(register_vk(probe=not args.no_probe))
+            results.append(status_vk() if args.status else register_vk(probe=not args.no_probe))
         elif args.only_vk:
             raise WebhookConfigError("VK_BOT_TOKEN не задан")
     except WebhookConfigError as exc:
         print(f"ERROR: {exc}")
         return 2
     if not results:
-        print("MAX/VK токены не заданы; регистрировать нечего")
+        print("MAX/VK токены не заданы; проверять/регистрировать нечего")
         return 0
     for result in results:
-        print(f"{result.platform.upper()}: {result.detail} · {result.url}")
-    return 0
+        marker = "OK" if result.ok else "ERROR"
+        print(f"{marker} {result.platform.upper()}: {result.detail} · {result.url}")
+    return 0 if all(result.ok for result in results) else 3
 
 
 if __name__ == "__main__":

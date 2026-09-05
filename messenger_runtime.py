@@ -10,12 +10,12 @@ from fastapi.responses import JSONResponse
 from telegram import Update
 
 import app as legacy_web_module
+from messenger.cloudgram_router import CloudgramMessengerRouter
 from messenger.runtime_resources import RuntimeResources, get_runtime_resources
 from messenger.webhooks import MessengerWebhookService
-from messenger.windgram_router import WindgramMessengerRouter
 
 RESOURCES = get_runtime_resources()
-ROUTER = RESOURCES.configure_router(WindgramMessengerRouter.default())
+ROUTER = RESOURCES.configure_router(CloudgramMessengerRouter.default())
 SERVICE = MessengerWebhookService.from_env(router=ROUTER)
 
 
@@ -93,7 +93,7 @@ async def health() -> dict[str, object]:
             "max": SERVICE.max_gateway is not None,
             "vk": SERVICE.vk_gateway is not None,
         },
-        "products": ["profile", "aero", "windgram"],
+        "products": ["profile", "aero", "windgram", "cloudgram"],
         "resources": RESOURCES.snapshot(),
     }
 
