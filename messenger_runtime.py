@@ -10,12 +10,12 @@ from fastapi.responses import JSONResponse
 from telegram import Update
 
 import app as legacy_web_module
-from messenger.aero_router import AeroMessengerRouter
 from messenger.runtime_resources import RuntimeResources, get_runtime_resources
 from messenger.webhooks import MessengerWebhookService
+from messenger.windgram_router import WindgramMessengerRouter
 
 RESOURCES = get_runtime_resources()
-ROUTER = RESOURCES.configure_router(AeroMessengerRouter.default())
+ROUTER = RESOURCES.configure_router(WindgramMessengerRouter.default())
 SERVICE = MessengerWebhookService.from_env(router=ROUTER)
 
 
@@ -23,7 +23,7 @@ def configure_process_resources(resources: RuntimeResources = RESOURCES) -> None
     """Bind every in-process frontend to the same capacity gates.
 
     Telegram historically created its semaphores in module globals and the web
-    API called ``build_profile`` synchronously.  Keeping those public globals
+    API called ``build_profile`` synchronously. Keeping those public globals
     makes the migration backwards-compatible while the actual permits now come
     from one process-wide resource pool.
     """
@@ -38,13 +38,10 @@ def configure_process_resources(resources: RuntimeResources = RESOURCES) -> None
 
     telegram_meteogram.METEOGRAM_SEMAPHORE = resources.meteogram_semaphore
     telegram_meteogram.MAX_CONCURRENT_METEOGRAM = resources.meteogram_limit
-    # Meteogram point resolution did not historically receive the core
-    # GEOCODE_SEMAPHORE, so guard its blocking geocoder with the same gate.
     telegram_meteogram.search_location_candidates = resources.wrap_blocking_geocode(
         telegram_meteogram.search_location_candidates
     )
 
-    # The mounted web/API uses the same GFS budget as all messenger requests.
     legacy_web_module.build_profile = resources.wrap_blocking_gfs(
         legacy_web_module.build_profile
     )
@@ -96,6 +93,7 @@ async def health() -> dict[str, object]:
             "max": SERVICE.max_gateway is not None,
             "vk": SERVICE.vk_gateway is not None,
         },
+        "products": ["profile", "aero", "windgram"],
         "resources": RESOURCES.snapshot(),
     }
 

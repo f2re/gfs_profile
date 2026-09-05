@@ -92,9 +92,11 @@ OPTIONAL_RUNTIME_MODULES = (
     "messenger.runtime_resources",
     "messenger.profile_service",
     "messenger.aero_service",
+    "messenger.windgram_service",
     "messenger.router",
     "messenger.personal_router",
     "messenger.aero_router",
+    "messenger.windgram_router",
     "messenger.user_recipes",
     "messenger.max.client",
     "messenger.max.adapter",
@@ -129,8 +131,6 @@ def main() -> int:
         _print_errors(errors)
         return 1
 
-    # Plot modules import pyplot. Select the non-interactive backend before
-    # importing product modules so runtime_check also works under systemd/SSH.
     import matplotlib
 
     matplotlib.use("Agg", force=True)
@@ -140,7 +140,7 @@ def main() -> int:
         return 1
 
     print(
-        "Runtime check OK: GFS/GRIB, DaData, shared runtime resources, common profile/aero services, "
+        "Runtime check OK: GFS/GRIB, DaData, shared runtime resources, common profile/aero/windgram services, "
         "route, model/ensemble meteograms, schedules and Telegram/MAX/VK gateways import successfully"
     )
     return 0

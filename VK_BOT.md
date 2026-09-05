@@ -1,6 +1,6 @@
 # VK Bot — текущее состояние и эксплуатация
 
-Статус на 2026-09-05: Callback API transport, общие `/profile` и `/aero` vertical slices, saved recipes и штатный production multi-messenger runtime реализованы в рабочей ветке `telegram-bot`. Остальные продукты переносятся в общий messenger service без копирования метеорологической логики.
+Статус на 2026-09-05: Callback API transport, общие `/profile`, `/aero` и `/windgram` vertical slices, saved recipes и штатный production multi-messenger runtime реализованы в рабочей ветке `telegram-bot`. Остальные продукты переносятся в общий messenger service без копирования метеорологической логики.
 
 ## Архитектура
 
@@ -31,7 +31,7 @@ Webhook проверяет `group_id`, configured callback secret, выполн�
 
 ## Production install/deploy
 
-Обычные install/deploy теперь сразу используют `messenger_launcher.py`:
+Обычные install/deploy сразу используют `messenger_launcher.py`:
 
 ```bash
 bash install_telegram_bot.sh
@@ -125,6 +125,49 @@ Flow:
 
 Подробно: `docs/MESSENGER_AERO_SERVICE.md` и `docs/AERO_DIAGRAM.md`.
 
+## Реализованный `/windgram`
+
+VK использует тот же `messenger/windgram_service.py`, что Telegram и MAX. `windgram_product.py` и `windgram_plot.py` не зависят от платформы.
+
+Интерактивный flow:
+
+```text
+/windgram
+→ город / координаты / native geo
+→ параметры
+→ Построить
+```
+
+Значения первого запуска:
+
+```text
+ветер
++0…+120 ч
+шаг 6 ч
+до 500 гПа
+```
+
+Native callback-кнопки позволяют выбрать:
+
+- ветер / температура / влажность;
+- `+120/+240/+384 ч`;
+- шаг `3/6/12 ч`;
+- другую точку;
+- закрепление и повтор saved recipe.
+
+Поддерживается и прямая команда:
+
+```text
+/windgram Москва to=240 step=12 param=temp
+/windgram 55.75 37.62 from=12 to=120 step=6 top=700 param=rh
+```
+
+Неоднозначность города обрабатывается callback-выбором без потери параметров. Actual GFS run выбирается common service по максимальному реально требуемому lead.
+
+Результат содержит actual run/cycle UTC, valid range UTC, requested point, GFS grid point, уровни, max wind и PNG. Это модель GFS, не наблюдение и не радиозонд.
+
+Подробно: `docs/MESSENGER_WINDGRAM_SERVICE.md`.
+
 ## Сохранённые сценарии
 
 MAX/VK используют общий messenger-neutral store:
@@ -133,7 +176,9 @@ MAX/VK используют общий messenger-neutral store:
 MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
 ```
 
-Для `/profile` и `/aero` успешный результат сохраняет точку и параметры. `run/cycle` не входит в recipe. `/start` показывает до двух быстрых сценариев; команда продукта без аргументов открывает закреплённый или последний успешный вариант. Repeat выбирает актуальный опубликованный GFS run.
+Для `/profile`, `/aero` и `/windgram` успешный результат сохраняет точку и параметры. `run/cycle` не входит в recipe. `/start` показывает до двух быстрых сценариев; команда продукта без аргументов открывает закреплённый или последний успешный вариант. Repeat выбирает актуальный опубликованный GFS run.
+
+Windgram recipe содержит `from/to/step/top/param + point`.
 
 Recipes изолированы по `platform + user_id`, поэтому одинаковый числовой ID в MAX и VK не означает одного пользователя.
 
@@ -165,10 +210,9 @@ sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
 
 ## Следующий этап паритета
 
-Следующий vertical slice — `/windgram`, затем:
+Следующий vertical slice — `/cloudgram`, затем:
 
 ```text
-/cloudgram
 /map
 /meteogram
 /route

@@ -20,7 +20,7 @@ Telegram-бот, MAX/VK messenger runtime и веб-интерфейс для в
 - 🕒 `/schedule` — автоматическая отправка продукции по расписанию.
 - ⚙️ `/settings` — основная точка, сохранённые параметры и быстрые действия.
 
-Telegram поддерживает весь текущий набор продуктов. В общем Telegram+MAX+VK messenger service уже вынесены `/profile` и `/aero`; следующие продукты подключаются по одному vertical slice без дублирования метеорологической логики.
+Telegram поддерживает весь текущий набор продуктов. В общем Telegram+MAX+VK messenger service уже вынесены `/profile`, `/aero` и `/windgram`; следующие продукты подключаются по одному vertical slice без дублирования метеорологической логики.
 
 ## Методика и аудит параметров
 
@@ -30,7 +30,8 @@ Telegram поддерживает весь текущий набор проду�
 - [`docs/AUTO_UPDATE.md`](docs/AUTO_UPDATE.md) — автообновление `telegram-bot`, резервирование локальных расхождений, rollback и эксплуатация systemd timer.
 - [`docs/TELEGRAM_PERSONAL_UX.md`](docs/TELEGRAM_PERSONAL_UX.md) — сохранение точек, параметров, быстрые действия и default карты 48 часов.
 - [`docs/MESSENGER_RUNTIME.md`](docs/MESSENGER_RUNTIME.md) — единый runtime Telegram+MAX+VK и фактический паритет продуктов.
-- [`docs/MESSENGER_AERO_SERVICE.md`](docs/MESSENGER_AERO_SERVICE.md) — общий `/aero`, progress/result contract и saved recipes для MAX/VK.
+- [`docs/MESSENGER_AERO_SERVICE.md`](docs/MESSENGER_AERO_SERVICE.md) — общий `/aero`, progress/result contract и saved recipes.
+- [`docs/MESSENGER_WINDGRAM_SERVICE.md`](docs/MESSENGER_WINDGRAM_SERVICE.md) — общий `/windgram`, параметры, max-lead run selection и saved recipes.
 
 Критические изменения реализации: `VIS` всегда переводится из метров в километры; GRIB-поля выбираются по shortName/слою/stepType/интервалу; CAPE/CIN берутся с 180–0 гПа AGL; `HGT cloud ceiling` используется как нативная высота AGL, а 20 000 м трактуется как «потолка нет»; общие и конвективные облака/осадки не смешиваются; Aero и Route загружают изобарические гидрометеоры GFS.
 
@@ -91,7 +92,9 @@ sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
 
 ## MAX/VK parity
 
-Общий messenger runtime использует одни и те же `profile_service` и `aero_service` для Telegram/MAX/VK. Для `/profile` и `/aero` в MAX/VK работают город/координаты, неоднозначный город, native location, прямой `Москва +24`, быстрые сроки, пагинация до `+384`, редактируемый progress и saved recipes. Repeat не сохраняет старый `run/cycle`, поэтому по умолчанию выбирается свежий опубликованный GFS cycle.
+Общий messenger runtime использует одни и те же `profile_service`, `aero_service` и `windgram_service` для Telegram/MAX/VK. Для `/profile` и `/aero` в MAX/VK работают город/координаты, неоднозначный город, native location, прямые команды, быстрые сроки, пагинация до `+384`, редактируемый progress и saved recipes.
+
+Для `/windgram` одинаковы первый вариант `ветер · +0…+120 ч · шаг 6 ч · до 500 гПа`, выбор `ветер/температура/влажность`, горизонты `120/240/384 ч`, шаг `3/6/12 ч`, ambiguous city, native location и recipe/pin/repeat. Common service выбирает GFS run по максимальному реально требуемому lead. Repeat не сохраняет старый `run/cycle`.
 
 Подробно:
 
@@ -99,6 +102,7 @@ sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
 - [`VK_BOT.md`](VK_BOT.md)
 - [`docs/MESSENGER_RUNTIME.md`](docs/MESSENGER_RUNTIME.md)
 - [`docs/MESSENGER_SAVED_RECIPES.md`](docs/MESSENGER_SAVED_RECIPES.md)
+- [`docs/MESSENGER_WINDGRAM_SERVICE.md`](docs/MESSENGER_WINDGRAM_SERVICE.md)
 
 ## Геокодирование
 
@@ -207,6 +211,22 @@ Open-Meteo не сообщает надёжный исходный цикл пе
 - [`docs/AERO_DIAGRAM.md`](docs/AERO_DIAGRAM.md)
 - [`docs/MESSENGER_AERO_SERVICE.md`](docs/MESSENGER_AERO_SERVICE.md)
 - [`docs/METEOROLOGICAL_METHODS.md`](docs/METEOROLOGICAL_METHODS.md)
+
+## Срок × уровень `/windgram`
+
+```text
+/windgram Москва
+/windgram Москва to=240 step=12 param=temp
+/windgram 55.75 37.62 from=12 to=120 step=6 top=700 param=rh
+```
+
+`/windgram` использует общий `messenger/windgram_service.py` во всех трёх мессенджерах. Первый интерактивный вариант — ветер, `+0…+120 ч`, шаг 6 ч, до 500 гПа. Доступны ветер/температура/влажность, горизонты 120/240/384 ч и шаг 3/6/12 ч.
+
+Common service формирует допустимые сроки и проверяет публикацию по максимальному требуемому lead. Если новый GFS cycle ещё не содержит дальний срок, выбирается предыдущий подходящий run. `run/cycle` в saved recipe не сохраняется.
+
+Результат показывает actual run/cycle UTC, valid range UTC, requested point, GFS grid point, уровни и max wind и отправляет один общий PNG. GFS явно обозначается как модель, не наблюдение и не радиозонд.
+
+Подробно: [`docs/MESSENGER_WINDGRAM_SERVICE.md`](docs/MESSENGER_WINDGRAM_SERVICE.md).
 
 ## Маршрутный профиль `/route`
 

@@ -1,6 +1,6 @@
 # MAX Bot — текущее состояние и эксплуатация
 
-Статус на 2026-09-05: MAX transport/webhook, общие `/profile` и `/aero` vertical slices, saved recipes и штатный production multi-messenger runtime реализованы в рабочей ветке `telegram-bot`. Остальные продукты последовательно переносятся в общий messenger service; отдельной метеорологической логики MAX не содержит.
+Статус на 2026-09-05: MAX transport/webhook, общие `/profile`, `/aero` и `/windgram` vertical slices, saved recipes и штатный production multi-messenger runtime реализованы в рабочей ветке `telegram-bot`. Остальные продукты последовательно переносятся в общий messenger service; отдельной метеорологической логики MAX не содержит.
 
 ## Архитектура
 
@@ -144,6 +144,49 @@ Flow:
 
 Подробно: `docs/MESSENGER_AERO_SERVICE.md` и `docs/AERO_DIAGRAM.md`.
 
+## Реализованный `/windgram`
+
+MAX использует тот же `messenger/windgram_service.py`, что Telegram и VK. Метеорологический расчёт остаётся в `windgram_product.py`, отрисовка — в `windgram_plot.py`.
+
+Первый интерактивный flow:
+
+```text
+/windgram
+→ город / координаты / native location
+→ параметры
+→ Построить
+```
+
+Значения первого запуска:
+
+```text
+параметр: ветер
+период: +0…+120 ч
+шаг: 6 ч
+уровни: до 500 гПа
+```
+
+В карточке доступны:
+
+- ветер / температура / влажность;
+- горизонт `+120/+240/+384 ч`;
+- шаг `3/6/12 ч`;
+- другая точка;
+- pin/repeat через saved recipe.
+
+Прямая команда также поддерживается:
+
+```text
+/windgram Москва to=240 step=12 param=temp
+/windgram 55.75 37.62 from=12 to=120 step=6 top=700 param=rh
+```
+
+При неоднозначном городе сохраняются все параметры запроса до callback-выбора точки. Service проверяет публикацию по максимальному реально требуемому сроку и выбирает фактически подходящий GFS cycle.
+
+Результат показывает actual run/cycle UTC, valid range, requested point, GFS grid point, уровни, max wind и PNG. В тексте явно указано, что GFS — модель, не наблюдение и не радиозонд.
+
+Подробно: `docs/MESSENGER_WINDGRAM_SERVICE.md`.
+
 ## Сохранённые сценарии
 
 Messenger-neutral SQLite:
@@ -152,7 +195,9 @@ Messenger-neutral SQLite:
 MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
 ```
 
-Для `/profile` и `/aero` успешный расчёт сохраняет точку и параметры, но не `run/cycle`. `/start` показывает до двух быстрых сценариев. Команда без аргументов открывает закреплённый или последний успешный вариант. Repeat передаёт `run=None`, поэтому выбирается свежий опубликованный цикл.
+Для `/profile`, `/aero` и `/windgram` успешный расчёт сохраняет точку и параметры, но не `run/cycle`. `/start` показывает до двух быстрых сценариев. Команда без аргументов открывает закреплённый или последний успешный вариант. Repeat передаёт `run=None`, поэтому выбирается свежий опубликованный цикл.
+
+Windgram recipe содержит `from/to/step/top/param + point`.
 
 Хранилище изолировано по `platform + user_id`, поэтому MAX и VK не смешивают пользовательское состояние.
 
@@ -203,10 +248,9 @@ Runtime слушает loopback; публичный HTTPS завершается
 
 ## Следующий этап паритета
 
-Следующий vertical slice — `/windgram`, затем:
+Следующий vertical slice — `/cloudgram`, затем:
 
 ```text
-/cloudgram
 /map
 /meteogram
 /route
