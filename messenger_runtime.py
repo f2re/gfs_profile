@@ -11,14 +11,14 @@ from fastapi.responses import JSONResponse
 from telegram import Update
 
 import app as legacy_web_module
-from messenger.map_router import MapMessengerRouter
+from messenger.meteogram_router import MeteogramMessengerRouter
 from messenger.platform_config import PlatformStatus, platform_statuses
 from messenger.runtime_resources import RuntimeResources, get_runtime_resources
 from messenger.webhooks import MessengerWebhookService
 
 LOG = logging.getLogger(__name__)
 RESOURCES = get_runtime_resources()
-ROUTER = RESOURCES.configure_router(MapMessengerRouter.default())
+ROUTER = RESOURCES.configure_router(MeteogramMessengerRouter.default())
 SERVICE = MessengerWebhookService.from_env(router=ROUTER)
 
 
@@ -146,7 +146,7 @@ async def health() -> dict[str, object]:
         "runtime": "multi-messenger",
         "platforms": {name: item.get("state") == "ready" for name, item in states.items()},
         "platform_status": states,
-        "products": ["profile", "aero", "windgram", "cloudgram", "map"],
+        "products": ["profile", "aero", "windgram", "cloudgram", "map", "meteogram"],
         "resources": RESOURCES.snapshot(),
     }
 
