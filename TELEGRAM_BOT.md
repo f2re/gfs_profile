@@ -2,7 +2,7 @@
 
 Бот строит вертикальные, временные, маршрутные и картографические модельные продукты по городу, координатам или Telegram-геолокации.
 
-`/profile` и `/aero` уже используют те же messenger-neutral services, что MAX/VK. Telegram-слой для этих продуктов отвечает за native UI и отправку файлов, а не за отдельную копию run selection или метеорологических расчётов.
+`/profile`, `/aero` и `/windgram` используют те же messenger-neutral services, что MAX/VK. Telegram-слой для этих продуктов отвечает за native UI и отправку файлов, а не за отдельную копию run selection или метеорологических расчётов.
 
 ## Основные команды
 
@@ -32,6 +32,7 @@
 /profile Москва +24
 /route Москва -> Санкт-Петербург +24 speed=300 step=50 mode=pro
 /aero Москва +24
+/windgram Москва to=240 step=12 param=temp
 /cloudgram Москва to=72 mode=simple
 /meteogram Москва source=ecmwf_ifs days=5
 /meteogram Москва source=gfs days=5 format=pdf
@@ -207,6 +208,40 @@ Telegram `/aero` вызывает `messenger/aero_service.py`, который т
 - `docs/AERO_DIAGRAM.md`;
 - `docs/MESSENGER_AERO_SERVICE.md`.
 
+## Срок × уровень `/windgram`
+
+Telegram `/windgram` вызывает `messenger/windgram_service.py`, общий с MAX/VK. Расчётные данные остаются в `windgram_product.py`, PNG — в `windgram_plot.py`; Telegram adapter отвечает только за wizard, status и отправку файла.
+
+Значения первого запуска:
+
+```text
+параметр: ветер
+диапазон: +0…+120 ч
+шаг: 6 ч
+уровни: до 500 гПа
+```
+
+Wizard позволяет выбрать:
+
+```text
+ветер / температура / влажность
+до +120 / +240 / +384 ч
+шаг 3 / 6 / 12 ч
+```
+
+Прямая команда поддерживает расширенные параметры:
+
+```text
+/windgram Москва to=240 step=12 param=temp
+/windgram 55.75 37.62 from=12 to=120 step=6 top=700 param=rh
+```
+
+Common service формирует допустимые сроки GFS и выбирает фактически опубликованный цикл по максимальному требуемому lead. Поэтому repeat не сохраняет старый `run=` и не выбирает цикл только по `f000`.
+
+Итоговая сводка показывает фактический run/cycle UTC, valid range UTC, requested point, GFS grid point, уровни и максимальный ветер; затем отправляется тот же PNG, который получают MAX/VK. GFS явно обозначается как модель, не наблюдение и не радиозонд.
+
+Подробно: `docs/MESSENGER_WINDGRAM_SERVICE.md`.
+
 ## Адаптивные клавиатуры
 
 Главное меню — inline. Reply-клавиатура `📍 Моя геолокация` показывается только при выборе точки:
@@ -224,6 +259,8 @@ selective=true
 Для долгих операций бот обновляет одно статусное сообщение. Пользователь видит продукт, точку, срок и текущий этап без названий внутренних библиотек.
 
 Для `/aero` общий progress состоит из пяти этапов: опубликованный цикл, узел GFS, загрузка/кэш, расчёт профиля/диагностики, Skew-T/годограф.
+
+Для `/windgram` общий progress состоит из шести этапов: опубликованный цикл, узел GFS, загрузка сроков, чтение профилей/матрица, PNG, отправка.
 
 Для `/meteogram` PNG:
 

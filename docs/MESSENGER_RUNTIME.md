@@ -1,6 +1,6 @@
 # Multi-messenger runtime: Telegram + MAX + VK
 
-Статус: общий runtime является штатным production entrypoint. Реализованы transport/webhook, общие `/profile` и `/aero` vertical slices и saved recipes для этих продуктов. Остальные продукты последовательно переносятся в messenger-neutral services.
+Статус: общий runtime является штатным production entrypoint. Реализованы transport/webhook, общие `/profile`, `/aero` и `/windgram` vertical slices и saved recipes для этих продуктов. Остальные продукты последовательно переносятся в messenger-neutral services.
 
 ## Один процесс
 
@@ -51,13 +51,21 @@ VK_API_VERSION=5.199
 GET /health
 ```
 
-возвращает состояние процесса, включённые платформы и лимиты ресурсов.
+возвращает состояние процесса, включённые платформы, текущие common products и лимиты ресурсов.
 
 ```text
 GET /ready
 ```
 
 возвращает `503` до полной готовности Telegram runtime и `200` после запуска. Deploy ждёт именно `/ready`, а не просто открытый TCP-порт.
+
+Текущий common product list:
+
+```text
+profile
+aero
+windgram
+```
 
 ## Shared RuntimeResources
 
@@ -75,6 +83,7 @@ MAX_CONCURRENT_METEOGRAM=2
 - legacy Telegram handlers через совместимые globals `GFS_SEMAPHORE`/`GEOCODE_SEMAPHORE`;
 - Telegram meteogram;
 - mounted web/API для GFS profile;
+- common `/profile`, `/aero`, `/windgram` services;
 - последующими common product services.
 
 Смысл лимита process-wide. При `MAX_CONCURRENT_GFS=2` два расчёта могут идти одновременно независимо от источника запросов; третий Telegram/MAX/VK/web запрос ждёт освобождения permit.
@@ -151,6 +160,23 @@ Telegram/MAX/VK используют `messenger/aero_service.py`: один parse
 
 Подробно: `docs/MESSENGER_AERO_SERVICE.md`.
 
+### `/windgram`
+
+Telegram/MAX/VK используют `messenger/windgram_service.py`. Первый интерактивный вариант одинаков для платформ:
+
+```text
+ветер
++0…+120 ч
+шаг 6 ч
+до 500 гПа
+```
+
+Пользователь может выбрать `ветер/температура/влажность`, горизонт `120/240/384 ч` и шаг `3/6/12 ч`. Service формирует канонические сроки и выбирает фактически опубликованный GFS run по максимальному требуемому lead, поэтому дальний диапазон не привязывается к циклу, где опубликован только `f000`.
+
+Результат содержит actual run/cycle UTC, valid range UTC, requested point, GFS grid point, уровни, max wind и PNG. GFS явно маркируется как модель, не наблюдение и не радиозонд.
+
+Подробно: `docs/MESSENGER_WINDGRAM_SERVICE.md`.
+
 ## Saved recipes
 
 `messenger/user_recipes.py` хранит сценарии по:
@@ -161,15 +187,27 @@ platform + user + product + point + params
 
 `run/cycle` и process-local state исключены. Repeat всегда выбирает новый подходящий model run.
 
-Для `/profile` и `/aero` MAX/VK уже поддерживают recipe/pin/repeat. Telegram использует тот же логический контракт в персональном UX.
+Для `/profile`, `/aero` и `/windgram` MAX/VK поддерживают recipe/pin/repeat. Telegram использует тот же логический контракт в персональном UX.
+
+Windgram recipe хранит:
+
+```text
+from
+to
+step
+top
+param
+point
+```
+
+и никогда не хранит фактический `run/cycle`.
 
 ## Следующий продуктовый этап
 
-После production runtime следующий vertical slice:
+Следующий vertical slice:
 
 ```text
-/windgram
-→ /cloudgram
+/cloudgram
 → /map
 → /meteogram
 → /route

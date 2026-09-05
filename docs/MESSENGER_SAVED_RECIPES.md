@@ -47,7 +47,7 @@ TELEGRAM_PREFERENCES_DB=.cache_gfs/telegram_preferences.sqlite3
 MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
 ```
 
-Saved recipe UX подключён к двум общим vertical slices:
+Saved recipe UX подключён к трём общим vertical slices.
 
 ### `/profile`
 
@@ -65,6 +65,20 @@ params={lead, diagram_type=skewt}
 
 `run/cycle` не сохраняются. `/aero` без аргументов открывает закреплённый или последний успешный сценарий; pin/repeat используют тот же устойчивый `recipe_id`, что профиль. Repeat передаёт `run=None` и выбирает свежий опубликованный цикл.
 
+### `/windgram`
+
+Успешный срок × уровень сохраняет:
+
+```text
+product=windgram
+point={lat, lon, label}
+params={from, to, step, top, param}
+```
+
+Поддерживаются разные отдельные сценарии одного пункта, например `ветер +0…+120` и `температура +0…+240`. `run/cycle` не входят в signature. Repeat передаёт `run=None`, а common service заново выбирает фактически опубликованный GFS run по максимальному требуемому lead.
+
+`/windgram` без аргументов открывает закреплённый/последний вариант; pin/repeat работают после restart процесса.
+
 Для остальных продуктов recipe UX в MAX/VK подключается одновременно с переносом соответствующего продукта в общий messenger service. Telegram уже поддерживает recipes для существующих продуктов.
 
 ## Проверки
@@ -78,5 +92,6 @@ params={lead, diagram_type=skewt}
 - Telegram/MAX/VK изолированы по platform;
 - callback работает после очистки session state;
 - repeat использует новый run;
-- `/profile` и `/aero` MAX/VK используют общий recipe store;
+- `/profile`, `/aero` и `/windgram` MAX/VK используют общий recipe store;
+- windgram repeat заново выбирает run по максимальному lead;
 - schedule использует точный snapshot recipe.
