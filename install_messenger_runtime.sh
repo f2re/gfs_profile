@@ -54,7 +54,6 @@ read_env() {
   [[ -f "$ENV_FILE" ]] || return 0
   grep -E "^[[:space:]]*${key}[[:space:]]*=" "$ENV_FILE" | tail -n 1 | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//" || true
 }
-
 set_env() {
   local key="$1" value="$2" tmp
   tmp="$(mktemp)"
@@ -68,25 +67,9 @@ validate_install() {
   [[ -f "$ENV_FILE" ]] || fail "Нет $ENV_FILE"
   [[ -x "$VENV_DIR/bin/python" ]] || fail "Нет $VENV_DIR/bin/python"
   [[ -f "$INSTALL_DIR/messenger_launcher.py" ]] || fail "Нет messenger_launcher.py — сначала обновите telegram-bot"
+  [[ -f "$INSTALL_DIR/messenger_config_check.py" ]] || fail "Нет messenger_config_check.py — сначала обновите telegram-bot"
   [[ -f "$INSTALL_DIR/register_messenger_webhooks.py" ]] || fail "Нет register_messenger_webhooks.py — сначала обновите telegram-bot"
   id "$SERVICE_USER" >/dev/null 2>&1 || fail "Нет пользователя $SERVICE_USER"
-}
-
-validate_platform_env() {
-  local max_token vk_token
-  max_token="$(read_env MAX_BOT_TOKEN)"
-  vk_token="$(read_env VK_BOT_TOKEN)"
-  [[ -n "$max_token" || -n "$vk_token" ]] || fail "Для --enable задайте MAX_BOT_TOKEN и/или VK_BOT_TOKEN"
-  if [[ -n "$max_token" ]]; then
-    [[ "$(read_env MAX_WEBHOOK_URL)" == https://* ]] || fail "MAX_WEBHOOK_URL должен быть HTTPS"
-    [[ -n "$(read_env MAX_WEBHOOK_SECRET)" ]] || fail "MAX_WEBHOOK_SECRET не задан"
-  fi
-  if [[ -n "$vk_token" ]]; then
-    [[ "$(read_env VK_CALLBACK_URL)" == https://* ]] || fail "VK_CALLBACK_URL должен быть HTTPS"
-    [[ "$(read_env VK_GROUP_ID)" =~ ^[0-9]+$ ]] || fail "VK_GROUP_ID должен быть числом"
-    [[ -n "$(read_env VK_CALLBACK_SECRET)" ]] || fail "VK_CALLBACK_SECRET не задан"
-    [[ -n "$(read_env VK_CONFIRMATION_CODE)" ]] || fail "VK_CONFIRMATION_CODE не задан"
-  fi
 }
 
 install_dropin() {
@@ -120,6 +103,23 @@ run_python_env() {
   ' _ "$ENV_FILE" "$INSTALL_DIR" "$@"
 }
 
+wait_ready() {
+  [[ "$NO_RESTART" -eq 0 ]] || return 0
+  local host port url attempt
+  host="$(read_env MESSENGER_RUNTIME_HOST)"; host="${host:-127.0.0.1}"
+  port="$(read_env MESSENGER_RUNTIME_PORT)"; port="${port:-8081}"
+  [[ "$host" == "0.0.0.0" || "$host" == "::" ]] && host="127.0.0.1"
+  url="http://${host}:${port}/ready"
+  for attempt in {1..20}; do
+    if run_python_env "$VENV_DIR/bin/python" -c 'import requests,sys; r=requests.get(sys.argv[1],timeout=2); raise SystemExit(0 if r.status_code == 200 else 1)' "$url" >/dev/null 2>&1; then
+      log "ready: $url"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
 run_registration() {
   [[ "$REGISTER" -eq 1 ]] || return 0
   run_python_env "$VENV_DIR/bin/python" "$INSTALL_DIR/register_messenger_webhooks.py"
@@ -146,17 +146,25 @@ case "$ACTION" in
     show_status
     ;;
   enable)
-    validate_platform_env
     install_dropin
     set_env MESSENGER_RUNTIME_ENABLED 1
     if ! run_python_env "$VENV_DIR/bin/python" "$INSTALL_DIR/runtime_check.py"; then
       set_env MESSENGER_RUNTIME_ENABLED 0
       fail "runtime_check не пройден; multi-messenger runtime отключён"
     fi
+    if ! run_python_env "$VENV_DIR/bin/python" "$INSTALL_DIR/messenger_config_check.py"; then
+      set_env MESSENGER_RUNTIME_ENABLED 0
+      fail "messenger env не прошёл preflight; multi-messenger runtime отключён"
+    fi
     if ! restart_service; then
       set_env MESSENGER_RUNTIME_ENABLED 0
       systemctl restart "${SERVICE_NAME}.service" || true
       fail "Не удалось включить runtime; возвращён Telegram-only режим"
+    fi
+    if ! wait_ready; then
+      set_env MESSENGER_RUNTIME_ENABLED 0
+      systemctl restart "${SERVICE_NAME}.service" || true
+      fail "Runtime не прошёл /ready; возвращён Telegram-only режим"
     fi
     if ! run_registration; then
       fail "Runtime запущен, но регистрация webhook не прошла. Исправьте HTTPS/env и повторите регистрацию; endpoint оставлен активным, чтобы не создавать недоступные частичные подписки."

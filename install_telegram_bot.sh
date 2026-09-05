@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Полная установка Telegram-бота GFS Profile.
+# Полная установка GFS Profile: Telegram + MAX + VK + web/API.
 
 set -Eeuo pipefail
 
-APP_NAME="GFS Profile Bot"
+APP_NAME="GFS Profile Multi-Messenger Bot"
 DEFAULT_INSTALL_DIR="/opt/gfs_profile"
 DEFAULT_SERVICE_NAME="gfs-profile-bot"
 DEFAULT_SERVICE_USER="gfsbot"
@@ -16,6 +16,7 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 ASSUME_YES=0
 SKIP_APT=0
 SKIP_COMMANDS=0
+SKIP_WEBHOOKS=0
 NO_START=0
 STATUS_ONLY=0
 EXTRA_READ_WRITE_PATHS=""
@@ -41,7 +42,7 @@ section() { printf '\n%s\n' "${C_BOLD}${C_CYAN}== $* ==${C_RESET}" >&2; }
 
 usage() {
   cat <<EOF
-$APP_NAME — установка Telegram-бота
+$APP_NAME — установка
 
 Использование:
   ./install_telegram_bot.sh [опции]
@@ -51,9 +52,10 @@ $APP_NAME — установка Telegram-бота
   --service-name NAME     имя systemd-сервиса
   --service-user USER     системный пользователь
   --python PATH           Python-интерпретатор
-  --yes                   не задавать вопросы; токены должны быть в окружении
+  --yes                   не задавать вопросы; обязательные токены в окружении
   --skip-apt              не устанавливать apt-пакеты
   --skip-commands         не регистрировать Telegram-команды
+  --skip-webhooks         не регистрировать MAX/VK webhook
   --no-start              не запускать сервис
   --status                показать состояние
   -h, --help              справка
@@ -62,10 +64,11 @@ $APP_NAME — установка Telegram-бота
   TELEGRAM_BOT_TOKEN
   DADATA_API_KEY          если GEOCODER_PROVIDERS содержит dadata
 
-Геокодирование:
-  GEOCODER_PROVIDERS=dadata,local,nominatim
-  DADATA_API_KEY=<API-ключ из личного кабинета DaData>
-  Для Suggestions нужен только API-ключ, Secret Key не требуется.
+Опционально для MAX:
+  MAX_BOT_TOKEN MAX_WEBHOOK_URL MAX_WEBHOOK_SECRET
+
+Опционально для VK:
+  VK_BOT_TOKEN VK_GROUP_ID VK_CALLBACK_URL VK_CALLBACK_SECRET VK_CONFIRMATION_CODE
 EOF
 }
 
@@ -78,6 +81,7 @@ while [[ $# -gt 0 ]]; do
     --yes) ASSUME_YES=1; shift ;;
     --skip-apt) SKIP_APT=1; shift ;;
     --skip-commands) SKIP_COMMANDS=1; shift ;;
+    --skip-webhooks) SKIP_WEBHOOKS=1; shift ;;
     --no-start) NO_START=1; shift ;;
     --status) STATUS_ONLY=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -128,7 +132,17 @@ ensure_env_default() {
   local key="$1" value="$2"
   [[ -n "$(get_env_value "$key" "$ENV_FILE")" ]] || set_env_value "$key" "$value"
 }
+copy_env_if_set() {
+  local key="$1" value="${!1:-}"
+  [[ -z "$value" ]] || set_env_value "$key" "$value"
+}
 providers_require_dadata() { [[ ",$1," == *,dadata,* ]]; }
+runtime_enabled() {
+  case "$(get_env_value MESSENGER_RUNTIME_ENABLED "$ENV_FILE" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes|on|да) return 0 ;;
+    *) return 1 ;;
+  esac
+}
 ask_secret() {
   local key="$1" description="$2" existing env_value value
   env_value="${!key:-}"
@@ -143,7 +157,7 @@ ask_secret() {
   done
 }
 run_with_env() {
-  run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" bash -c 'set -a; source "$1"; set +a; shift; exec "$@"' _ "$ENV_FILE" "$@"
+  run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" bash -c 'set -a; source "$1"; set +a; cd "$2"; shift 2; exec "$@"' _ "$ENV_FILE" "$INSTALL_DIR" "$@"
 }
 
 print_status() {
@@ -152,7 +166,10 @@ print_status() {
   [[ -x "$VENV_DIR/bin/python" ]] && success "venv: $VENV_DIR" || warn "venv отсутствует"
   if [[ -f "$ENV_FILE" ]]; then
     success ".env: $ENV_FILE"
+    echo "  MESSENGER_RUNTIME_ENABLED=$(get_env_value MESSENGER_RUNTIME_ENABLED "$ENV_FILE")" >&2
     echo "  TELEGRAM_BOT_TOKEN=$(mask_token "$(get_env_value TELEGRAM_BOT_TOKEN "$ENV_FILE")")" >&2
+    echo "  MAX_BOT_TOKEN=$(mask_token "$(get_env_value MAX_BOT_TOKEN "$ENV_FILE")")" >&2
+    echo "  VK_BOT_TOKEN=$(mask_token "$(get_env_value VK_BOT_TOKEN "$ENV_FILE")")" >&2
     echo "  GEOCODER_PROVIDERS=$(get_env_value GEOCODER_PROVIDERS "$ENV_FILE")" >&2
     echo "  DADATA_API_KEY=$(mask_token "$(get_env_value DADATA_API_KEY "$ENV_FILE")")" >&2
   else
@@ -163,21 +180,23 @@ print_status() {
 }
 
 require_repo_files() {
-  for file in telegram_bot.py requirements.txt runtime_check.py geocoder_preflight.py prepare_basemap_cache.py register_telegram_commands.py .env.telegram.example; do
+  local file
+  for file in messenger_launcher.py messenger_runtime.py messenger_config_check.py register_messenger_webhooks.py telegram_bot.py requirements.txt runtime_check.py geocoder_preflight.py prepare_basemap_cache.py register_telegram_commands.py .env.telegram.example; do
     [[ -f "$REPO_ROOT/$file" ]] || fail "Не найден $file в $REPO_ROOT"
   done
 }
 install_system_packages() {
-  [[ "$SKIP_APT" -eq 0 ]] || { warn "apt пропущен"; return; }
-  command -v apt-get >/dev/null 2>&1 || { warn "apt-get не найден"; return; }
-  confirm "Установить системные пакеты Python, rsync, ffmpeg и eccodes?" || return
+  [[ "$SKIP_APT" -eq 0 ]] || { warn "apt пропущен"; return 0; }
+  command -v apt-get >/dev/null 2>&1 || { warn "apt-get не найден"; return 0; }
+  confirm "Установить системные пакеты Python, rsync, ffmpeg и eccodes?" || return 0
   run_root apt-get update
   run_root apt-get install -y python3 python3-venv python3-pip ca-certificates rsync fonts-dejavu-core fonts-dejavu-extra ffmpeg
   run_root apt-get install -y python3-dev build-essential pkg-config libeccodes0 libeccodes-dev || warn "Дополнительные GRIB-пакеты установлены не полностью"
   run_root apt-get install -y --no-install-recommends fonts-liberation || warn "Шрифты Liberation установлены не полностью"
+  return 0
 }
 ensure_service_user() {
-  id "$SERVICE_USER" >/dev/null 2>&1 && return
+  id "$SERVICE_USER" >/dev/null 2>&1 && return 0
   run_root useradd --system --home-dir "$INSTALL_DIR" --shell /usr/sbin/nologin "$SERVICE_USER"
 }
 copy_project() {
@@ -195,7 +214,7 @@ create_venv() {
   run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" "$VENV_DIR/bin/python" -m pip install --prefer-binary -r "$INSTALL_DIR/requirements.txt"
 }
 configure_env() {
-  local providers telegram_token dadata_token
+  local providers telegram_token dadata_token key
   providers="${GEOCODER_PROVIDERS:-$(get_env_value GEOCODER_PROVIDERS "$ENV_FILE")}"
   providers="${providers:-$DEFAULT_GEOCODER_PROVIDERS}"
   telegram_token="$(ask_secret TELEGRAM_BOT_TOKEN 'Введите TELEGRAM_BOT_TOKEN')"
@@ -208,16 +227,29 @@ configure_env() {
   set_env_value TELEGRAM_BOT_TOKEN "$telegram_token"
   set_env_value GEOCODER_PROVIDERS "$providers"
   [[ -z "$dadata_token" ]] || set_env_value DADATA_API_KEY "$dadata_token"
+
+  for key in MAX_BOT_TOKEN MAX_WEBHOOK_URL MAX_WEBHOOK_SECRET VK_BOT_TOKEN VK_GROUP_ID VK_CALLBACK_URL VK_CALLBACK_SECRET VK_CONFIRMATION_CODE VK_API_VERSION MESSENGER_RUNTIME_ENABLED MESSENGER_RUNTIME_HOST MESSENGER_RUNTIME_PORT MESSENGER_RUNTIME_LOG_LEVEL MESSENGER_RUNTIME_ACCESS_LOG MESSENGER_PREFERENCES_DB TELEGRAM_PREFERENCES_DB; do
+    copy_env_if_set "$key"
+  done
+
+  ensure_env_default MESSENGER_RUNTIME_ENABLED "1"
+  ensure_env_default MESSENGER_RUNTIME_HOST "127.0.0.1"
+  ensure_env_default MESSENGER_RUNTIME_PORT "8081"
+  ensure_env_default MESSENGER_RUNTIME_LOG_LEVEL "info"
+  ensure_env_default MESSENGER_RUNTIME_ACCESS_LOG "0"
+  ensure_env_default MESSENGER_PREFERENCES_DB ".cache_gfs/messenger_preferences.sqlite3"
+  ensure_env_default TELEGRAM_PREFERENCES_DB ".cache_gfs/telegram_preferences.sqlite3"
   ensure_env_default DADATA_SUGGEST_URL "https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest/address"
   ensure_env_default DADATA_TIMEOUT "12"
   ensure_env_default NOMINATIM_URL "https://nominatim.openstreetmap.org/search"
-  ensure_env_default GEOCODER_USER_AGENT "gfs-profile-telegram-bot/0.1"
+  ensure_env_default GEOCODER_USER_AGENT "gfs-profile-messenger-bot/0.1"
   ensure_env_default GEOCODE_CACHE_DIR ".cache_gfs/geocode"
   ensure_env_default GEOCODE_CACHE_TTL_SECONDS "2592000"
   ensure_env_default GEOCODE_TIMEOUT "12"
   ensure_env_default DEFAULT_LEAD "24"
   ensure_env_default MAX_CONCURRENT_GFS "2"
   ensure_env_default MAX_CONCURRENT_GEOCODE "2"
+  ensure_env_default MAX_CONCURRENT_METEOGRAM "2"
   ensure_env_default GFS_CACHE_DIR ".cache_gfs"
   ensure_env_default GFS_CACHE_TTL_SECONDS "86400"
   ensure_env_default GFS_AVAILABILITY_CACHE_TTL_SECONDS "300"
@@ -238,16 +270,21 @@ configure_env() {
 validate_runtime() {
   log "Проверяю импорты"
   run_with_env "$VENV_DIR/bin/python" "$INSTALL_DIR/runtime_check.py"
+  log "Проверяю messenger env без сетевых изменений"
+  run_with_env "$VENV_DIR/bin/python" "$INSTALL_DIR/messenger_config_check.py"
   log "Проверяю DaData контрольным запросом"
   run_with_env "$VENV_DIR/bin/python" "$INSTALL_DIR/geocoder_preflight.py"
+  bash -n "$INSTALL_DIR/install_telegram_bot.sh"
+  bash -n "$INSTALL_DIR/deploy_telegram_bot.sh"
 }
 prepare_basemap_cache() {
   run_with_env "$VENV_DIR/bin/python" "$INSTALL_DIR/prepare_basemap_cache.py" --resolution "$(get_env_value MAP_BASEMAP_RESOLUTION "$ENV_FILE")" || warn "Не удалось подготовить basemap"
+  return 0
 }
 write_service() {
   cat <<EOF | run_root tee "$UNIT_PATH" >/dev/null
 [Unit]
-Description=GFS Profile Telegram Bot
+Description=GFS Profile Multi-Messenger Bot
 After=network-online.target
 Wants=network-online.target
 
@@ -255,7 +292,7 @@ Wants=network-online.target
 Type=simple
 WorkingDirectory=$INSTALL_DIR
 EnvironmentFile=$ENV_FILE
-ExecStart=$VENV_DIR/bin/python $INSTALL_DIR/telegram_bot.py
+ExecStart=$VENV_DIR/bin/python $INSTALL_DIR/messenger_launcher.py
 Restart=always
 RestartSec=5
 User=$SERVICE_USER
@@ -272,14 +309,42 @@ EOF
   run_root systemctl daemon-reload
 }
 start_service() {
-  [[ "$NO_START" -eq 0 ]] || { warn "Запуск пропущен"; return; }
+  [[ "$NO_START" -eq 0 ]] || { warn "Запуск пропущен"; return 0; }
   run_root systemctl enable --now "${SERVICE_NAME}.service"
   sleep 2
-  systemctl is-active --quiet "${SERVICE_NAME}.service" || { run_root journalctl -u "${SERVICE_NAME}.service" -n 50 --no-pager || true; fail "Сервис не стартовал"; }
+  systemctl is-active --quiet "${SERVICE_NAME}.service" || { run_root journalctl -u "${SERVICE_NAME}.service" -n 80 --no-pager || true; fail "Сервис не стартовал"; }
+}
+wait_runtime_ready() {
+  [[ "$NO_START" -eq 0 ]] || return 0
+  runtime_enabled || return 0
+  local host port url attempt
+  host="$(get_env_value MESSENGER_RUNTIME_HOST "$ENV_FILE")"; host="${host:-127.0.0.1}"
+  port="$(get_env_value MESSENGER_RUNTIME_PORT "$ENV_FILE")"; port="${port:-8081}"
+  [[ "$host" == "0.0.0.0" || "$host" == "::" ]] && host="127.0.0.1"
+  url="http://${host}:${port}/ready"
+  for attempt in {1..20}; do
+    if run_with_env "$VENV_DIR/bin/python" -c 'import requests,sys; r=requests.get(sys.argv[1], timeout=2); raise SystemExit(0 if r.status_code == 200 else 1)' "$url" >/dev/null 2>&1; then
+      success "Runtime ready: $url"
+      return 0
+    fi
+    sleep 1
+  done
+  run_root journalctl -u "${SERVICE_NAME}.service" -n 100 --no-pager || true
+  fail "Multi-messenger runtime не прошёл /ready: $url"
 }
 register_commands() {
-  [[ "$SKIP_COMMANDS" -eq 0 ]] || return
-  run_with_env "$VENV_DIR/bin/python" "$INSTALL_DIR/register_telegram_commands.py" || warn "Не удалось зарегистрировать команды"
+  [[ "$SKIP_COMMANDS" -eq 0 ]] || return 0
+  run_with_env "$VENV_DIR/bin/python" "$INSTALL_DIR/register_telegram_commands.py" || warn "Не удалось зарегистрировать Telegram-команды"
+  return 0
+}
+register_webhooks() {
+  [[ "$SKIP_WEBHOOKS" -eq 0 ]] || { warn "Регистрация MAX/VK webhook пропущена"; return 0; }
+  runtime_enabled || return 0
+  if run_with_env "$VENV_DIR/bin/python" "$INSTALL_DIR/register_messenger_webhooks.py"; then
+    success "MAX/VK webhook проверены и зарегистрированы"
+    return 0
+  fi
+  fail "Runtime работает, но регистрация MAX/VK webhook не прошла; проверьте публичный HTTPS и env"
 }
 write_state() {
   cat <<EOF | run_root tee "$STATE_FILE" >/dev/null
@@ -289,6 +354,10 @@ service_name=$SERVICE_NAME
 service_user=$SERVICE_USER
 venv=$VENV_DIR
 unit=$UNIT_PATH
+entrypoint=messenger_launcher.py
+messenger_runtime=$(get_env_value MESSENGER_RUNTIME_ENABLED "$ENV_FILE")
+max_configured=$([[ -n "$(get_env_value MAX_BOT_TOKEN "$ENV_FILE")" ]] && printf yes || printf no)
+vk_configured=$([[ -n "$(get_env_value VK_BOT_TOKEN "$ENV_FILE")" ]] && printf yes || printf no)
 geocoder_providers=$(get_env_value GEOCODER_PROVIDERS "$ENV_FILE")
 dadata=validated
 runtime_check=ok
@@ -305,7 +374,7 @@ main() {
   SERVICE_NAME="$(ask_default 'Имя systemd-сервиса' "$SERVICE_NAME")"
   SERVICE_USER="$(ask_default 'Пользователь сервиса' "$SERVICE_USER")"
   ENV_FILE="$INSTALL_DIR/.env"; VENV_DIR="$INSTALL_DIR/.venv"; UNIT_PATH="/etc/systemd/system/${SERVICE_NAME}.service"; STATE_FILE="$INSTALL_DIR/.install-state"
-  confirm "Установить бот в $INSTALL_DIR?" || fail "Отменено"
+  confirm "Установить $APP_NAME в $INSTALL_DIR?" || fail "Отменено"
   install_system_packages
   ensure_service_user
   copy_project
@@ -315,9 +384,11 @@ main() {
   prepare_basemap_cache
   write_service
   start_service
+  wait_runtime_ready
   register_commands
+  register_webhooks
   write_state
-  success "Установка завершена. DaData настроена как основной геокодер."
+  success "Установка завершена: Telegram + общий messenger runtime готовы."
 }
 
 main "$@"
