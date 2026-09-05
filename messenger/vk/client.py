@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import time
 from pathlib import Path
@@ -113,23 +114,11 @@ class VkApiClient:
         raise PlatformPermanentError("VK messages.send returned no message id")
 
     def edit_message(self, peer_id: str, message_id: str, message: str, *, keyboard: str | None = None) -> bool:
-        return bool(self.call(
-            "messages.edit",
-            peer_id=int(peer_id),
-            message_id=int(message_id),
-            message=message,
-            keyboard=keyboard,
-        ))
+        return bool(self.call("messages.edit", peer_id=int(peer_id), message_id=int(message_id), message=message, keyboard=keyboard))
 
     def answer_event(self, event_id: str, user_id: str, peer_id: str, text: str | None = None) -> bool:
         event_data = json.dumps({"type": "show_snackbar", "text": text}, ensure_ascii=False) if text else None
-        return bool(self.call(
-            "messages.sendMessageEventAnswer",
-            event_id=event_id,
-            user_id=int(user_id),
-            peer_id=int(peer_id),
-            event_data=event_data,
-        ))
+        return bool(self.call("messages.sendMessageEventAnswer", event_id=event_id, user_id=int(user_id), peer_id=int(peer_id), event_data=event_data))
 
     def upload_photo(self, peer_id: str, path: Path) -> str:
         slot = self.call("photos.getMessagesUploadServer", peer_id=int(peer_id))
@@ -138,22 +127,13 @@ class VkApiClient:
             raise PlatformPermanentError("VK photo upload server has no upload_url")
         with Path(path).open("rb") as file_obj:
             try:
-                response = self.session.post(
-                    upload_url,
-                    files={"photo": (Path(path).name, file_obj)},
-                    timeout=max(self.timeout, 60.0),
-                )
+                response = self.session.post(upload_url, files={"photo": (Path(path).name, file_obj)}, timeout=max(self.timeout, 60.0))
             except requests.RequestException as exc:
                 raise PlatformTemporaryError(f"VK photo upload error: {exc}") from exc
         if response.status_code >= 400:
             raise PlatformTemporaryError(f"VK photo upload HTTP {response.status_code}")
         uploaded = response.json()
-        saved = self.call(
-            "photos.saveMessagesPhoto",
-            photo=uploaded.get("photo"),
-            server=uploaded.get("server"),
-            hash=uploaded.get("hash"),
-        )
+        saved = self.call("photos.saveMessagesPhoto", photo=uploaded.get("photo"), server=uploaded.get("server"), hash=uploaded.get("hash"))
         item = saved[0] if isinstance(saved, list) and saved else saved
         return _attachment_id("photo", item)
 
@@ -164,11 +144,7 @@ class VkApiClient:
             raise PlatformPermanentError("VK docs upload server has no upload_url")
         with Path(path).open("rb") as file_obj:
             try:
-                response = self.session.post(
-                    upload_url,
-                    files={"file": (Path(path).name, file_obj)},
-                    timeout=max(self.timeout, 60.0),
-                )
+                response = self.session.post(upload_url, files={"file": (Path(path).name, file_obj)}, timeout=max(self.timeout, 60.0))
             except requests.RequestException as exc:
                 raise PlatformTemporaryError(f"VK document upload error: {exc}") from exc
         if response.status_code >= 400:
@@ -177,6 +153,57 @@ class VkApiClient:
         saved = self.call("docs.save", file=uploaded.get("file"), title=title or Path(path).name)
         item = saved.get("doc") if isinstance(saved, dict) and isinstance(saved.get("doc"), dict) else saved
         return _attachment_id("doc", item)
+
+    def upload_video(self, peer_id: str, path: Path, title: str | None = None) -> str:
+        """Upload an MP4 through VK video.save and return a video attachment id.
+
+        VK's upload URL is a provider endpoint, so the binary upload intentionally
+        uses a plain HTTP POST rather than the API method wrapper.
+        """
+        group_raw = os.getenv("VK_GROUP_ID", "").strip()
+        group_id: int | None = None
+        if group_raw:
+            try:
+                parsed = int(group_raw)
+                if parsed > 0:
+                    group_id = parsed
+            except ValueError:
+                group_id = None
+        slot = self.call(
+            "video.save",
+            name=title or Path(path).stem,
+            description="GFS 0.25 · модельная карта",
+            group_id=group_id,
+            wallpost=0,
+            is_private=1,
+        )
+        upload_url = str(slot.get("upload_url") or "") if isinstance(slot, dict) else ""
+        if not upload_url:
+            raise PlatformPermanentError("VK video.save returned no upload_url")
+        with Path(path).open("rb") as file_obj:
+            try:
+                response = self.session.post(
+                    upload_url,
+                    files={"video_file": (Path(path).name, file_obj, "video/mp4")},
+                    timeout=max(self.timeout, 180.0),
+                )
+            except requests.RequestException as exc:
+                raise PlatformTemporaryError(f"VK video upload error: {exc}") from exc
+        if response.status_code >= 500:
+            raise PlatformTemporaryError(f"VK video upload HTTP {response.status_code}")
+        if response.status_code >= 400:
+            raise PlatformPermanentError(f"VK video upload HTTP {response.status_code}: {response.text[:300]}")
+        try:
+            uploaded = response.json()
+        except ValueError as exc:
+            raise PlatformPermanentError("VK video upload returned invalid JSON") from exc
+        source = uploaded if isinstance(uploaded, dict) else {}
+        fallback = slot if isinstance(slot, dict) else {}
+        owner_id = source.get("owner_id", fallback.get("owner_id"))
+        video_id = source.get("video_id", source.get("id", fallback.get("video_id", fallback.get("id"))))
+        access_key = source.get("access_key", fallback.get("access_key"))
+        item = {"owner_id": owner_id, "id": video_id, "access_key": access_key}
+        return _attachment_id("video", item)
 
 
 def _attachment_id(prefix: str, item: Any) -> str:
