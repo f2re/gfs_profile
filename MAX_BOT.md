@@ -1,77 +1,84 @@
-# MAX Bot — текущее состояние и эксплуатация
+# MAX Bot — регистрация, настройка и эксплуатация
 
-Статус на 2026-09-05: MAX transport/webhook, общие `/profile`, `/aero` и `/windgram` vertical slices, saved recipes и штатный production multi-messenger runtime реализованы в рабочей ветке `telegram-bot`. Остальные продукты последовательно переносятся в общий messenger service; отдельной метеорологической логики MAX не содержит.
+Статус на 2026-09-05: MAX transport/webhook и общие `/profile`, `/aero`, `/windgram`, `/cloudgram` работают через тот же messenger-neutral service, что Telegram и VK. Отдельной метеорологической логики MAX нет.
 
-## Архитектура
+Полная пошаговая регистрация с Nginx, `.env`, диагностикой и типовыми ошибками: [`docs/MESSENGER_REGISTRATION.md`](docs/MESSENGER_REGISTRATION.md).
+
+## Что нужно создать в MAX
+
+По актуальной схеме MAX бот создаётся на платформе MAX для партнёров после создания/верификации профиля. Бот проходит модерацию. После успешной модерации token берётся:
+
+```text
+Чат-боты
+→ выбрать бота
+→ Расширенные настройки
+→ Настроить
+→ Токен
+```
+
+Официальные разделы, которые нужно сверять перед изменением transport:
+
+```text
+https://dev.max.ru/docs/chatbots/bots-create/create
+https://dev.max.ru/docs/chatbots/bots-create/manage
+https://dev.max.ru/docs-api
+https://dev.max.ru/docs-api/methods/POST/subscriptions
+https://dev.max.ru/docs-api/changelog-api
+```
+
+Token — секрет. В репозиторий его не коммитить.
+
+## Что вставить в GFS Profile
+
+После базовой установки:
+
+```bash
+bash install_telegram_bot.sh
+```
+
+запустите мастер:
+
+```bash
+sudo bash setup_messenger_bots.sh --max
+```
+
+Он запросит только:
+
+```env
+MAX_BOT_TOKEN=<token из MAX>
+MAX_WEBHOOK_URL=https://bot.example.ru/webhooks/max
+```
+
+`MAX_WEBHOOK_SECRET` можно не задавать: мастер создаёт случайный secret сам и хранит его только в `/opt/gfs_profile/.env`.
+
+Неинтерактивно:
+
+```bash
+sudo env \
+  MAX_BOT_TOKEN='<MAX_TOKEN>' \
+  MAX_WEBHOOK_URL='https://bot.example.ru/webhooks/max' \
+  bash setup_messenger_bots.sh --max --yes
+```
+
+## Production transport
 
 ```text
 MAX Update
+→ POST /webhooks/max
 → MAX adapter
 → NormalizedEvent
-→ common messenger router/service
+→ common product service
 → CommonProductResult
-→ MAX gateway/renderer
+→ MAX gateway
 ```
 
-Метеорологические расчёты, geocoder, выбор GFS run и formatter не копируются в MAX.
-
-## Официальный API
-
-Актуальный endpoint:
+API endpoint:
 
 ```text
 https://platform-api2.max.ru
 ```
 
-Токен передаётся заголовком `Authorization`. Production использует Webhook через `POST /subscriptions`; при активной подписке Long Polling не используется. Webhook должен быть HTTPS с доверенным TLS, а при указанном `secret` проверяется `X-Max-Bot-Api-Secret`.
-
-Основные источники:
-
-- https://dev.max.ru/docs-api
-- https://dev.max.ru/docs-api/methods/POST/subscriptions
-- https://dev.max.ru/docs-api/objects/Update
-- https://dev.max.ru/docs-api/changelog-api
-
-Перед существенным изменением transport/client повторно сверять reference и changelog.
-
-## Production install/deploy
-
-MAX больше не включается отдельным runtime-скриптом после Telegram deploy. Штатные:
-
-```bash
-bash install_telegram_bot.sh
-sudo bash deploy_telegram_bot.sh --yes
-```
-
-устанавливают systemd entrypoint:
-
-```text
-messenger_launcher.py
-```
-
-При `MESSENGER_RUNTIME_ENABLED=1` тот же процесс одновременно держит Telegram polling, MAX/VK webhook и web/API.
-
-Порядок MAX deploy:
-
-```text
-offline env preflight
-→ restart launcher
-→ GET /ready
-→ register_messenger_webhooks.py
-→ POST /subscriptions
-```
-
-То есть MAX subscription не создаётся до готовности локального runtime endpoint.
-
-Публичный URL должен быть проксирован Nginx/HAProxy на:
-
-```text
-127.0.0.1:8081/webhooks/max
-```
-
-или на другой `MESSENGER_RUNTIME_HOST/PORT`.
-
-## Поддерживаемые события
+Token передаётся только через `Authorization`. Production использует Webhook `POST /subscriptions`. Проект регистрирует события:
 
 ```text
 bot_started
@@ -79,131 +86,113 @@ message_created
 message_callback
 ```
 
-Adapter нормализует текст, команды, location, callback payload, user/chat/message ids и platform event id. Webhook быстро валидирует запрос и возвращает `200`, а GFS-расчёт выполняется асинхронной задачей.
-
-## Кнопки и callback
-
-Renderer поддерживает native callback и `request_geo_location`. Callback payload versioned и не зависит только от RAM-state.
-
-Saved recipe callbacks используют устойчивый `recipe_id`:
+При регистрации передаётся `secret`; входящий endpoint проверяет:
 
 ```text
-v1|recipe|run|<id>
-v1|recipe|toggle|<id>
-v1|recipe|change|<id>
+X-Max-Bot-Api-Secret
 ```
 
-Поэтому repeat/pin работают после restart процесса.
+Webhook быстро отвечает HTTP 200, а тяжёлый GFS-расчёт выполняется фоновой asyncio-task того же процесса. Одновременно отдельный Long Polling `/updates` для production не запускать.
 
-## Реализованный `/profile`
-
-Через общий service работают:
-
-- `/profile`;
-- `Москва` → выбор срока;
-- `Москва +24` → немедленный расчёт;
-- неоднозначный город;
-- native location;
-- быстрые `+0,+3,+6,+12,+24,+48`;
-- все сроки до `+384`;
-- одно редактируемое status message;
-- общий GFS run selection;
-- одинаковая сводка, PNG и CSV.
-
-## Реализованный `/aero`
-
-MAX использует тот же `messenger/aero_service.py`, что Telegram и VK. Метеорологическое ядро остаётся в существующих `aero_product.py`/`diagnostic_profile`.
-
-Flow:
+Публичный URL должен быть HTTPS с доверенным сертификатом и проксироваться, например:
 
 ```text
-/aero Москва +24
-→ сразу Skew-T
-
-/aero
-→ город / координаты / геолокация
-→ неоднозначность при необходимости
-→ срок
-→ Skew-T
+https://bot.example.ru/webhooks/max
+        ↓
+127.0.0.1:8081/webhooks/max
 ```
 
-Поддерживаются быстрые сроки `+0,+3,+6,+12,+24,+48` и все сроки до `+384` с пагинацией.
+## Автоматическая регистрация
 
-Результат содержит:
+После `/ready` штатный deploy вызывает:
 
-- фактический GFS run/cycle UTC;
-- lead и valid UTC;
-- requested point;
-- GFS grid point;
-- Skew-T log-P и годограф;
-- PNG;
-- явную маркировку GFS как модели;
-- icing/CAT только как модельные прокси.
+```bash
+python register_messenger_webhooks.py
+```
 
-Тип диаграммы пользователь не выбирает: `/aero` всегда означает Skew-T log-P с годографом.
+Скрипт:
 
-Подробно: `docs/MESSENGER_AERO_SERVICE.md` и `docs/AERO_DIAGRAM.md`.
+1. проверяет публичный endpoint;
+2. читает существующие subscriptions;
+3. создаёт или обновляет subscription с нужным URL/secret/events.
 
-## Реализованный `/windgram`
+Проверка фактического состояния:
 
-MAX использует тот же `messenger/windgram_service.py`, что Telegram и VK. Метеорологический расчёт остаётся в `windgram_product.py`, отрисовка — в `windgram_plot.py`.
+```bash
+cd /opt/gfs_profile
+set -a; source .env; set +a
+.venv/bin/python register_messenger_webhooks.py --max --status
+```
 
-Первый интерактивный flow:
+или:
+
+```bash
+sudo bash setup_messenger_bots.sh --status
+```
+
+Ожидается `OK MAX: подписка активна`.
+
+## Общие продукты
+
+### `/profile`
+
+Город/координаты, `Москва +24`, неоднозначность, native location, быстрые сроки, пагинация до `+384`, один status message, PNG/CSV и saved recipes.
+
+### `/aero`
+
+Один общий Skew-T log-P + годограф. Фактический GFS run/cycle, valid UTC, requested/grid point. Icing/CAT — только модельные прокси.
+
+### `/windgram`
+
+Default:
 
 ```text
-/windgram
-→ город / координаты / native location
-→ параметры
-→ Построить
+ветер
++0…+120 ч
+шаг 6 ч
+до 500 гПа
 ```
 
-Значения первого запуска:
+Доступны wind/temp/RH, `+120/+240/+384`, шаг `3/6/12`.
+
+### `/cloudgram`
+
+Default:
 
 ```text
-параметр: ветер
-период: +0…+120 ч
-шаг: 6 ч
-уровни: до 500 гПа
+режим: Подробно
++0…+72 ч
+шаг 3 ч
 ```
 
-В карточке доступны:
+Доступны `Подробно/Кратко`, горизонты `+24/+48/+72/+120`, шаг `3/6`.
 
-- ветер / температура / влажность;
-- горизонт `+120/+240/+384 ч`;
-- шаг `3/6/12 ч`;
-- другая точка;
-- pin/repeat через saved recipe.
-
-Прямая команда также поддерживается:
+Примеры:
 
 ```text
-/windgram Москва to=240 step=12 param=temp
-/windgram 55.75 37.62 from=12 to=120 step=6 top=700 param=rh
+/cloudgram Москва to=72 step=3 mode=pro
+/cloudgram 55.75 37.62 to=120 step=6 mode=simple
 ```
 
-При неоднозначном городе сохраняются все параметры запроса до callback-выбора точки. Service проверяет публикацию по максимальному реально требуемому сроку и выбирает фактически подходящий GFS cycle.
+Common service выбирает цикл, содержащий максимальный требуемый lead. Сводка показывает actual run/cycle UTC, valid range, requested point, GFS grid, максимальный модельный hazard и missing fields. Гроза/опасность маркируются как модельная диагностика, не наблюдение.
 
-Результат показывает actual run/cycle UTC, valid range, requested point, GFS grid point, уровни, max wind и PNG. В тексте явно указано, что GFS — модель, не наблюдение и не радиозонд.
+## Saved recipes
 
-Подробно: `docs/MESSENGER_WINDGRAM_SERVICE.md`.
-
-## Сохранённые сценарии
-
-Messenger-neutral SQLite:
+SQLite:
 
 ```env
 MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
 ```
 
-Для `/profile`, `/aero` и `/windgram` успешный расчёт сохраняет точку и параметры, но не `run/cycle`. `/start` показывает до двух быстрых сценариев. Команда без аргументов открывает закреплённый или последний успешный вариант. Repeat передаёт `run=None`, поэтому выбирается свежий опубликованный цикл.
+Для четырёх общих продуктов сохраняются point + пользовательские параметры, но не `run/cycle`. Repeat выбирает свежий опубликованный цикл. Cloudgram recipe содержит:
 
-Windgram recipe содержит `from/to/step/top/param + point`.
+```text
+from / to / step / mode / point
+```
 
-Хранилище изолировано по `platform + user_id`, поэтому MAX и VK не смешивают пользовательское состояние.
+## Общие ресурсы
 
-## Общие лимиты ресурсов
-
-MAX не получает отдельную квоту поверх Telegram. В production runtime используются process-wide параметры:
+MAX использует один process-wide pool с Telegram/VK/web:
 
 ```env
 MAX_CONCURRENT_GFS=2
@@ -211,51 +200,45 @@ MAX_CONCURRENT_GEOCODE=2
 MAX_CONCURRENT_METEOGRAM=2
 ```
 
-Например, при GFS limit=2 два расчёта суммарно по Telegram/MAX/VK/web могут выполняться, третий ждёт permit.
+Отдельной квоты MAX поверх этих лимитов нет.
 
-## Media
+## Media и retry
 
-Client/gateway использует схему:
+PNG загружается через актуальный MAX upload flow и отправляется как attachment. Client поддерживает retry/backoff для `429`, `5xx` и network errors. Callback подтверждается до тяжёлой обработки.
 
-```text
-POST /uploads
-→ upload URL/token
-→ загрузка файла
-→ POST /messages с attachment
-```
-
-PNG отправляется как image attachment; файловые продукты используют file attachment. Retry/backoff применяется к `429`, `5xx` и network errors.
-
-## Конфигурация
-
-```env
-MESSENGER_RUNTIME_ENABLED=1
-MAX_BOT_TOKEN=
-MAX_WEBHOOK_URL=https://bot.example.ru/webhooks/max
-MAX_WEBHOOK_SECRET=
-MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
-```
-
-Проверка после deploy:
+## Проверка после настройки
 
 ```bash
 curl -fsS http://127.0.0.1:8081/ready
-sudo bash deploy_telegram_bot.sh --status
+curl -fsS http://127.0.0.1:8081/health
+sudo bash setup_messenger_bots.sh --status
+sudo systemctl status gfs-profile-bot.service
 sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
 ```
 
-Runtime слушает loopback; публичный HTTPS завершается Nginx/HAProxy. MAX и Telegram работают в одном Python process, без Redis/Celery.
+В MAX вручную проверить:
+
+```text
+/start
+/profile Москва +24
+/aero Москва +24
+/windgram Москва to=120 step=6 param=wind
+/cloudgram Москва to=72 step=3 mode=pro
+geo/location
+callback
+pin/repeat
+/status
+/cancel
+```
 
 ## Следующий этап паритета
 
-Следующий vertical slice — `/cloudgram`, затем:
-
 ```text
 /map
-/meteogram
-/route
-/settings
-/schedule
+→ /meteogram
+→ /route
+→ /settings
+→ /schedule
 ```
 
-Каждый новый продукт должен использовать общий result contract, progress contract, `RuntimeResources` и `UserRecipeStore`. MAX-копии GFS/geocoder/product logic запрещены.
+Каждый следующий продукт должен использовать common service/result/progress, `RuntimeResources` и `UserRecipeStore`. MAX-копии GFS/geocoder/product logic запрещены.

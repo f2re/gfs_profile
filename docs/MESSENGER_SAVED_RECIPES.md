@@ -1,97 +1,76 @@
 # Сохранённые сценарии мессенджеров
 
-Успешный интерактивный расчёт сохраняется как отдельный пользовательский сценарий (recipe):
+Успешный интерактивный расчёт сохраняется как отдельный recipe:
 
 ```text
 platform + user + product + point + params
 ```
 
-Это позволяет одновременно хранить несколько состояний одного продукта, например карту Краснодара `+0…+48 ч` и карту Москвы `+0…+96 ч`.
+В recipe не попадают `run/cycle`, message/status ids, callback ids, кандидаты геокодинга и wizard state. Поэтому repeat повторяет пользовательский сценарий на актуальном опубликованном запуске модели.
 
-## Контракт
-
-Каждый recipe получает устойчивый `recipe_id`. В подпись и хранилище не попадают `run/cycle`, message/status ids, callback ids, кандидаты геокодинга, wizard step и schedule setup state. Поэтому повтор выполняет тот же пользовательский сценарий на актуальном доступном запуске модели.
-
-Одинаковый recipe дедуплицируется: увеличивается `success_count` и обновляется `last_success_at`. Для одного пользователя/платформы хранятся до 24 recent и до 8 закреплённых сценариев.
-
-## Быстрые и закреплённые сценарии
-
-На главном экране показываются максимум два быстрых recipe. Закреплённые имеют приоритет, затем учитываются последний успешный и частота использования. Последний закреплённый recipe продукта становится пользовательским default этого продукта.
-
-Действия результата адресуют точный `recipe_id`:
-
-```text
-🔄 Обновить
-⚙️ Изменить
-☆ Закрепить / ★ Открепить
-🕒 В расписание
-```
-
-Расписание создаётся из snapshot выбранного recipe и не меняется при последующих изменениях preferences.
+Одинаковый recipe дедуплицируется; обновляются `success_count` и `last_success_at`. Для одного пользователя/платформы хранятся до 24 recent и до 8 pinned recipes.
 
 ## Telegram
 
-Telegram recipes хранятся в том же SQLite, что персональные настройки:
+Telegram recipes используют:
 
 ```env
 TELEGRAM_PREFERENCES_DB=.cache_gfs/telegram_preferences.sqlite3
 ```
 
-`/settings → Сохранённые сценарии` позволяет открыть, повторить, изменить, закрепить, поставить в расписание и удалить конкретный сценарий. Действия результата работают и после прямых команд, а не только wizard-flow.
+`/settings → Сохранённые сценарии` позволяет повторить, изменить, закрепить, поставить в расписание или удалить точный `recipe_id`.
 
 ## MAX / VK
 
-Общий runtime использует messenger-neutral store:
+Messenger-neutral store:
 
 ```env
 MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
 ```
 
-Saved recipe UX подключён к трём общим vertical slices.
+Recipe UX подключён к четырём common vertical slices.
 
 ### `/profile`
 
-Успешный профиль сохраняет точку и lead. `/start` показывает быстрый recipe, `/profile` без аргументов открывает закреплённый/последний вариант, repeat запускает новый опубликованный GFS run.
+```text
+params={lead}
+```
 
 ### `/aero`
 
-Успешная аэродиаграмма сохраняет:
-
 ```text
-product=aero
-point={lat, lon, label}
 params={lead, diagram_type=skewt}
 ```
 
-`run/cycle` не сохраняются. `/aero` без аргументов открывает закреплённый или последний успешный сценарий; pin/repeat используют тот же устойчивый `recipe_id`, что профиль. Repeat передаёт `run=None` и выбирает свежий опубликованный цикл.
-
 ### `/windgram`
 
-Успешный срок × уровень сохраняет:
-
 ```text
-product=windgram
-point={lat, lon, label}
 params={from, to, step, top, param}
 ```
 
-Поддерживаются разные отдельные сценарии одного пункта, например `ветер +0…+120` и `температура +0…+240`. `run/cycle` не входят в signature. Repeat передаёт `run=None`, а common service заново выбирает фактически опубликованный GFS run по максимальному требуемому lead.
+Можно хранить, например, два независимых варианта одного пункта: `ветер +0…+120` и `температура +0…+240`.
 
-`/windgram` без аргументов открывает закреплённый/последний вариант; pin/repeat работают после restart процесса.
+### `/cloudgram`
 
-Для остальных продуктов recipe UX в MAX/VK подключается одновременно с переносом соответствующего продукта в общий messenger service. Telegram уже поддерживает recipes для существующих продуктов.
+```text
+params={from, to, step, mode}
+```
 
-## Проверки
+Отдельными recipes могут быть, например, `Подробно +0…+72` и `Кратко +0…+120`. `run/cycle` не входят в signature. Repeat передаёт `run=None`, а common service заново выбирает фактически опубликованный GFS cycle, содержащий максимальный требуемый lead.
 
-Обязательные контракты:
+Для всех четырёх продуктов `/start` может показывать быстрый recipe; команда продукта без аргументов открывает pinned/latest вариант; pin/repeat работают после restart процесса.
+
+## Контракты
+
+Обязательно проверяется:
 
 - одинаковый recipe дедуплицируется;
-- `run/cycle` не попадают в signature;
-- два состояния одного продукта остаются отдельными;
-- pin влияет на default и quick ranking;
+- `run/cycle` отсутствуют в signature;
+- разные параметры одного продукта дают разные recipes;
+- pin влияет на default/quick ranking;
 - Telegram/MAX/VK изолированы по platform;
-- callback работает после очистки session state;
+- callback recipe работает после очистки session state;
 - repeat использует новый run;
-- `/profile`, `/aero` и `/windgram` MAX/VK используют общий recipe store;
-- windgram repeat заново выбирает run по максимальному lead;
-- schedule использует точный snapshot recipe.
+- `/profile`, `/aero`, `/windgram`, `/cloudgram` MAX/VK используют один store;
+- windgram/cloudgram repeat выбирают run по максимальному lead;
+- Telegram schedule использует immutable snapshot конкретного recipe.

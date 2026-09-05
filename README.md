@@ -15,27 +15,27 @@ Telegram-бот, MAX/VK messenger runtime и веб-интерфейс для в
 - 🧾 `/aero` — единая аэрологическая диаграмма Skew-T log-P с годографом.
 - 🟦 `/windgram` — срок × уровень: ветер, температура или влажность.
 - ☁️ `/cloudgram` — облачность, осадки, видимость и конвективный потенциал.
-- 📊 `/meteogram` — полноценная временная метеограмма одной модели или ансамбля с PNG/DOCX/PDF.
+- 📊 `/meteogram` — временная метеограмма модели/ансамбля с PNG/DOCX/PDF.
 - 🗺️ `/map` — одна карта, серия PNG или MP4-анимация.
-- 🕒 `/schedule` — автоматическая отправка продукции по расписанию.
+- 🕒 `/schedule` — автоматическая отправка продукции.
 - ⚙️ `/settings` — основная точка, сохранённые параметры и быстрые действия.
 
-Telegram поддерживает весь текущий набор продуктов. В общем Telegram+MAX+VK messenger service уже вынесены `/profile`, `/aero` и `/windgram`; следующие продукты подключаются по одному vertical slice без дублирования метеорологической логики.
+Telegram поддерживает весь текущий набор продуктов. В общем Telegram+MAX+VK messenger service уже вынесены `/profile`, `/aero`, `/windgram` и `/cloudgram`; следующие продукты подключаются по одному vertical slice без дублирования метеорологической логики.
 
-## Методика и аудит параметров
+## Документация
 
-- [`docs/METEOROLOGICAL_METHODS.md`](docs/METEOROLOGICAL_METHODS.md) — действующая реализация: точные поля GFS, формулы, единицы, пороги, тесты и ограничения.
-- [`docs/METEOROLOGICAL_PARAMETERS_AUDIT.md`](docs/METEOROLOGICAL_PARAMETERS_AUDIT.md) — исходный аудит, на основании которого исправлены P0/P1-дефекты.
-- [`docs/METEOGRAM.md`](docs/METEOGRAM.md) — модели, ансамблевая статистика, компоновка и ограничения `/meteogram`.
-- [`docs/AUTO_UPDATE.md`](docs/AUTO_UPDATE.md) — автообновление `telegram-bot`, резервирование локальных расхождений, rollback и эксплуатация systemd timer.
-- [`docs/TELEGRAM_PERSONAL_UX.md`](docs/TELEGRAM_PERSONAL_UX.md) — сохранение точек, параметров, быстрые действия и default карты 48 часов.
-- [`docs/MESSENGER_RUNTIME.md`](docs/MESSENGER_RUNTIME.md) — единый runtime Telegram+MAX+VK и фактический паритет продуктов.
-- [`docs/MESSENGER_AERO_SERVICE.md`](docs/MESSENGER_AERO_SERVICE.md) — общий `/aero`, progress/result contract и saved recipes.
-- [`docs/MESSENGER_WINDGRAM_SERVICE.md`](docs/MESSENGER_WINDGRAM_SERVICE.md) — общий `/windgram`, параметры, max-lead run selection и saved recipes.
+- [`docs/METEOROLOGICAL_METHODS.md`](docs/METEOROLOGICAL_METHODS.md) — поля GFS, формулы, единицы, пороги и ограничения.
+- [`docs/METEOROLOGICAL_PARAMETERS_AUDIT.md`](docs/METEOROLOGICAL_PARAMETERS_AUDIT.md) — аудит метеорологической корректности.
+- [`docs/METEOGRAM.md`](docs/METEOGRAM.md) — модели, ансамбли и компоновка `/meteogram`.
+- [`docs/AUTO_UPDATE.md`](docs/AUTO_UPDATE.md) — автообновление `telegram-bot` и rollback.
+- [`docs/TELEGRAM_PERSONAL_UX.md`](docs/TELEGRAM_PERSONAL_UX.md) — точки, preferences и recipes Telegram.
+- [`docs/MESSENGER_RUNTIME.md`](docs/MESSENGER_RUNTIME.md) — единый runtime Telegram+MAX+VK.
+- [`docs/MESSENGER_REGISTRATION.md`](docs/MESSENGER_REGISTRATION.md) — создание и настройка MAX/VK: что получить на платформах и что вставить в `.env`.
+- [`docs/MESSENGER_AERO_SERVICE.md`](docs/MESSENGER_AERO_SERVICE.md) — общий `/aero`.
+- [`docs/MESSENGER_WINDGRAM_SERVICE.md`](docs/MESSENGER_WINDGRAM_SERVICE.md) — общий `/windgram`.
+- [`docs/MESSENGER_CLOUDGRAM_SERVICE.md`](docs/MESSENGER_CLOUDGRAM_SERVICE.md) — общий `/cloudgram`.
 
-Критические изменения реализации: `VIS` всегда переводится из метров в километры; GRIB-поля выбираются по shortName/слою/stepType/интервалу; CAPE/CIN берутся с 180–0 гПа AGL; `HGT cloud ceiling` используется как нативная высота AGL, а 20 000 м трактуется как «потолка нет»; общие и конвективные облака/осадки не смешиваются; Aero и Route загружают изобарические гидрометеоры GFS.
-
-Обледенение и болтанка явно называются **модельными прокси**, поскольку GFS без наблюдений, PIREP, радара и спутника не заменяет CIP/FIP и GTG/EDR.
+Критические правила: `VIS` переводится из метров в километры; GRIB-поля выбираются по shortName/слою/stepType/интервалу; CAPE/CIN берутся с 180–0 гПа AGL; `HGT cloud ceiling` используется как нативная высота AGL, а 20 000 м означает «потолка нет»; общие и конвективные облака/осадки не смешиваются. Обледенение и болтанка обозначаются как **модельные прокси**.
 
 ## Быстрая установка
 
@@ -43,7 +43,7 @@ Telegram поддерживает весь текущий набор проду�
 bash install_telegram_bot.sh
 ```
 
-Установщик запросит `TELEGRAM_BOT_TOKEN` и `DADATA_API_KEY`. Для DaData Suggestions нужен только API-ключ; Secret Key не требуется.
+Установщик запросит `TELEGRAM_BOT_TOKEN` и `DADATA_API_KEY` при включённой DaData.
 
 Неинтерактивно:
 
@@ -54,55 +54,75 @@ TELEGRAM_ADMIN_IDS='<TELEGRAM_USER_ID>' \
 bash install_telegram_bot.sh --yes
 ```
 
-Ручное обновление:
+### Подключение MAX/VK после базовой установки
+
+Сначала создайте бота/сообщество по [`docs/MESSENGER_REGISTRATION.md`](docs/MESSENGER_REGISTRATION.md), настройте публичный HTTPS reverse proxy, затем:
+
+```bash
+sudo bash setup_messenger_bots.sh --max
+sudo bash setup_messenger_bots.sh --vk
+# или обе платформы:
+sudo bash setup_messenger_bots.sh --max --vk
+```
+
+Мастер требует только:
+
+```text
+MAX: token + public HTTPS URL
+VK: community token + positive group id + public HTTPS URL
+```
+
+MAX/VK secrets генерируются автоматически; VK confirmation code получается через VK API. После deploy мастер проверяет фактическую MAX subscription и VK Callback API registration.
+
+Проверка:
+
+```bash
+curl -fsS http://127.0.0.1:8081/ready
+sudo bash setup_messenger_bots.sh --status
+sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
+```
+
+## Обновление
 
 ```bash
 git checkout telegram-bot
-git pull
+git pull --ff-only
 sudo bash deploy_telegram_bot.sh --yes
 ```
 
-Рекомендуемое автоматическое обновление рабочей ветки:
+Автообновление:
 
 ```bash
 sudo bash install_auto_update.sh --yes
 sudo bash install_auto_update.sh --status
 ```
 
-Сервер сам проверяет `origin/telegram-bot`. Для deployment-checkout удалённая ветка является источником истины: локальное расхождение предварительно сохраняется в backup ref/stash, checkout синхронизируется с remote, затем запускается штатный deploy. При неудачном deploy возвращается предыдущая установленная версия. Входящий webhook и GitHub token не требуются.
-
-Проверка:
-
-```bash
-python -m unittest discover -s tests
-python runtime_check.py
-sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
-```
+Штатный deploy сохраняет `.env`, `.install-state`, `.venv`, `.cache_gfs` и basemap cache.
 
 ## Telegram UX
 
-`/start` показывает стабильное меню продуктов, основную точку и до двух быстрых действий из последних успешных расчётов. Кнопка отправки геолокации появляется только при выборе точки и удаляется после ввода. Выбранные точки и параметры переживают перезапуск и deploy.
+`/start` показывает стабильное меню, основную точку и до двух быстрых действий. Reply-кнопка геолокации появляется только при выборе точки. Preferences/recipes переживают restart и deploy.
 
-Карта нового пользователя по умолчанию — анимация `+0…+48 ч` с шагом 3 часа. Команда `/map Москва +24` по-прежнему означает одну карту, а `/map Москва` использует сохранённый вариант или default 48 часов.
-
-Подробно:
-
-- [`docs/TELEGRAM_UX_MESSAGES.md`](docs/TELEGRAM_UX_MESSAGES.md)
-- [`docs/TELEGRAM_PERSONAL_UX.md`](docs/TELEGRAM_PERSONAL_UX.md)
+Карта нового пользователя по умолчанию — анимация `+0…+48 ч`, шаг 3 ч. `/map Москва +24` означает одну карту.
 
 ## MAX/VK parity
 
-Общий messenger runtime использует одни и те же `profile_service`, `aero_service` и `windgram_service` для Telegram/MAX/VK. Для `/profile` и `/aero` в MAX/VK работают город/координаты, неоднозначный город, native location, прямые команды, быстрые сроки, пагинация до `+384`, редактируемый progress и saved recipes.
+Одинаковые common services уже используются для:
 
-Для `/windgram` одинаковы первый вариант `ветер · +0…+120 ч · шаг 6 ч · до 500 гПа`, выбор `ветер/температура/влажность`, горизонты `120/240/384 ч`, шаг `3/6/12 ч`, ambiguous city, native location и recipe/pin/repeat. Common service выбирает GFS run по максимальному реально требуемому lead. Repeat не сохраняет старый `run/cycle`.
+```text
+/profile
+/aero
+/windgram
+/cloudgram
+```
 
-Подробно:
+Для MAX/VK работают город/координаты, неоднозначный город, native location, direct command, callback-flow, редактируемый progress и saved recipes. Repeat не сохраняет старый `run/cycle`.
 
-- [`MAX_BOT.md`](MAX_BOT.md)
-- [`VK_BOT.md`](VK_BOT.md)
-- [`docs/MESSENGER_RUNTIME.md`](docs/MESSENGER_RUNTIME.md)
-- [`docs/MESSENGER_SAVED_RECIPES.md`](docs/MESSENGER_SAVED_RECIPES.md)
-- [`docs/MESSENGER_WINDGRAM_SERVICE.md`](docs/MESSENGER_WINDGRAM_SERVICE.md)
+`/windgram` default: ветер, `+0…+120 ч`, шаг 6 ч, до 500 гПа.
+
+`/cloudgram` default: `Подробно`, `+0…+72 ч`, шаг 3 ч. Доступны `Подробно/Кратко`, `+24/+48/+72/+120`, шаг `3/6`.
+
+Следующий общий vertical slice — `/map`.
 
 ## Геокодирование
 
@@ -141,7 +161,7 @@ DADATA_SUGGEST_URL=https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest/
 /cancel      сброс сценария
 ```
 
-Команда `/skewt` и выбор нескольких видов аэрологических диаграмм удалены. `/aero` всегда строит один согласованный Skew-T log-P.
+`/aero` всегда строит один согласованный Skew-T log-P с годографом.
 
 ## Вертикальный профиль `/profile`
 
@@ -150,39 +170,11 @@ DADATA_SUGGEST_URL=https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest/
 /profile 59.939 30.316 run=20260714/00 +12
 ```
 
-Telegram-сводка показывает T/Td только в °C, RH в %, геопотенциальную высоту `Zg` относительно MSL и ветер в метеорологическом направлении «откуда»/м/с. Исходное поле `TMP` в GRIB2 хранится в K, но пользовательский отчёт не выводит этот технический столбец.
-
-CSV из Telegram — компактный человекочитаемый отчёт, а не дамп внутреннего `DataFrame`. Порядок столбцов фиксирован:
+Telegram-сводка показывает T/Td в °C, RH в %, `Zg` MSL и метеорологический ветер «откуда»/м/с. Telegram CSV:
 
 ```text
 p_hPa,Zg_m_MSL,T_C,Td_C,RH_pct,wind_from_deg,wind_speed_ms
 ```
-
-Температура и точка росы — °C; `Zg_m_MSL` — метры MSL; `wind_from_deg` — направление, откуда дует ветер; скорость — м/с. Сырые `temperature_k`, компоненты `u/v`, дубли высоты в км и `theta_k` в Telegram-CSV не включаются. Файл записывается UTF-8 с BOM для корректного открытия в Excel/мобильных таблицах.
-
-## Метеограмма `/meteogram`
-
-```text
-/meteogram Москва source=gfs days=5
-/meteogram Москва source=gfs days=5 format=pdf
-/meteogram Москва source=ecmwf_ifs days=10
-/meteogram Москва ensemble=gefs days=10 format=docx
-/meteogram 55.75 37.62 ensemble=ecmwf days=5
-```
-
-Без параметров запускается мастер: `точка → одна модель/ансамбль → модель → период → PNG/DOCX/PDF → подтверждение`.
-
-Доступны GFS, ECMWF IFS/AIFS, ICON Global, GEM/GDPS, а также GEFS, ECMWF ENS/AIFS ENS, ICON-EPS и GEPS. Модель всегда выбирается явно; `best_match`, скрытое смешивание моделей и межмодельный «суперансамбль» не используются.
-
-Для временной приземной GFS-метеограммы используется Open-Meteo `gfs_seamless` на `/v1/gfs`, то есть непрерывный поверхностный ряд из доступных глобальных сеток NOAA/NCEP 0.11°/0.25°. Это не меняет нативные вертикальные продукты проекта: `/profile`, `/aero`, `/windgram` и `/cloudgram` продолжают работать с GFS 0.25° через NOMADS/GRIB2.
-
-PNG содержит название пункта, модель и центр, период действия, местное время, время получения и генерации, расчётную точку, температуру/точку росы, влажность, облачность, осадки, ветер, порывы и давление. Для ансамбля показываются средние T/Td/p, медианы остальных полей, q25–q75, q10–q90, послойная облачность, полнота по срокам и вероятности осадков с явным указанием исходного интервала.
-
-Компоновка синхронизирована с проверенным рендером `weather-to-docx`: легенды вынесены над панелями, осадки приведены к мм/ч, следы показаны отдельными маркерами, обычные столбики не имеют чёрной обводки, а термины «сильный ветер» и «сильные порывы» не смешиваются. Основные осадки рисуются заполненными полупрозрачными столбиками без сглаживания. Для детерминированной модели более узкая лёгкая штриховка показывает фактический интервал максимальной интенсивности каждого местного дня (`макс. за сутки`). Для ансамбля аналогичный верхний слой — `P90`, а не фиктивный «максимум»; ансамблевые вероятности остаются тонкими пунктирными линиями.
-
-Для температуры подписываются русские суточные `мин.`/`макс.`, для T/RH/ветра/давления проводится 24-часовое среднее, а красный ромб отмечает один экстремум каждого непрерывного диагностического порогового эпизода.
-
-Open-Meteo не сообщает надёжный исходный цикл перечисленных временных рядов, поэтому изображение честно пишет «цикл не передан поставщиком», а не подставляет предполагаемый запуск.
 
 ## Аэрологическая диаграмма `/aero`
 
@@ -191,26 +183,7 @@ Open-Meteo не сообщает надёжный исходный цикл пе
 /aero 59.939 30.316 run=20260714/00 +12
 ```
 
-`/aero` использует общий `messenger/aero_service.py`: выбор актуального run, progress и `CommonProductResult` едины для Telegram, MAX и VK. Telegram остаётся renderer/adapter, а не отдельной реализацией расчёта.
-
-Продукт содержит:
-
-- красную кривую температуры среды;
-- зелёную точку росы;
-- чёрную кривую частицы;
-- синюю кривую насыщения надо льдом;
-- CAPE/CIN и ключевые индексы;
-- уровень конденсации и изотермы в Zg MSL;
-- гидрометеорные облачные слои;
-- модельный icing proxy по SLWC;
-- модельный CAT proxy по вертикальному сдвигу и Ri;
-- ветер и годограф 0–8 км.
-
-Подробно:
-
-- [`docs/AERO_DIAGRAM.md`](docs/AERO_DIAGRAM.md)
-- [`docs/MESSENGER_AERO_SERVICE.md`](docs/MESSENGER_AERO_SERVICE.md)
-- [`docs/METEOROLOGICAL_METHODS.md`](docs/METEOROLOGICAL_METHODS.md)
+Common `messenger/aero_service.py` отвечает за parser, lead validation, actual run, progress и result. PNG содержит Skew-T log-P, T/Td, parcel, ice saturation, CAPE/CIN, LCL, изотермы, модельные облачные/icing/CAT layers, ветер и годограф.
 
 ## Срок × уровень `/windgram`
 
@@ -220,90 +193,71 @@ Open-Meteo не сообщает надёжный исходный цикл пе
 /windgram 55.75 37.62 from=12 to=120 step=6 top=700 param=rh
 ```
 
-`/windgram` использует общий `messenger/windgram_service.py` во всех трёх мессенджерах. Первый интерактивный вариант — ветер, `+0…+120 ч`, шаг 6 ч, до 500 гПа. Доступны ветер/температура/влажность, горизонты 120/240/384 ч и шаг 3/6/12 ч.
+Common service формирует допустимые сроки и проверяет публикацию максимального lead. Если новый GFS cycle ещё не содержит дальний срок, используется предыдущий подходящий run.
 
-Common service формирует допустимые сроки и проверяет публикацию по максимальному требуемому lead. Если новый GFS cycle ещё не содержит дальний срок, выбирается предыдущий подходящий run. `run/cycle` в saved recipe не сохраняется.
+## Облака и явления `/cloudgram`
 
-Результат показывает actual run/cycle UTC, valid range UTC, requested point, GFS grid point, уровни и max wind и отправляет один общий PNG. GFS явно обозначается как модель, не наблюдение и не радиозонд.
+```text
+/cloudgram Москва
+/cloudgram Москва to=72 step=3 mode=pro
+/cloudgram 55.75 37.62 to=120 step=6 mode=simple
+```
 
-Подробно: [`docs/MESSENGER_WINDGRAM_SERVICE.md`](docs/MESSENGER_WINDGRAM_SERVICE.md).
+Common `messenger/cloudgram_service.py` использует существующее метеорологическое ядро. Режим `pro` показывается пользователю как `Подробно`, `simple` — `Кратко`. Cycle выбирается по максимальному требуемому lead.
+
+Сводка содержит actual run/cycle UTC, valid range, requested point, GFS grid, max hazard и missing fields. Гроза/опасность явно называются модельной диагностикой, не наблюдаемым явлением.
+
+## Метеограмма `/meteogram`
+
+```text
+/meteogram Москва source=gfs days=5
+/meteogram Москва source=gfs days=5 format=pdf
+/meteogram Москва ensemble=gefs days=10 format=docx
+```
+
+Wizard: `точка → одна модель/ансамбль → модель → период → PNG/DOCX/PDF → подтверждение`.
+
+Доступны GFS, ECMWF IFS/AIFS, ICON Global, GEM/GDPS, GEFS, ECMWF ENS/AIFS ENS, ICON-EPS и GEPS. Разные ансамбли не смешиваются.
+
+Для временной GFS-метеограммы используется Open-Meteo `gfs_seamless`; нативные вертикальные `/profile`, `/aero`, `/windgram`, `/cloudgram` продолжают работать с GFS 0.25° через NOMADS/GRIB2.
 
 ## Маршрутный профиль `/route`
 
 ```text
 /route Москва -> Санкт-Петербург +24 speed=300 step=50 mode=pro
-/route Москва -> Новосибирск +6 speed=300 step=25 mode=simple
 ```
 
-Детализация:
-
-```text
-25 км  — максимум деталей
-50 км  — баланс качества и времени
-100 км — быстрый обзор длинного маршрута
-```
-
-Если сетка создаёт 60 и более точек, бот предупреждает о длительном расчёте и предлагает выбрать шаг.
-
-`simple` и `pro` используют одинаковые исходные данные, `point_risk` и карточки. Сглаживание применяется только к display-сетке PNG.
-
-Подробности:
-
-- [`docs/ROUTE_PROFILE.md`](docs/ROUTE_PROFILE.md)
-- [`docs/ROUTE_PROFILE_RENDERING.md`](docs/ROUTE_PROFILE_RENDERING.md)
-- [`docs/ROUTE_PROFILE_VISUAL_REQUIREMENTS.md`](docs/ROUTE_PROFILE_VISUAL_REQUIREMENTS.md)
-- [`docs/ROUTE_RISK_CONTRACT.md`](docs/ROUTE_RISK_CONTRACT.md)
+Сетка 25/50/100 км. `simple` и `pro` используют одинаковые исходные данные и risk contract; отличается представление.
 
 ## Персональные точки и параметры
 
-Состояние хранится в SQLite:
+Telegram:
 
 ```env
 TELEGRAM_PREFERENCES_DB=.cache_gfs/telegram_preferences.sqlite3
 ```
 
-Сохраняются основная точка, последние точки и валидированные параметры каждого продукта. Временные `run/cycle`, кандидаты геокодинга и Telegram callback state не сохраняются. Автоматические расписания используют собственные снимки и не изменяют интерактивные defaults.
+MAX/VK:
 
-`/cancel` не удаляет пользовательские параметры. Сброс отдельного продукта и полное удаление персональных данных выполняются через `/settings`.
+```env
+MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
+```
+
+`run/cycle`, process-local callback state и geocoder candidates не сохраняются.
 
 ## Скрытая команда администратора
-
-Команда администратора не публикуется в пользовательском меню и BotFather-командах, но остаётся доступной по прямому вводу для `TELEGRAM_ADMIN_IDS`.
 
 ```env
 TELEGRAM_ADMIN_IDS=123456789,987654321
 TELEGRAM_ADMIN_DB=.cache_gfs/admin_stats.sqlite3
 ```
 
-Исторические запросы `skewt` объединяются со статистикой продукта `aero`.
+Admin-команда не публикуется в пользовательском меню.
+
+## Расписания
+
+Telegram `/schedule` хранит immutable snapshot продукта в `.cache_gfs/telegram_schedules.json`. Автоматический запуск использует актуальные модельные данные и не меняет интерактивные defaults.
 
 ## Важно
 
-Сглаженная картинка не повышает физическое разрешение модели. Метеограммы, маршрутный продукт и локальные шкалы риска не являются официальным прогнозом или разрешением на полёт; перед полётом обязательны актуальные METAR/TAF/SIGMET/GAMET, NOTAM и решение командира.
-
-Для метеограмм основные осадки рисуются закрашенными полупрозрачными столбиками по исходным интервалам; слабые осадки не обнуляются. Детерминированный максимум каждого местного дня отмечается лёгкой штриховкой, ансамблевый верхний слой честно подписывается `P90`, а вероятности остаются тонкими пунктирными линиями.
-
-## Отчёты метеограммы DOCX/PDF
-
-После выбора модели и периода мастер `/meteogram` предлагает результат:
-
-- `🖼 PNG` — только метеограмма;
-- `📄 DOCX` — редактируемый модельный отчёт;
-- `🧾 PDF` — тот же отчёт в фиксированном виде.
-
-Отчёт строится из уже загруженного ряда без повторного запроса и содержит краткую текстовую оценку, таблицу по местным суткам, таблицу контрольных сроков, полноту ансамбля и PNG-метеограмму. Для ансамбля показываются q10–q90, доли членов по порогам осадков и фактическое `M/N`; разные ансамблевые системы не смешиваются. Прямой запуск:
-
-```text
-/meteogram Москва ensemble=gefs days=5 format=pdf
-/meteogram 59.939 30.316 source=ecmwf_ens days=10 format=docx
-```
-
-По умолчанию `format=png`, поэтому старые команды сохраняют поведение. DOCX создаётся через `python-docx`; PDF конвертируется из того же DOCX через LibreOffice Writer. Если LibreOffice на сервере отсутствует, бот не теряет результат и отправляет DOCX с явным предупреждением.
-
-## Автоматическая отправка по расписанию
-
-Команда `/schedule` открывает менеджер до двух активных расписаний на пользователя. Сначала выбирается обычный продукт и его штатные параметры, затем частота и локальное время города. Поддержаны профиль, аэродиаграмма, windgram, cloudgram, карты/анимации и метеограммы PNG/DOCX/PDF. После каждой автоматической отправки доступны кнопки просмотра и быстрого удаления расписания.
-
-Расписания сохраняются в `.cache_gfs/telegram_schedules.json`, поэтому штатный deploy их не теряет. Подробности: `docs/SCHEDULES.md`.
-
-- PDF-метеограмма формируется нативно в Python/Matplotlib; LibreOffice для штатного PDF не нужен.
+Все продукты — модельные. GFS не является наблюдением или радиозондом. Метеограммы, маршрутные продукты и локальные шкалы риска не являются официальным авиационным прогнозом/разрешением на полёт; перед полётом обязательны актуальные METAR/TAF/SIGMET/GAMET, NOTAM и решение командира.

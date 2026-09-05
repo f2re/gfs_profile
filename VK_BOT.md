@@ -1,23 +1,98 @@
-# VK Bot — текущее состояние и эксплуатация
+# VK Bot — регистрация, настройка и эксплуатация
 
-Статус на 2026-09-05: Callback API transport, общие `/profile`, `/aero` и `/windgram` vertical slices, saved recipes и штатный production multi-messenger runtime реализованы в рабочей ветке `telegram-bot`. Остальные продукты переносятся в общий messenger service без копирования метеорологической логики.
+Статус на 2026-09-05: VK Community Bot + Callback API и общие `/profile`, `/aero`, `/windgram`, `/cloudgram` работают через тот же messenger-neutral service, что Telegram и MAX. VK-слой содержит только transport/UI/media logic.
 
-## Архитектура
+Полная пошаговая регистрация с Nginx, `.env`, автоматическим confirmation code и диагностикой: [`docs/MESSENGER_REGISTRATION.md`](docs/MESSENGER_REGISTRATION.md).
+
+## Что нужно создать в VK
+
+1. Создайте сообщество VK или используйте существующее, где есть права администратора.
+2. Включите сообщения сообщества.
+3. Откройте `Управление → Работа с API`.
+4. Создайте community access token с правами для сообщений/media и управления Callback API, если этот доступ вынесен отдельным разрешением.
+5. Скопируйте token.
+6. Запишите числовой ID сообщества положительным числом без `-`.
+
+Проект использует Community Bot + Callback API, а не пользовательский access token.
+
+Используемые методы VK API:
 
 ```text
-VK Callback event
-→ VK adapter
-→ NormalizedEvent
-→ common messenger router/service
-→ CommonProductResult
-→ VK gateway/renderer
+messages.send
+messages.edit
+messages.sendMessageEventAnswer
+photos.getMessagesUploadServer
+photos.saveMessagesPhoto
+docs.getMessagesUploadServer
+docs.save
+groups.getCallbackConfirmationCode
+groups.getCallbackServers
+groups.addCallbackServer
+groups.getCallbackSettings
+groups.setCallbackSettings
 ```
 
-VK-слой отвечает только за transport, native keyboard, media upload/send, callback acknowledgement и platform-specific ограничения.
+Token — секрет. В репозиторий его не коммитить.
+
+## Что вставить в GFS Profile
+
+После базовой установки:
+
+```bash
+bash install_telegram_bot.sh
+```
+
+запустите:
+
+```bash
+sudo bash setup_messenger_bots.sh --vk
+```
+
+Мастер запросит только:
+
+```env
+VK_BOT_TOKEN=<community access token>
+VK_GROUP_ID=123456789
+VK_CALLBACK_URL=https://bot.example.ru/webhooks/vk
+```
+
+Эти поля можно не заполнять вручную:
+
+```env
+VK_CALLBACK_SECRET=
+VK_CONFIRMATION_CODE=
+```
+
+Мастер:
+
+- генерирует `VK_CALLBACK_SECRET`;
+- получает фактический confirmation code через `groups.getCallbackConfirmationCode`;
+- записывает оба значения в `/opt/gfs_profile/.env`;
+- после restart автоматически создаёт/обновляет Callback API server и включает нужные события.
+
+Неинтерактивно:
+
+```bash
+sudo env \
+  VK_BOT_TOKEN='<VK_COMMUNITY_TOKEN>' \
+  VK_GROUP_ID='123456789' \
+  VK_CALLBACK_URL='https://bot.example.ru/webhooks/vk' \
+  bash setup_messenger_bots.sh --vk --yes
+```
 
 ## Production transport
 
-Используется Community Bot + Callback API. Основные входящие типы:
+```text
+VK Callback event
+→ POST /webhooks/vk
+→ VK adapter
+→ NormalizedEvent
+→ common product service
+→ CommonProductResult
+→ VK gateway
+```
+
+Runtime принимает:
 
 ```text
 confirmation
@@ -25,120 +100,65 @@ message_new
 message_event
 ```
 
-`confirmation` обслуживается transport layer. `message_new` нормализует команды, обычный текст и geo. `message_event` используется для callback-кнопок.
+`confirmation` возвращает сохранённый confirmation code. Для остальных запросов проверяются `group_id` и `VK_CALLBACK_SECRET`. GFS-расчёт запускается после быстрого ответа HTTP endpoint, а не блокирует Callback API request lifecycle.
 
-Webhook проверяет `group_id`, configured callback secret, выполняет dedupe по platform event id и быстро возвращает VK success response. Долгий GFS-расчёт не выполняется внутри HTTP request lifecycle.
-
-## Production install/deploy
-
-Обычные install/deploy сразу используют `messenger_launcher.py`:
-
-```bash
-bash install_telegram_bot.sh
-sudo bash deploy_telegram_bot.sh --yes
-```
-
-При `MESSENGER_RUNTIME_ENABLED=1` один systemd-процесс содержит Telegram polling, MAX/VK webhook и web/API. Старый Telegram-only unit автоматически мигрируется при deploy.
-
-VK регистрация выполняется только после локального `GET /ready`:
+Публичный URL:
 
 ```text
-offline env preflight
-→ restart
-→ /ready = 200
-→ groups.getCallbackConfirmationCode
-→ add/update callback server
-→ groups.setCallbackSettings
-```
-
-Публичный HTTPS URL обычно проксируется Nginx/HAProxy на:
-
-```text
+https://bot.example.ru/webhooks/vk
+        ↓
 127.0.0.1:8081/webhooks/vk
 ```
 
-## Конфигурация
+## Автоматическая регистрация Callback API
 
-```env
-MESSENGER_RUNTIME_ENABLED=1
-VK_BOT_TOKEN=
-VK_GROUP_ID=
-VK_CALLBACK_URL=https://bot.example.ru/webhooks/vk
-VK_CALLBACK_SECRET=
-VK_CONFIRMATION_CODE=
-VK_API_VERSION=5.199
-MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
+После `/ready` проект вызывает `register_messenger_webhooks.py`.
+
+Для VK он:
+
+1. сверяет `VK_CONFIRMATION_CODE` с `groups.getCallbackConfirmationCode`;
+2. отправляет контрольный `confirmation` POST на публичный URL;
+3. получает список Callback API servers;
+4. создаёт server, если URL ещё не зарегистрирован;
+5. включает `message_new=1` и `message_event=1`.
+
+Поэтому вручную копировать confirmation code и добавлять callback server через интерфейс VK не требуется.
+
+Проверка фактической регистрации:
+
+```bash
+cd /opt/gfs_profile
+set -a; source .env; set +a
+.venv/bin/python register_messenger_webhooks.py --vk --status
 ```
 
-Версия API задаётся конфигурацией и не размазывается литералом по коду. Пустой `VK_BOT_TOKEN` отключает VK gateway без отключения Telegram/runtime.
+или:
+
+```bash
+sudo bash setup_messenger_bots.sh --status
+```
+
+Ожидается `OK VK: callback server активен`.
 
 ## Кнопки и callbacks
 
-Gateway переводит общий `UiKeyboard` в VK keyboard. Для callback используется `messages.sendMessageEventAnswer`; `messages.send` получает уникальный `random_id`, чтобы retry не создавал дублей.
+Общий `UiKeyboard` переводится в native VK keyboard. Callback использует `messages.sendMessageEventAnswer`. Для `messages.send` формируется уникальный `random_id`, чтобы retry не создавал дубли.
 
-Saved recipe callbacks используют общий versioned codec:
+Location button нормализуется в общий `NormalizedEvent.location`.
 
-```text
-v1|recipe|run|<id>
-v1|recipe|toggle|<id>
-v1|recipe|change|<id>
-```
+## Общие продукты
 
-`recipe_id` позволяет повторять и закреплять сценарий после restart процесса без process-local wizard state.
+### `/profile`
 
-## Реализованный `/profile`
+Город/координаты, `Москва +24`, неоднозначность, native location, быстрые сроки, пагинация до `+384`, progress, PNG/CSV и recipes.
 
-Через общий service работают город/координаты, `Москва +24`, неоднозначный город, native geo/location, быстрые сроки, все сроки до `+384`, редактируемый progress, общий GFS run selection и одинаковая итоговая сводка PNG/CSV.
+### `/aero`
 
-## Реализованный `/aero`
+Общий Skew-T log-P + годограф, actual run/cycle, valid UTC, requested/grid point. Icing/CAT — модельные прокси.
 
-VK использует тот же `messenger/aero_service.py`, что Telegram и MAX. Расчётная часть не находится в VK adapter/gateway.
+### `/windgram`
 
-Flow:
-
-```text
-/aero Москва +24
-→ сразу расчёт
-
-/aero
-→ город / координаты / геолокация
-→ неоднозначный город при необходимости
-→ срок
-→ расчёт
-```
-
-Доступны быстрые `+0,+3,+6,+12,+24,+48` и пагинация канонических сроков до `+384`.
-
-Результат одинаков с MAX/Telegram по метеорологическому contract:
-
-- фактический GFS run/cycle UTC;
-- lead и valid UTC;
-- requested point;
-- GFS grid point;
-- Skew-T log-P;
-- годограф;
-- PNG;
-- GFS явно обозначен как модель;
-- icing/CAT обозначены как модельные прокси.
-
-`/aero` всегда строит Skew-T log-P с годографом; отдельного переключателя Stüve/Emagram нет.
-
-Подробно: `docs/MESSENGER_AERO_SERVICE.md` и `docs/AERO_DIAGRAM.md`.
-
-## Реализованный `/windgram`
-
-VK использует тот же `messenger/windgram_service.py`, что Telegram и MAX. `windgram_product.py` и `windgram_plot.py` не зависят от платформы.
-
-Интерактивный flow:
-
-```text
-/windgram
-→ город / координаты / native geo
-→ параметры
-→ Построить
-```
-
-Значения первого запуска:
+Default:
 
 ```text
 ветер
@@ -147,42 +167,44 @@ VK использует тот же `messenger/windgram_service.py`, что Tele
 до 500 гПа
 ```
 
-Native callback-кнопки позволяют выбрать:
+Доступны wind/temp/RH, `+120/+240/+384`, шаг `3/6/12`.
 
-- ветер / температура / влажность;
-- `+120/+240/+384 ч`;
-- шаг `3/6/12 ч`;
-- другую точку;
-- закрепление и повтор saved recipe.
+### `/cloudgram`
 
-Поддерживается и прямая команда:
+Default:
 
 ```text
-/windgram Москва to=240 step=12 param=temp
-/windgram 55.75 37.62 from=12 to=120 step=6 top=700 param=rh
+Подробно
++0…+72 ч
+шаг 3 ч
 ```
 
-Неоднозначность города обрабатывается callback-выбором без потери параметров. Actual GFS run выбирается common service по максимальному реально требуемому lead.
+Доступны `Подробно/Кратко`, `+24/+48/+72/+120` и шаг `3/6`.
 
-Результат содержит actual run/cycle UTC, valid range UTC, requested point, GFS grid point, уровни, max wind и PNG. Это модель GFS, не наблюдение и не радиозонд.
+Примеры:
 
-Подробно: `docs/MESSENGER_WINDGRAM_SERVICE.md`.
+```text
+/cloudgram Москва to=72 step=3 mode=pro
+/cloudgram 55.75 37.62 to=120 step=6 mode=simple
+```
 
-## Сохранённые сценарии
+Общий service выбирает фактически опубликованный GFS cycle по максимальному требуемому lead. Результат одинаков с Telegram/MAX: run/cycle UTC, valid range, requested point, grid point, max hazard, missing fields и PNG. Гроза/опасность — модельная диагностика, не наблюдавшееся явление.
 
-MAX/VK используют общий messenger-neutral store:
+## Saved recipes
 
 ```env
 MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
 ```
 
-Для `/profile`, `/aero` и `/windgram` успешный результат сохраняет точку и параметры. `run/cycle` не входит в recipe. `/start` показывает до двух быстрых сценариев; команда продукта без аргументов открывает закреплённый или последний успешный вариант. Repeat выбирает актуальный опубликованный GFS run.
+Для четырёх общих продуктов сохраняются точка и параметры. `run/cycle` исключены. Repeat использует новый подходящий GFS run. Cloudgram recipe:
 
-Windgram recipe содержит `from/to/step/top/param + point`.
+```text
+from / to / step / mode / point
+```
 
-Recipes изолированы по `platform + user_id`, поэтому одинаковый числовой ID в MAX и VK не означает одного пользователя.
+Recipes изолированы по `platform + user_id`.
 
-## Общие лимиты ресурсов
+## Общие ресурсы
 
 VK использует тот же process-wide pool, что Telegram/MAX/web:
 
@@ -192,32 +214,43 @@ MAX_CONCURRENT_GEOCODE=2
 MAX_CONCURRENT_METEOGRAM=2
 ```
 
-Платформа не создаёт свой отдельный semaphore и не может обойти общий серверный лимит.
-
 ## Media
 
-VK gateway отвечает за platform upload flow для изображений/файлов и отправку attachment через `messages.send`. Общий product service возвращает platform-neutral attachments; метеорологический код ничего не знает про VK attachment ids.
+PNG отправляется как VK photo attachment. Файлы используют document upload. Common service ничего не знает о VK attachment ids.
 
-## Проверка
+## Проверка после настройки
 
 ```bash
 curl -fsS http://127.0.0.1:8081/ready
-sudo bash deploy_telegram_bot.sh --status
+curl -fsS http://127.0.0.1:8081/health
+sudo bash setup_messenger_bots.sh --status
+sudo systemctl status gfs-profile-bot.service
 sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
 ```
 
-`register_messenger_webhooks.py` проверяет confirmation code и актуализирует callback server/settings после каждого штатного deploy.
+В VK проверить:
+
+```text
+/start
+/profile Москва +24
+/aero Москва +24
+/windgram Москва to=120 step=6 param=wind
+/cloudgram Москва to=72 step=3 mode=pro
+geo/location
+callback
+pin/repeat
+/status
+/cancel
+```
 
 ## Следующий этап паритета
 
-Следующий vertical slice — `/cloudgram`, затем:
-
 ```text
 /map
-/meteogram
-/route
-/settings
-/schedule
+→ /meteogram
+→ /route
+→ /settings
+→ /schedule
 ```
 
-Каждый vertical slice должен использовать общие contracts, formatter, run selection, progress, `RuntimeResources` и `UserRecipeStore`. Локальные VK-копии GFS/geocoder/product logic не допускаются.
+Новые продукты должны использовать общий service/result/progress, `RuntimeResources` и `UserRecipeStore`; VK-копии GFS/geocoder/product logic не допускаются.
