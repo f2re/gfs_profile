@@ -30,8 +30,20 @@ class MessengerSetupScriptTests(unittest.TestCase):
         self.assertIn("VK_GROUP_ID", text)
         self.assertIn("VK_CALLBACK_URL", text)
 
+    def test_setup_scopes_prepare_and_status_to_selected_platform(self) -> None:
+        text = (ROOT / "setup_messenger_bots.sh").read_text(encoding="utf-8")
+        self.assertIn('prepare_messenger_config.py" --env-file "$ENV_FILE" --max', text)
+        self.assertIn('prepare_messenger_config.py" --env-file "$ENV_FILE" --vk', text)
+        self.assertIn('register_messenger_webhooks.py" --status --max', text)
+        self.assertIn('register_messenger_webhooks.py" --status --vk', text)
+        self.assertIn('set_env MAX_ENABLED "1"', text)
+        self.assertIn('set_env VK_ENABLED "1"', text)
+
     def test_env_example_does_not_enable_platforms_accidentally(self) -> None:
         text = (ROOT / ".env.telegram.example").read_text(encoding="utf-8")
+        self.assertIn("TELEGRAM_ENABLED=auto\n", text)
+        self.assertIn("MAX_ENABLED=auto\n", text)
+        self.assertIn("VK_ENABLED=auto\n", text)
         self.assertIn("MAX_BOT_TOKEN=\n", text)
         self.assertIn("MAX_WEBHOOK_URL=\n", text)
         self.assertIn("VK_BOT_TOKEN=\n", text)

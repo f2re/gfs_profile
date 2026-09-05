@@ -81,6 +81,34 @@ class MessengerRegistrationSetupTests(unittest.TestCase):
             self.assertEqual(values["VK_CONFIRMATION_CODE"], "vk-code")
             self.assertEqual(changed, ["VK_CONFIRMATION_CODE refreshed"])
 
+    def test_prepare_max_ignores_broken_vk(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text(
+                "MAX_BOT_TOKEN=max-token\n"
+                "MAX_WEBHOOK_URL=https://bot.example.ru/webhooks/max\n"
+                "MAX_WEBHOOK_SECRET=\n"
+                "VK_ENABLED=1\n"
+                "VK_BOT_TOKEN=vk-token\n"
+                "VK_GROUP_ID=broken\n",
+                encoding="utf-8",
+            )
+            changed = prepare_environment(env_file, platforms={"max"})
+            values = read_env_file(env_file)
+            self.assertTrue(values["MAX_WEBHOOK_SECRET"])
+            self.assertEqual(changed, ["MAX_WEBHOOK_SECRET generated"])
+
+    def test_disabled_vk_is_ignored_by_default_prepare(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / ".env"
+            env_file.write_text(
+                "VK_ENABLED=0\n"
+                "VK_BOT_TOKEN=stale-token\n"
+                "VK_GROUP_ID=broken\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(prepare_environment(env_file), [])
+
     def test_status_reports_real_max_subscription(self) -> None:
         env = {
             "MAX_BOT_TOKEN": "token",
