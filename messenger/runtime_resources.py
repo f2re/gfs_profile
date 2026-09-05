@@ -1,11 +1,6 @@
 from __future__ import annotations
 
-"""Process-wide runtime limits shared by Telegram, MAX, VK and web/API.
-
-The application intentionally stays single-process. A single set of gates is
-therefore enough to enforce the real server limits without Redis/Celery or an
-external coordinator.
-"""
+"""Process-wide runtime limits shared by Telegram, MAX, VK and web/API."""
 
 import asyncio
 import os
@@ -18,8 +13,6 @@ T = TypeVar("T")
 
 
 class AsyncThreadGate:
-    """Async context manager backed by a process-wide threading semaphore."""
-
     def __init__(self, semaphore: threading.BoundedSemaphore) -> None:
         self._semaphore = semaphore
 
@@ -28,9 +21,6 @@ class AsyncThreadGate:
         try:
             await asyncio.shield(acquire_task)
         except BaseException:
-            # If cancellation happens while a worker is waiting, wait until the
-            # acquire finishes and immediately return the permit. Otherwise a
-            # cancelled request could permanently reduce process capacity.
             try:
                 acquired = await acquire_task
             except BaseException:
@@ -57,29 +47,15 @@ class RuntimeResources:
     meteogram_semaphore: AsyncThreadGate
 
     @classmethod
-    def from_limits(
-        cls,
-        *,
-        gfs: int = 2,
-        geocode: int = 2,
-        meteogram: int = 2,
-    ) -> "RuntimeResources":
-        gfs_limit = max(1, int(gfs))
-        geocode_limit = max(1, int(geocode))
-        meteogram_limit = max(1, int(meteogram))
+    def from_limits(cls, *, gfs: int = 2, geocode: int = 2, meteogram: int = 2) -> "RuntimeResources":
+        gfs_limit = max(1, int(gfs)); geocode_limit = max(1, int(geocode)); meteogram_limit = max(1, int(meteogram))
         gfs_gate = threading.BoundedSemaphore(gfs_limit)
         geocode_gate = threading.BoundedSemaphore(geocode_limit)
         meteogram_gate = threading.BoundedSemaphore(meteogram_limit)
         return cls(
-            gfs_limit=gfs_limit,
-            geocode_limit=geocode_limit,
-            meteogram_limit=meteogram_limit,
-            _gfs_gate=gfs_gate,
-            _geocode_gate=geocode_gate,
-            _meteogram_gate=meteogram_gate,
-            gfs_semaphore=AsyncThreadGate(gfs_gate),
-            geocode_semaphore=AsyncThreadGate(geocode_gate),
-            meteogram_semaphore=AsyncThreadGate(meteogram_gate),
+            gfs_limit=gfs_limit, geocode_limit=geocode_limit, meteogram_limit=meteogram_limit,
+            _gfs_gate=gfs_gate, _geocode_gate=geocode_gate, _meteogram_gate=meteogram_gate,
+            gfs_semaphore=AsyncThreadGate(gfs_gate), geocode_semaphore=AsyncThreadGate(geocode_gate), meteogram_semaphore=AsyncThreadGate(meteogram_gate),
         )
 
     @classmethod
@@ -91,28 +67,17 @@ class RuntimeResources:
         )
 
     def snapshot(self) -> dict[str, int]:
-        return {
-            "gfs": self.gfs_limit,
-            "geocode": self.geocode_limit,
-            "meteogram": self.meteogram_limit,
-        }
+        return {"gfs": self.gfs_limit, "geocode": self.geocode_limit, "meteogram": self.meteogram_limit}
 
-    def _wrap_blocking(
-        self,
-        func: Callable[..., T],
-        gate: threading.BoundedSemaphore,
-        kind: str,
-    ) -> Callable[..., T]:
+    def _wrap_blocking(self, func: Callable[..., T], gate: threading.BoundedSemaphore, kind: str) -> Callable[..., T]:
         marker = (kind, id(gate))
         if getattr(func, "__gfs_runtime_gate__", None) == marker:
             return func
         original = getattr(func, "__gfs_runtime_original__", func)
-
         @wraps(original)
         def limited(*args: Any, **kwargs: Any) -> T:
             with gate:
                 return original(*args, **kwargs)
-
         setattr(limited, "__gfs_runtime_gate__", marker)
         setattr(limited, "__gfs_runtime_original__", original)
         return limited
@@ -127,9 +92,9 @@ class RuntimeResources:
         return self._wrap_blocking(func, self._meteogram_gate, "meteogram")
 
     def configure_router(self, router: Any) -> Any:
-        """Attach the shared GFS/geocoder limits to a common messenger router."""
-
+        """Attach all process-wide gates to a common messenger router."""
         router.gfs_semaphore = self.gfs_semaphore
+        router.meteogram_semaphore = self.meteogram_semaphore
         if hasattr(router, "deps") and getattr(router.deps, "geocode", None):
             router.deps.geocode = self.wrap_blocking_geocode(router.deps.geocode)
         router.runtime_resources = self
@@ -150,8 +115,6 @@ def get_runtime_resources() -> RuntimeResources:
 
 
 def set_runtime_resources_for_tests(resources: RuntimeResources | None) -> None:
-    """Replace the process singleton. Intended only for deterministic tests."""
-
     global _SHARED_RESOURCES
     with _SHARED_LOCK:
         _SHARED_RESOURCES = resources
