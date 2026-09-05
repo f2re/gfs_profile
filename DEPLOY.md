@@ -1,6 +1,6 @@
 # Deploy GFS Profile: Telegram + MAX + VK
 
-Рабочая ветка — `telegram-bot`. Установленное приложение работает из `/opt/gfs_profile` одним systemd-процессом.
+Рабочая ветка — `telegram-bot`. Установленное приложение работает из `/opt/gfs_profile` одним systemd-процессом:
 
 ```text
 systemd
@@ -12,7 +12,53 @@ messenger_launcher.py
   └─ web/API
 ```
 
-`messenger_launcher.py` является штатным `ExecStart`. При `MESSENGER_RUNTIME_ENABLED=1` запускается один uvicorn worker и общий runtime. Значение `0` оставлено только как аварийный Telegram-only fallback без изменения systemd unit.
+`MESSENGER_RUNTIME_ENABLED=1` — штатный production mode. `0` оставлен как аварийный Telegram-only fallback без смены systemd unit.
+
+Пошаговое создание ботов и получение token/group id: [`docs/MESSENGER_REGISTRATION.md`](docs/MESSENGER_REGISTRATION.md).
+
+## Базовая установка
+
+```bash
+bash install_telegram_bot.sh
+```
+
+Telegram и web/API могут работать без MAX/VK token.
+
+## Первичная настройка MAX/VK
+
+После базовой установки и настройки публичного HTTPS reverse proxy используйте мастер:
+
+```bash
+sudo bash setup_messenger_bots.sh --max
+sudo bash setup_messenger_bots.sh --vk
+sudo bash setup_messenger_bots.sh --max --vk
+```
+
+Мастер требует минимальный набор:
+
+```text
+MAX: MAX_BOT_TOKEN + MAX_WEBHOOK_URL
+VK:  VK_BOT_TOKEN + VK_GROUP_ID + VK_CALLBACK_URL
+```
+
+Он автоматически:
+
+```text
+генерирует MAX_WEBHOOK_SECRET
+генерирует VK_CALLBACK_SECRET
+получает VK_CONFIRMATION_CODE через VK API
+проверяет env
+запускает штатный deploy
+ждёт /ready
+регистрирует MAX subscription и VK Callback API server
+проверяет фактическую регистрацию
+```
+
+Status без изменений:
+
+```bash
+sudo bash setup_messenger_bots.sh --status
+```
 
 ## Ручное обновление
 
@@ -23,32 +69,30 @@ git pull --ff-only
 sudo bash deploy_telegram_bot.sh --yes
 ```
 
-Deploy автоматически мигрирует старый unit, который запускал `telegram_bot.py`, на `messenger_launcher.py`.
+Deploy автоматически мигрирует старый unit `telegram_bot.py` на `messenger_launcher.py`.
 
-## Порядок production deploy
-
-Штатный deploy выполняет:
+## Production deploy sequence
 
 ```text
-1. lock от параллельного deploy
-2. сохранение .env/.cache_gfs/.venv/.install-state
-3. синхронизацию checkout → /opt/gfs_profile
-4. зависимости Python
+1. deploy lock
+2. сохранить .env/.cache_gfs/.venv/.install-state
+3. checkout → /opt/gfs_profile
+4. Python dependencies
 5. unit tests
 6. runtime_check.py
 7. messenger_config_check.py
 8. DaData preflight
-9. запись systemd unit с messenger_launcher.py
+9. systemd unit
 10. restart
-11. локальный GET /ready
-12. регистрация Telegram commands
-13. проверка/регистрация MAX/VK webhook
-14. запись .install-state
+11. GET /ready
+12. Telegram commands
+13. MAX/VK webhook registration
+14. .install-state
 ```
 
-Webhook регистрируются только после успешного `/ready`. Поэтому deploy не создаёт подписку на ещё не запущенный endpoint.
+Webhook регистрируется только после `/ready`.
 
-## Конфигурация runtime
+## Runtime env
 
 ```env
 MESSENGER_RUNTIME_ENABLED=1
@@ -58,42 +102,51 @@ MESSENGER_RUNTIME_LOG_LEVEL=info
 MESSENGER_RUNTIME_ACCESS_LOG=0
 
 MAX_BOT_TOKEN=
-MAX_WEBHOOK_URL=https://bot.example.ru/webhooks/max
+MAX_WEBHOOK_URL=
 MAX_WEBHOOK_SECRET=
 
 VK_BOT_TOKEN=
 VK_GROUP_ID=
-VK_CALLBACK_URL=https://bot.example.ru/webhooks/vk
+VK_CALLBACK_URL=
 VK_CALLBACK_SECRET=
 VK_CONFIRMATION_CODE=
 VK_API_VERSION=5.199
 ```
 
-MAX/VK необязательны: пустой токен отключает соответствующую платформу, но Telegram и web/API продолжают работать через тот же launcher.
-
-Публичный HTTPS завершается Nginx/HAProxy. Внутренний uvicorn по умолчанию слушает только `127.0.0.1:8081`.
-
-## Health/readiness
-
-После запуска доступны:
+Примеры публичных URL:
 
 ```text
-GET /health   процесс жив, показывает включённые платформы и лимиты
-GET /ready    200 только после запуска Telegram application; иначе 503
+https://bot.example.ru/webhooks/max
+https://bot.example.ru/webhooks/vk
 ```
 
-Проверка на сервере:
+Не записывайте example URL в `.env`, если соответствующая платформа не настраивается.
+
+## Ручная подготовка secrets/code
+
+Если `.env` заполнен вручную минимальными platform-реквизитами:
+
+```bash
+cd /opt/gfs_profile
+sudo .venv/bin/python prepare_messenger_config.py --env-file .env
+```
+
+После этого:
+
+```bash
+sudo bash deploy_telegram_bot.sh --yes
+```
+
+## Health/readiness
 
 ```bash
 curl -fsS http://127.0.0.1:8081/health
 curl -fsS http://127.0.0.1:8081/ready
 ```
 
-`/health` не содержит токены или secrets.
+`/health` показывает платформы/common products/resource limits без secrets. `/ready` возвращает 200 только после полного запуска Telegram application/runtime.
 
-## Общие лимиты ресурсов
-
-Telegram, MAX, VK и смонтированный web/API используют один `RuntimeResources`:
+## Общие лимиты
 
 ```env
 MAX_CONCURRENT_GFS=2
@@ -101,43 +154,60 @@ MAX_CONCURRENT_GEOCODE=2
 MAX_CONCURRENT_METEOGRAM=2
 ```
 
-Это реальные process-wide лимиты. Например, при `MAX_CONCURRENT_GFS=2` один запрос Telegram и один MAX могут выполняться одновременно, но третий GFS-запрос ждёт свободный permit независимо от платформы.
+Лимиты process-wide: Telegram/MAX/VK/web делят одни permits. Redis/Celery не используются.
 
-Внешние Redis/Celery/очереди для этого не используются.
+## Регистрация и status
 
-## Регистрация webhook
-
-После успешного restart deploy запускает:
+Штатный deploy после `/ready` вызывает:
 
 ```bash
 python register_messenger_webhooks.py
 ```
 
-Если MAX/VK токены не заданы, команда завершается успешно без действий. Если платформа настроена, проверяются публичный HTTPS endpoint и фактическая регистрация у провайдера.
-
-Ручной повтор:
+Проверка без изменения provider state:
 
 ```bash
 cd /opt/gfs_profile
-sudo -u gfsbot env $(grep -v '^#' .env | xargs) .venv/bin/python register_messenger_webhooks.py
+set -a
+source .env
+set +a
+.venv/bin/python register_messenger_webhooks.py --status
 ```
 
-На практике безопаснее загрузить `.env` через shell с `set -a; source .env; set +a`, а не печатать secrets в командной строке.
+Отдельно:
 
-## Автоматическое обновление
+```bash
+.venv/bin/python register_messenger_webhooks.py --max --status
+.venv/bin/python register_messenger_webhooks.py --vk --status
+```
 
-Рекомендуемый режим — существующий systemd timer:
+Status проверяет не только локальный runtime:
+
+- MAX — наличие subscription для точного URL и update types;
+- VK — confirmation code, точный Callback server URL, `message_new` и `message_event`.
+
+## Public HTTPS
+
+Внутренний uvicorn обычно слушает:
+
+```text
+127.0.0.1:8081
+```
+
+Nginx/HAProxy публикует только `/webhooks/max` и `/webhooks/vk` через HTTPS с доверенным сертификатом. Пример есть в `docs/MESSENGER_REGISTRATION.md`.
+
+## Автообновление
 
 ```bash
 sudo bash install_auto_update.sh --yes
 sudo bash install_auto_update.sh --status
 ```
 
-Updater следит за `origin/telegram-bot`, использует отдельный lock, вызывает тот же `deploy_telegram_bot.sh`, а при провале возвращает предыдущий установленный SHA. Значит multi-messenger preflight, `/ready` и webhook registration применяются и к автоматическому обновлению.
+Updater следит за `origin/telegram-bot`, использует lock и вызывает тот же `deploy_telegram_bot.sh`; при провале возвращает предыдущий installed SHA.
 
 ## Locks
 
-Штатный deploy:
+Deploy:
 
 ```text
 /run/lock/gfs-profile-bot.deploy.lock
@@ -148,8 +218,6 @@ Auto-update:
 ```text
 /run/lock/gfs-profile-bot-auto-update.lock
 ```
-
-Если `/run/lock` недоступен, deploy использует lock внутри git-dir. Предсказуемый `/tmp/...lock` больше не используется.
 
 ## Сохраняемые данные
 
@@ -163,32 +231,26 @@ Auto-update:
 data/basemap/
 ```
 
-Поэтому сохраняются:
-
-- admin stats SQLite;
-- Telegram preferences/recipes;
-- MAX/VK recipes;
-- расписания;
-- GFS/geocode/meteogram cache;
-- локальная конфигурация и secrets.
+Сохраняются admin stats, Telegram preferences/recipes, MAX/VK recipes, schedules, GFS/geocode/meteogram cache и platform secrets.
 
 ## Проверка после deploy
 
 ```bash
 sudo bash deploy_telegram_bot.sh --status
+sudo bash setup_messenger_bots.sh --status
 sudo systemctl status gfs-profile-bot.service
 sudo systemctl cat gfs-profile-bot.service
 sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
 curl -fsS http://127.0.0.1:8081/ready
 ```
 
-В effective unit ожидается:
+Effective unit:
 
 ```text
 ExecStart=/opt/gfs_profile/.venv/bin/python /opt/gfs_profile/messenger_launcher.py
 ```
 
-До push/merge обязательны:
+До push/merge:
 
 ```bash
 python -m unittest discover -s tests
@@ -197,7 +259,7 @@ python -m gfs_core --lat 45.0355 --lon 38.9753 --lead 24
 python -m gfs_core --lat 55.75 --lon 37.62 --lead 384
 ```
 
-## Опции deploy
+## Deploy options
 
 ```text
 --yes
@@ -210,16 +272,14 @@ python -m gfs_core --lat 55.75 --lon 37.62 --lead 384
 --status
 ```
 
-`--skip-webhooks` нужен только для диагностики/подготовки reverse proxy. Обычный production deploy должен регистрировать webhook автоматически.
+`--skip-webhooks` — только для диагностики/reverse-proxy preparation.
 
-## Совместимый переключатель
-
-`install_messenger_runtime.sh` сохранён для аварийного управления уже установленным сервером:
+## Emergency switch
 
 ```bash
 sudo bash install_messenger_runtime.sh --status
-sudo bash install_messenger_runtime.sh --disable   # Telegram-only fallback
+sudo bash install_messenger_runtime.sh --disable
 sudo bash install_messenger_runtime.sh --enable
 ```
 
-Новая установка и обычный deploy больше не требуют отдельного запуска этого helper.
+Обычная установка/deploy не требуют отдельного запуска этого helper.
