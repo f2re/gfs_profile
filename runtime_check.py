@@ -89,6 +89,7 @@ OPTIONAL_RUNTIME_MODULES = (
     "messenger.contracts",
     "messenger.callback_codec",
     "messenger.state",
+    "messenger.platform_config",
     "messenger.runtime_resources",
     "messenger.profile_service",
     "messenger.aero_service",
@@ -143,8 +144,9 @@ def main() -> int:
         return 1
 
     print(
-        "Runtime check OK: GFS/GRIB, DaData, shared runtime resources, common profile/aero/windgram/cloudgram services, "
-        "messenger registration setup, route, model/ensemble meteograms, schedules and Telegram/MAX/VK gateways import successfully"
+        "Runtime check OK: GFS/GRIB, DaData, shared runtime resources, independent platform lifecycle, "
+        "common profile/aero/windgram/cloudgram services, messenger registration setup, route, model/ensemble "
+        "meteograms, schedules and Telegram/MAX/VK gateways import successfully"
     )
     return 0
 

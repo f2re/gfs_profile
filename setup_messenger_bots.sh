@@ -27,7 +27,9 @@ usage() {
 Использование:
   sudo bash setup_messenger_bots.sh [--max] [--vk] [--yes] [--status]
 
-Если --max/--vk не указаны, в интерактивном режиме будут предложены обе платформы.
+Платформы независимы. Настройка/ошибка VK не отключает Telegram или MAX.
+Для аварийной изоляции достаточно VK_ENABLED=0 (аналогично MAX_ENABLED/TELEGRAM_ENABLED).
+
 Для --yes передайте нужные значения через окружение:
 
 MAX:
@@ -109,10 +111,11 @@ fi
 if [[ "$SETUP_MAX" -eq 1 ]]; then
   MAX_BOT_TOKEN_VALUE="$(ask_value MAX_BOT_TOKEN 'MAX token из Расширенные настройки → Настроить' 1)"
   MAX_WEBHOOK_URL_VALUE="$(ask_value MAX_WEBHOOK_URL 'Публичный HTTPS URL MAX webhook, например https://bot.example.ru/webhooks/max')"
+  set_env MAX_ENABLED "1"
   set_env MAX_BOT_TOKEN "$MAX_BOT_TOKEN_VALUE"
   set_env MAX_WEBHOOK_URL "$MAX_WEBHOOK_URL_VALUE"
   [[ -n "${MAX_WEBHOOK_SECRET:-}" ]] && set_env MAX_WEBHOOK_SECRET "$MAX_WEBHOOK_SECRET"
-  ok "MAX token/URL записаны; secret будет сгенерирован при необходимости"
+  ok "MAX включён; token/URL записаны, secret будет сгенерирован при необходимости"
 fi
 
 if [[ "$SETUP_VK" -eq 1 ]]; then
@@ -121,26 +124,42 @@ if [[ "$SETUP_VK" -eq 1 ]]; then
   VK_CALLBACK_URL_VALUE="$(ask_value VK_CALLBACK_URL 'Публичный HTTPS URL VK Callback API, например https://bot.example.ru/webhooks/vk')"
   VK_API_VERSION_VALUE="${VK_API_VERSION:-$(read_env VK_API_VERSION)}"
   VK_API_VERSION_VALUE="${VK_API_VERSION_VALUE:-5.199}"
+  set_env VK_ENABLED "1"
   set_env VK_BOT_TOKEN "$VK_BOT_TOKEN_VALUE"
   set_env VK_GROUP_ID "$VK_GROUP_ID_VALUE"
   set_env VK_CALLBACK_URL "$VK_CALLBACK_URL_VALUE"
   set_env VK_API_VERSION "$VK_API_VERSION_VALUE"
   [[ -n "${VK_CALLBACK_SECRET:-}" ]] && set_env VK_CALLBACK_SECRET "$VK_CALLBACK_SECRET"
   [[ -n "${VK_CONFIRMATION_CODE:-}" ]] && set_env VK_CONFIRMATION_CODE "$VK_CONFIRMATION_CODE"
-  ok "VK token/group/URL записаны; secret и confirmation code будут подготовлены автоматически"
+  ok "VK включён; token/group/URL записаны, secret и confirmation code будут подготовлены автоматически"
 fi
 
-log "Подготавливаю secrets и VK confirmation code"
-"$VENV_PY" "$SCRIPT_DIR/prepare_messenger_config.py" --env-file "$ENV_FILE"
+log "Подготавливаю служебные значения только выбранных платформ"
+if [[ "$SETUP_MAX" -eq 1 ]]; then
+  "$VENV_PY" "$SCRIPT_DIR/prepare_messenger_config.py" --env-file "$ENV_FILE" --max
+fi
+if [[ "$SETUP_VK" -eq 1 ]]; then
+  "$VENV_PY" "$SCRIPT_DIR/prepare_messenger_config.py" --env-file "$ENV_FILE" --vk
+fi
 chown root:"$SERVICE_USER" "$ENV_FILE"
 chmod 0640 "$ENV_FILE"
 
 log "Проверяю конфигурацию до deploy"
-run_installed_env "$VENV_PY" "$SCRIPT_DIR/messenger_config_check.py"
+if [[ "$SETUP_MAX" -eq 1 ]]; then
+  run_installed_env "$VENV_PY" "$SCRIPT_DIR/messenger_config_check.py" --strict-max
+fi
+if [[ "$SETUP_VK" -eq 1 ]]; then
+  run_installed_env "$VENV_PY" "$SCRIPT_DIR/messenger_config_check.py" --strict-vk
+fi
 
-log "Запускаю штатный deploy; после /ready он зарегистрирует MAX/VK webhook"
+log "Запускаю штатный deploy; каждая платформа регистрируется независимо"
 bash "$SCRIPT_DIR/deploy_telegram_bot.sh" --install-dir "$INSTALL_DIR" --service-user "$SERVICE_USER" --yes
 
-log "Проверяю фактическую регистрацию"
-run_installed_env "$VENV_PY" "$INSTALL_DIR/register_messenger_webhooks.py" --status
-ok "MAX/VK setup завершён"
+log "Проверяю фактическую регистрацию только настроенных платформ"
+if [[ "$SETUP_MAX" -eq 1 ]]; then
+  run_installed_env "$VENV_PY" "$INSTALL_DIR/register_messenger_webhooks.py" --status --max
+fi
+if [[ "$SETUP_VK" -eq 1 ]]; then
+  run_installed_env "$VENV_PY" "$INSTALL_DIR/register_messenger_webhooks.py" --status --vk
+fi
+ok "Настройка выбранных платформ завершена; остальные платформы не затронуты"

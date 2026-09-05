@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-"""Prepare secrets and VK confirmation code before messenger runtime restart.
+"""Prepare per-platform secrets before messenger runtime restart.
 
-The operator only has to provide platform credentials and public callback URLs.
-Generated secrets and the VK confirmation code are persisted in the existing
-.env without printing secret values to stdout.
+MAX and VK are intentionally processed independently.  A broken/stale VK
+configuration must not prevent preparing MAX, and vice versa.
 """
 
 import argparse
@@ -13,6 +12,9 @@ import secrets
 from pathlib import Path
 
 from messenger.vk import VkApiClient
+
+TRUE_VALUES = {"1", "true", "yes", "on", "да"}
+FALSE_VALUES = {"0", "false", "no", "off", "нет"}
 
 
 class PrepareConfigError(RuntimeError):
@@ -64,6 +66,17 @@ def _value(values: dict[str, str], key: str) -> str:
     return os.getenv(key, "").strip() or values.get(key, "").strip()
 
 
+def _selected(values: dict[str, str], platform: str, token_var: str, explicit: set[str] | None) -> bool:
+    if explicit is not None:
+        return platform in explicit
+    raw = _value(values, f"{platform.upper()}_ENABLED").lower()
+    if raw in FALSE_VALUES:
+        return False
+    if raw in TRUE_VALUES:
+        return True
+    return bool(_value(values, token_var))
+
+
 def _random_secret() -> str:
     return secrets.token_urlsafe(32)
 
@@ -76,23 +89,29 @@ def _vk_confirmation_code(token: str, group_id: int, api_version: str) -> str:
     return str(payload["code"])
 
 
-def prepare_environment(path: Path) -> list[str]:
+def prepare_environment(path: Path, platforms: set[str] | None = None) -> list[str]:
     path = Path(path)
     values = read_env_file(path)
     changed: list[str] = []
+    explicit = {str(value).lower() for value in platforms} if platforms is not None else None
 
-    max_token = _value(values, "MAX_BOT_TOKEN")
-    max_url = _value(values, "MAX_WEBHOOK_URL")
-    max_secret = _value(values, "MAX_WEBHOOK_SECRET")
-    if max_token and max_url and not max_secret:
-        set_env_value(path, "MAX_WEBHOOK_SECRET", _random_secret())
-        values = read_env_file(path)
-        changed.append("MAX_WEBHOOK_SECRET generated")
+    if _selected(values, "max", "MAX_BOT_TOKEN", explicit):
+        max_token = _value(values, "MAX_BOT_TOKEN")
+        max_url = _value(values, "MAX_WEBHOOK_URL")
+        if not max_token:
+            raise PrepareConfigError("MAX_BOT_TOKEN не задан")
+        if not max_url:
+            raise PrepareConfigError("MAX_WEBHOOK_URL не задан")
+        max_secret = _value(values, "MAX_WEBHOOK_SECRET")
+        if not max_secret:
+            set_env_value(path, "MAX_WEBHOOK_SECRET", _random_secret())
+            values = read_env_file(path)
+            changed.append("MAX_WEBHOOK_SECRET generated")
 
-    vk_token = _value(values, "VK_BOT_TOKEN")
-    vk_url = _value(values, "VK_CALLBACK_URL")
-    vk_group_raw = _value(values, "VK_GROUP_ID")
-    if vk_token or vk_url or vk_group_raw:
+    if _selected(values, "vk", "VK_BOT_TOKEN", explicit):
+        vk_token = _value(values, "VK_BOT_TOKEN")
+        vk_url = _value(values, "VK_CALLBACK_URL")
+        vk_group_raw = _value(values, "VK_GROUP_ID")
         if not vk_token:
             raise PrepareConfigError("VK_BOT_TOKEN не задан")
         if not vk_group_raw:
@@ -125,10 +144,19 @@ def prepare_environment(path: Path) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Подготовка MAX/VK secrets и VK confirmation code")
     parser.add_argument("--env-file", default=".env", help="путь к .env")
+    parser.add_argument("--max", action="store_true", dest="only_max", help="готовить только MAX")
+    parser.add_argument("--vk", action="store_true", dest="only_vk", help="готовить только VK")
     args = parser.parse_args()
+    platforms: set[str] | None = None
+    if args.only_max or args.only_vk:
+        platforms = set()
+        if args.only_max:
+            platforms.add("max")
+        if args.only_vk:
+            platforms.add("vk")
     path = Path(args.env_file)
     try:
-        changed = prepare_environment(path)
+        changed = prepare_environment(path, platforms=platforms)
     except PrepareConfigError as exc:
         print(f"ERROR: {exc}")
         return 2

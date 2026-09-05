@@ -4,12 +4,13 @@ import argparse
 import os
 import re
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urlparse
 
 import requests
 
 from messenger.max import MaxApiClient
+from messenger.platform_config import PlatformStatus, max_status, vk_status
 from messenger.vk import VkApiClient
 
 
@@ -83,7 +84,6 @@ def register_max(*, probe: bool = True, client: MaxApiClient | None = None) -> R
         _probe_max(url, secret)
     client = client or MaxApiClient(token)
     existing = client.list_subscriptions()
-    # MAX documents POST /subscriptions as both create and update operation.
     client.subscribe(url, secret, MAX_UPDATE_TYPES)
     matched = any(str(item.get("url") or "") == url for item in existing)
     return RegistrationResult("max", url, "подписка обновлена" if matched else "подписка создана")
@@ -199,35 +199,67 @@ def status_vk(*, client: VkApiClient | None = None) -> RegistrationResult:
     return RegistrationResult("vk", url, f"callback server активен · id={server_id}")
 
 
+def _disabled_result(status: PlatformStatus) -> RegistrationResult:
+    return RegistrationResult(status.name, "", "платформа отключена", True)
+
+
+def _degraded_result(status: PlatformStatus) -> RegistrationResult:
+    url_var = "MAX_WEBHOOK_URL" if status.name == "max" else "VK_CALLBACK_URL"
+    return RegistrationResult(status.name, os.getenv(url_var, "").strip(), status.reason, False)
+
+
+def _safe_platform_action(status: PlatformStatus, action: Callable[[], RegistrationResult]) -> RegistrationResult:
+    if not status.requested:
+        return _disabled_result(status)
+    if not status.ready:
+        return _degraded_result(status)
+    try:
+        return action()
+    except Exception as exc:
+        url_var = "MAX_WEBHOOK_URL" if status.name == "max" else "VK_CALLBACK_URL"
+        return RegistrationResult(status.name, os.getenv(url_var, "").strip(), str(exc), False)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Регистрация/проверка MAX/VK webhook для GFS Profile")
     parser.add_argument("--max", action="store_true", dest="only_max", help="только MAX")
     parser.add_argument("--vk", action="store_true", dest="only_vk", help="только VK")
-    parser.add_argument("--status", action="store_true", help="только проверить текущую регистрацию")
+    parser.add_argument("--status", action="store_true", help="проверить текущую регистрацию; ошибки дают ненулевой код")
+    parser.add_argument("--strict", action="store_true", help="ошибка любой платформы даёт ненулевой код")
     parser.add_argument("--no-probe", action="store_true", help="не проверять публичный URL перед API регистрацией")
     args = parser.parse_args()
     selected_max = args.only_max or not (args.only_max or args.only_vk)
     selected_vk = args.only_vk or not (args.only_max or args.only_vk)
+
     results: list[RegistrationResult] = []
-    try:
-        if selected_max and os.getenv("MAX_BOT_TOKEN", "").strip():
-            results.append(status_max() if args.status else register_max(probe=not args.no_probe))
-        elif args.only_max:
-            raise WebhookConfigError("MAX_BOT_TOKEN не задан")
-        if selected_vk and os.getenv("VK_BOT_TOKEN", "").strip():
-            results.append(status_vk() if args.status else register_vk(probe=not args.no_probe))
-        elif args.only_vk:
-            raise WebhookConfigError("VK_BOT_TOKEN не задан")
-    except WebhookConfigError as exc:
-        print(f"ERROR: {exc}")
-        return 2
-    if not results:
-        print("MAX/VK токены не заданы; проверять/регистрировать нечего")
-        return 0
+    if selected_max:
+        status = max_status()
+        results.append(
+            _safe_platform_action(
+                status,
+                (lambda: status_max()) if args.status else (lambda: register_max(probe=not args.no_probe)),
+            )
+        )
+    if selected_vk:
+        status = vk_status()
+        results.append(
+            _safe_platform_action(
+                status,
+                (lambda: status_vk()) if args.status else (lambda: register_vk(probe=not args.no_probe)),
+            )
+        )
+
+    failed = False
     for result in results:
         marker = "OK" if result.ok else "ERROR"
-        print(f"{marker} {result.platform.upper()}: {result.detail} · {result.url}")
-    return 0 if all(result.ok for result in results) else 3
+        suffix = f" · {result.url}" if result.url else ""
+        print(f"{marker} {result.platform.upper()}: {result.detail}{suffix}")
+        failed = failed or not result.ok
+
+    # Normal install/deploy is best-effort: a broken VK must not block MAX or
+    # Telegram. Explicit diagnostics/setup remain strict.
+    strict = args.strict or args.status or args.only_max or args.only_vk
+    return 3 if failed and strict else 0
 
 
 if __name__ == "__main__":
