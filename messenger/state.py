@@ -15,6 +15,7 @@ class FlowState:
     pending_lead: int | None = None
     pending_run: Any | None = None
     lead_page: int = 0
+    params: dict[str, Any] = field(default_factory=dict)
     updated_at: float = field(default_factory=time.time)
 
 
