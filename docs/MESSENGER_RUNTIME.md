@@ -1,24 +1,30 @@
 # Multi-messenger runtime: Telegram + MAX + VK
 
-Статус: реализованы transport/webhook, общие `/profile` и `/aero` vertical slices и общий слой saved recipes для этих продуктов. Остальные продукты последовательно переносятся в messenger-neutral services.
+Статус: общий runtime является штатным production entrypoint. Реализованы transport/webhook, общие `/profile` и `/aero` vertical slices и saved recipes для этих продуктов. Остальные продукты последовательно переносятся в messenger-neutral services.
 
 ## Один процесс
 
 ```text
-Telegram polling
-MAX POST /webhooks/max
-VK  POST /webhooks/vk
-web/API
+systemd → messenger_launcher.py
+                 │
+                 ├─ Telegram polling
+                 ├─ MAX POST /webhooks/max
+                 ├─ VK  POST /webhooks/vk
+                 └─ FastAPI web/API
 ```
 
-Runtime остаётся single-process. Несколько uvicorn workers запрещены из-за текущего GRIB/cache locking. При `MESSENGER_RUNTIME_ENABLED=0` сохраняется Telegram-only polling; при `1` запускается общий ASGI runtime.
+Runtime остаётся single-process и запускается с `workers=1`. Это принципиально: GFS/cache/resource gates являются локальными для процесса. Redis, Celery и отдельные очереди не требуются.
+
+`MESSENGER_RUNTIME_ENABLED=1` — production default. Значение `0` оставлено как аварийный Telegram-only fallback: systemd продолжает запускать `messenger_launcher.py`, а launcher передаёт управление обычному Telegram polling.
 
 ## Конфигурация
 
 ```env
-MESSENGER_RUNTIME_ENABLED=0
+MESSENGER_RUNTIME_ENABLED=1
 MESSENGER_RUNTIME_HOST=127.0.0.1
 MESSENGER_RUNTIME_PORT=8081
+MESSENGER_RUNTIME_LOG_LEVEL=info
+MESSENGER_RUNTIME_ACCESS_LOG=0
 MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
 
 MAX_BOT_TOKEN=
@@ -33,64 +39,142 @@ VK_CONFIRMATION_CODE=
 VK_API_VERSION=5.199
 ```
 
-Публичный HTTPS завершается Nginx/HAProxy; внутренний порт напрямую не публикуется.
+Пустой MAX/VK token означает, что соответствующий gateway не создаётся. Telegram и web/API продолжают работать.
+
+Публичный HTTPS завершается Nginx/HAProxy; внутренний `127.0.0.1:8081` напрямую не публикуется.
+
+## Startup/readiness
+
+`messenger_runtime.py` сначала конфигурирует общие process resources, затем в lifespan инициализирует Telegram application и запускает polling. Только после успешного `Application.start()` runtime становится ready.
+
+```text
+GET /health
+```
+
+возвращает состояние процесса, включённые платформы и лимиты ресурсов.
+
+```text
+GET /ready
+```
+
+возвращает `503` до полной готовности Telegram runtime и `200` после запуска. Deploy ждёт именно `/ready`, а не просто открытый TCP-порт.
+
+## Shared RuntimeResources
+
+`messenger/runtime_resources.py` создаёт единый process-wide pool:
+
+```env
+MAX_CONCURRENT_GFS=2
+MAX_CONCURRENT_GEOCODE=2
+MAX_CONCURRENT_METEOGRAM=2
+```
+
+Он используется:
+
+- общими MAX/VK routers;
+- legacy Telegram handlers через совместимые globals `GFS_SEMAPHORE`/`GEOCODE_SEMAPHORE`;
+- Telegram meteogram;
+- mounted web/API для GFS profile;
+- последующими common product services.
+
+Смысл лимита process-wide. При `MAX_CONCURRENT_GFS=2` два расчёта могут идти одновременно независимо от источника запросов; третий Telegram/MAX/VK/web запрос ждёт освобождения permit.
+
+Для blocking geocode/web calls используется тот же underlying threading gate, а async handlers получают неблокирующий async context adapter. Поэтому нельзя случайно получить отдельные лимиты «2 для Telegram + 2 для MAX/VK».
+
+## Production deploy
+
+Fresh install и `deploy_telegram_bot.sh` записывают:
+
+```text
+ExecStart=/opt/gfs_profile/.venv/bin/python /opt/gfs_profile/messenger_launcher.py
+```
+
+Старый Telegram-only unit автоматически мигрируется при следующем deploy.
+
+До restart выполняются:
+
+```text
+runtime_check.py
+messenger_config_check.py
+geocoder_preflight.py
+```
+
+После restart:
+
+```text
+GET /ready
+register_telegram_commands.py
+register_messenger_webhooks.py
+```
+
+Webhook не регистрируется на ещё не запущенный endpoint.
+
+`install_messenger_runtime.sh` сохранён как аварийный ручной переключатель, но для обычного install/deploy больше не требуется.
+
+Подробно: `DEPLOY.md`.
+
+## MAX transport
+
+MAX production использует:
+
+```text
+POST /webhooks/max
+```
+
+`MessengerWebhookService` проверяет `X-Max-Bot-Api-Secret`, дедуплицирует входящие события и возвращает HTTP 200 до тяжёлого GFS-расчёта. Расчёт выполняется фоновой asyncio task того же процесса; status message редактируется через gateway.
+
+`MaxApiClient` использует `https://platform-api2.max.ru`, передаёт token только через `Authorization`, поддерживает retry/backoff для `429`, `5xx` и network errors и выполняет `/uploads → attachment → /messages` для media.
+
+## VK transport
+
+VK Callback API использует:
+
+```text
+POST /webhooks/vk
+```
+
+Поддержаны confirmation, secret/group validation, `message_new`, `message_event`, callback/location controls, edit status, PNG/file upload.
 
 ## Общие продукты
 
 ### `/profile`
 
-MAX/VK через общий router/service поддерживают `/start`, `/profile`, город/координаты, `Москва +24`, неоднозначный город, native location, быстрые сроки, пагинацию до `+384`, `/status`, `/cancel`, редактируемый progress, общий GFS run selection и одинаковый результат PNG/CSV.
+Telegram/MAX/VK используют общий `messenger/profile_service.py`: одинаковый run selection, profile result, PNG/CSV и модельная маркировка.
 
-Telegram `/profile` использует тот же `messenger/profile_service.py`.
+MAX/VK flow поддерживает город/координаты, `Москва +24`, ambiguous city, native location, быстрые сроки, пагинацию до `+384`, `/status`, `/cancel` и редактируемый progress.
 
 ### `/aero`
 
-`/aero` использует `messenger/aero_service.py` во всех трёх мессенджерах. Общий service владеет parser, lead validation, выбором фактического опубликованного GFS run, вызовом существующего `aero_product.py`, progress contract и `CommonProductResult`.
+Telegram/MAX/VK используют `messenger/aero_service.py`: один parser, lead validation, фактический опубликованный GFS run, `aero_product.py`, progress contract и `CommonProductResult`.
 
-MAX/VK поддерживают:
+Результат показывает run/cycle UTC, lead, valid UTC, requested point и GFS grid point. Icing/CAT обозначаются как модельные прокси; GFS не называется наблюдением или радиозондом.
 
-- `/aero Москва +24` → прямой расчёт;
-- `/aero` → город/координаты/native location → срок;
-- неоднозначный город → callback-выбор;
-- быстрые `+0,+3,+6,+12,+24,+48`;
-- пагинацию всех сроков до `+384`;
-- одно редактируемое status message;
-- Skew-T log-P с годографом;
-- одинаковую модельную сводку и PNG.
-
-Результат явно показывает фактический run/cycle, lead, valid UTC, requested point и GFS grid point. Icing/CAT обозначаются как модельные прокси; продукт не называется радиозондом или наблюдением.
-
-Подробно: `docs/MESSENGER_AERO_SERVICE.md` и `docs/AERO_DIAGRAM.md`.
+Подробно: `docs/MESSENGER_AERO_SERVICE.md`.
 
 ## Saved recipes
 
-`messenger/user_recipes.py` хранит сценарии по `platform + user + product + point + params`. `run/cycle` и process-local state исключаются.
+`messenger/user_recipes.py` хранит сценарии по:
 
-Для `/profile` и `/aero` MAX/VK поддерживают:
+```text
+platform + user + product + point + params
+```
 
-- успешный расчёт создаёт/обновляет recipe;
-- `/start` показывает до двух быстрых recipes;
-- команда продукта без аргументов открывает закреплённый или последний успешный вариант;
-- callback использует устойчивый `recipe_id`;
-- repeat запускает `run=None` и выбирает новый доступный GFS cycle;
-- pin/unpin переживает restart процесса.
+`run/cycle` и process-local state исключены. Repeat всегда выбирает новый подходящий model run.
 
-Telegram использует тот же логический recipe contract в своём персональном UX.
-
-Подробно: `docs/MESSENGER_SAVED_RECIPES.md`.
+Для `/profile` и `/aero` MAX/VK уже поддерживают recipe/pin/repeat. Telegram использует тот же логический контракт в персональном UX.
 
 ## Следующий продуктовый этап
 
-Переносить в common service по одному vertical slice:
+После production runtime следующий vertical slice:
 
 ```text
 /windgram
-/cloudgram
-/meteogram
-/map
-/route
-/settings
-/schedule
+→ /cloudgram
+→ /map
+→ /meteogram
+→ /route
+→ /settings
+→ /schedule
 ```
 
-Следующий приоритет — `/windgram`. Каждый новый продукт сразу использует общий result/progress contract и `UserRecipeStore`; платформенная копия метеорологической логики запрещена.
+Каждый продукт сразу должен использовать `RuntimeResources`, общий result/progress contract и `UserRecipeStore`; платформенная копия метеорологической логики запрещена.
