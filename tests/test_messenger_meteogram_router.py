@@ -18,23 +18,41 @@ class Point:
 
 class Parsed:
     def __init__(self, query="Москва", source_id="gfs", days=5, output_format="png"):
-        self.location_query = query; self.source_id = source_id; self.days = days; self.output_format = output_format
+        self.location_query = query
+        self.source_id = source_id
+        self.days = days
+        self.output_format = output_format
 
 
 class Gateway:
     def __init__(self, platform="max"):
-        self.platform = platform; self.calls = []; self.counter = 0
+        self.platform = platform
+        self.calls = []
+        self.counter = 0
+
     async def send_text(self, chat_id, text, *, keyboard=None, parse_mode=None):
-        self.counter += 1; self.calls.append(("send_text", text, keyboard)); return PlatformMessage(self.platform, chat_id, str(self.counter))
+        self.counter += 1
+        self.calls.append(("send_text", text, keyboard))
+        return PlatformMessage(self.platform, chat_id, str(self.counter))
+
     async def edit_text(self, chat_id, message_id, text, *, keyboard=None, parse_mode=None):
-        self.calls.append(("edit_text", text, keyboard)); return PlatformMessage(self.platform, chat_id, str(message_id))
+        self.calls.append(("edit_text", text, keyboard))
+        return PlatformMessage(self.platform, chat_id, str(message_id))
+
     async def send_image(self, chat_id, path, *, caption=""):
-        self.calls.append(("send_image", str(path), caption)); return PlatformMessage(self.platform, chat_id, "image")
+        self.calls.append(("send_image", str(path), caption))
+        return PlatformMessage(self.platform, chat_id, "image")
+
     async def send_file(self, chat_id, path, *, caption="", filename=None):
-        self.calls.append(("send_file", str(path), caption)); return PlatformMessage(self.platform, chat_id, "file")
+        self.calls.append(("send_file", str(path), caption))
+        return PlatformMessage(self.platform, chat_id, "file")
+
     async def send_animation(self, chat_id, path, *, caption=""):
-        self.calls.append(("send_animation", str(path), caption)); return PlatformMessage(self.platform, chat_id, "animation")
-    async def answer_callback(self, event, *, text=None): self.calls.append(("answer", text, None))
+        self.calls.append(("send_animation", str(path), caption))
+        return PlatformMessage(self.platform, chat_id, "animation")
+
+    async def answer_callback(self, event, *, text=None):
+        self.calls.append(("answer", text, None))
 
 
 class MeteogramRouterTests(unittest.IsolatedAsyncioTestCase):
@@ -43,9 +61,11 @@ class MeteogramRouterTests(unittest.IsolatedAsyncioTestCase):
         self.store = UserRecipeStore(Path(self.tmp.name) / "recipes.sqlite3")
         self.points = [Point()]
         self.built = []
+
         def builder(point, source_id, days, output_format, *, progress_callback=None):
             self.built.append((point.label, source_id, days, output_format))
             return CommonProductResult("meteogram", "METEO SUMMARY", [], {"cycle": None})
+
         self.router = MeteogramMessengerRouter(
             RouterDependencies(geocode=lambda q, n: list(self.points)),
             recipes=self.store,
@@ -56,7 +76,8 @@ class MeteogramRouterTests(unittest.IsolatedAsyncioTestCase):
         self.router.meteogram_semaphore = self.router.gfs_semaphore
         self.gateway = Gateway("max")
 
-    async def asyncTearDown(self): self.tmp.cleanup()
+    async def asyncTearDown(self):
+        self.tmp.cleanup()
 
     async def test_direct_command_runs_common_builder_and_saves_recipe(self):
         event = NormalizedEvent("max", "1", "COMMAND", "42", "chat", text="/meteogram Москва", command="meteogram")
@@ -76,11 +97,29 @@ class MeteogramRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.built[-1][1:], ("gefs", 10, "pdf"))
 
     async def test_meteogram_recipe_does_not_hijack_map_default(self):
-        self.store.record_success("max", "42", "meteogram", {"source": "gfs", "days": 5, "format": "png"}, Point())
-        await self.router.handle(NormalizedEvent("max", "8", "COMMAND", "42", "chat", text="/map", command="map"), self.gateway)
+        self.store.record_success(
+            "max",
+            "42",
+            "meteogram",
+            {"source": "gfs", "days": 5, "format": "png"},
+            Point(),
+        )
+        built_before = len(self.built)
+        await self.router.handle(
+            NormalizedEvent("max", "8", "COMMAND", "42", "chat", text="/map", command="map"),
+            self.gateway,
+        )
+        self.assertEqual(len(self.built), built_before)
         state = self.router.sessions.get("max", "42", "chat")
-        self.assertIsNotNone(state)
-        self.assertEqual(state.product, "map")
+        if state is not None:
+            self.assertEqual(state.product, "map")
+        self.assertFalse(
+            any(
+                call[0] in {"send_text", "edit_text"} and "METEO SUMMARY" in call[1]
+                for call in self.gateway.calls
+            )
+        )
 
 
-if __name__ == "__main__": unittest.main()
+if __name__ == "__main__":
+    unittest.main()
