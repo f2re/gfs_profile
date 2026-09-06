@@ -1,21 +1,21 @@
 # VK Bot — регистрация, настройка и эксплуатация
 
-Статус на 2026-09-05: VK Community Bot + Callback API и общие `/profile`, `/aero`, `/windgram`, `/cloudgram` работают через тот же messenger-neutral service, что Telegram и MAX. VK-слой содержит только transport/UI/media logic.
+VK использует Community Bot + Callback API как platform adapter поверх общего messenger-neutral слоя. Все семь основных продуктов, saved recipes, `/settings` и `/schedule` доступны без копирования GFS/geocoder/product logic.
 
-Полная пошаговая регистрация с Nginx, `.env`, автоматическим confirmation code и диагностикой: [`docs/MESSENGER_REGISTRATION.md`](docs/MESSENGER_REGISTRATION.md).
+Полная регистрация: [`docs/MESSENGER_REGISTRATION.md`](docs/MESSENGER_REGISTRATION.md). Итоговый паритет: [`docs/MESSENGER_PARITY.md`](docs/MESSENGER_PARITY.md).
 
-## Что нужно создать в VK
+## 1. Что создать в VK
 
-1. Создайте сообщество VK или используйте существующее, где есть права администратора.
+1. Создайте сообщество VK или используйте существующее с правами администратора.
 2. Включите сообщения сообщества.
 3. Откройте `Управление → Работа с API`.
-4. Создайте community access token с правами для сообщений/media и управления Callback API, если этот доступ вынесен отдельным разрешением.
+4. Создайте community access token с нужными правами сообщений/media/Callback API.
 5. Скопируйте token.
-6. Запишите числовой ID сообщества положительным числом без `-`.
+6. Запишите положительный числовой ID сообщества без `-`.
 
-Проект использует Community Bot + Callback API, а не пользовательский access token.
+Проект использует community token, а не user token.
 
-Используемые методы VK API:
+Основные методы API:
 
 ```text
 messages.send
@@ -25,6 +25,7 @@ photos.getMessagesUploadServer
 photos.saveMessagesPhoto
 docs.getMessagesUploadServer
 docs.save
+video.save
 groups.getCallbackConfirmationCode
 groups.getCallbackServers
 groups.addCallbackServer
@@ -32,23 +33,13 @@ groups.getCallbackSettings
 groups.setCallbackSettings
 ```
 
-Token — секрет. В репозиторий его не коммитить.
-
-## Что вставить в GFS Profile
-
-После базовой установки:
-
-```bash
-bash install_telegram_bot.sh
-```
-
-запустите:
+## 2. Что вставить в проект
 
 ```bash
 sudo bash setup_messenger_bots.sh --vk
 ```
 
-Мастер запросит только:
+Нужны:
 
 ```env
 VK_BOT_TOKEN=<community access token>
@@ -56,19 +47,14 @@ VK_GROUP_ID=123456789
 VK_CALLBACK_URL=https://bot.example.ru/webhooks/vk
 ```
 
-Эти поля можно не заполнять вручную:
+Можно оставить пустыми:
 
 ```env
 VK_CALLBACK_SECRET=
 VK_CONFIRMATION_CODE=
 ```
 
-Мастер:
-
-- генерирует `VK_CALLBACK_SECRET`;
-- получает фактический confirmation code через `groups.getCallbackConfirmationCode`;
-- записывает оба значения в `/opt/gfs_profile/.env`;
-- после restart автоматически создаёт/обновляет Callback API server и включает нужные события.
+Мастер создаёт secret, получает confirmation code через VK API, сохраняет `.env` и после `/ready` создаёт/обновляет Callback API server.
 
 Неинтерактивно:
 
@@ -80,19 +66,19 @@ sudo env \
   bash setup_messenger_bots.sh --vk --yes
 ```
 
-## Production transport
+## 3. Callback transport
 
 ```text
-VK Callback event
+VK event
 → POST /webhooks/vk
-→ VK adapter
+→ group/secret validation
 → NormalizedEvent
-→ common product service
+→ common router/service
 → CommonProductResult
-→ VK gateway
+→ VkGateway
 ```
 
-Runtime принимает:
+Поддерживаются:
 
 ```text
 confirmation
@@ -100,125 +86,94 @@ message_new
 message_event
 ```
 
-`confirmation` возвращает сохранённый confirmation code. Для остальных запросов проверяются `group_id` и `VK_CALLBACK_SECRET`. GFS-расчёт запускается после быстрого ответа HTTP endpoint, а не блокирует Callback API request lifecycle.
+Регистрационный скрипт сверяет confirmation code, проверяет публичный endpoint, создаёт/находит Callback API server и включает `message_new/message_event`.
 
-Публичный URL:
-
-```text
-https://bot.example.ru/webhooks/vk
-        ↓
-127.0.0.1:8081/webhooks/vk
-```
-
-## Автоматическая регистрация Callback API
-
-После `/ready` проект вызывает `register_messenger_webhooks.py`.
-
-Для VK он:
-
-1. сверяет `VK_CONFIRMATION_CODE` с `groups.getCallbackConfirmationCode`;
-2. отправляет контрольный `confirmation` POST на публичный URL;
-3. получает список Callback API servers;
-4. создаёт server, если URL ещё не зарегистрирован;
-5. включает `message_new=1` и `message_event=1`.
-
-Поэтому вручную копировать confirmation code и добавлять callback server через интерфейс VK не требуется.
-
-Проверка фактической регистрации:
+Проверка:
 
 ```bash
-cd /opt/gfs_profile
-set -a; source .env; set +a
 .venv/bin/python register_messenger_webhooks.py --vk --status
-```
-
-или:
-
-```bash
-sudo bash setup_messenger_bots.sh --status
 ```
 
 Ожидается `OK VK: callback server активен`.
 
-## Кнопки и callbacks
-
-Общий `UiKeyboard` переводится в native VK keyboard. Callback использует `messages.sendMessageEventAnswer`. Для `messages.send` формируется уникальный `random_id`, чтобы retry не создавал дубли.
-
-Location button нормализуется в общий `NormalizedEvent.location`.
-
-## Общие продукты
-
-### `/profile`
-
-Город/координаты, `Москва +24`, неоднозначность, native location, быстрые сроки, пагинация до `+384`, progress, PNG/CSV и recipes.
-
-### `/aero`
-
-Общий Skew-T log-P + годограф, actual run/cycle, valid UTC, requested/grid point. Icing/CAT — модельные прокси.
-
-### `/windgram`
-
-Default:
+## 4. Продукты
 
 ```text
-ветер
-+0…+120 ч
-шаг 6 ч
-до 500 гПа
+/profile
+/aero
+/windgram
+/cloudgram
+/map
+/meteogram
+/route
 ```
 
-Доступны wind/temp/RH, `+120/+240/+384`, шаг `3/6/12`.
+Поддерживаются город/координаты, неоднозначный город, native location для point-products, callback flow, progress и saved recipes.
 
-### `/cloudgram`
+### `/map`
 
-Default:
+Default: MP4 animation `+0…+48 ч`, step 3, radius 100 км, places. VK gateway сначала использует native video upload (`video.save`). Если конкретный token/API не позволяет video upload, применяется document fallback; результат не теряется.
 
-```text
-Подробно
-+0…+72 ч
-шаг 3 ч
-```
+### `/meteogram`
 
-Доступны `Подробно/Кратко`, `+24/+48/+72/+120` и шаг `3/6`.
+GFS/ECMWF/ICON/GEM и ансамбли, PNG/DOCX/PDF. Неизвестный upstream model cycle не выдумывается.
 
-Примеры:
+### `/route`
 
-```text
-/cloudgram Москва to=72 step=3 mode=pro
-/cloudgram 55.75 37.62 to=120 step=6 mode=simple
-```
+Одинаковый common PNG+CSV, run выбирается по max ETA lead.
 
-Общий service выбирает фактически опубликованный GFS cycle по максимальному требуемому lead. Результат одинаков с Telegram/MAX: run/cycle UTC, valid range, requested point, grid point, max hazard, missing fields и PNG. Гроза/опасность — модельная диагностика, не наблюдавшееся явление.
-
-## Saved recipes
+## 5. Settings / recipes
 
 ```env
 MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
 ```
 
-Для четырёх общих продуктов сохраняются точка и параметры. `run/cycle` исключены. Repeat использует новый подходящий GFS run. Cloudgram recipe:
+State изолирован по:
 
 ```text
-from / to / step / mode / point
+vk + user_id
 ```
 
-Recipes изолированы по `platform + user_id`.
+`/settings` управляет active/recent points и recipes. Route endpoints не заменяют active point. `run/cycle` в recipes не сохраняются.
 
-## Общие ресурсы
+## 6. Расписания
 
-VK использует тот же process-wide pool, что Telegram/MAX/web:
+`/schedule` поддерживает все семь продуктов:
+
+```text
+saved recipe → частота → local time → timezone → сохранить
+```
+
+Каждый automatic run использует свежие common services. До двух schedule на `vk + user_id`.
+
+Если VK gateway временно `degraded/off`, due VK schedule получает локальную ошибку и переносится на следующий срок. Scheduler/MAX/Telegram продолжают работать.
+
+## 7. Fault isolation
+
+```env
+VK_ENABLED=auto
+```
+
+Карантин только VK:
+
+```env
+VK_ENABLED=0
+```
+
+Telegram/MAX/web остаются доступны. `/health` показывает состояние платформ отдельно.
+
+## 8. Shared limits
 
 ```env
 MAX_CONCURRENT_GFS=2
 MAX_CONCURRENT_GEOCODE=2
 MAX_CONCURRENT_METEOGRAM=2
+MAX_CONCURRENT_SCHEDULED=1
 ```
 
-## Media
+Они суммарные для всего процесса.
 
-PNG отправляется как VK photo attachment. Файлы используют document upload. Common service ничего не знает о VK attachment ids.
-
-## Проверка после настройки
+## 9. Проверка
 
 ```bash
 curl -fsS http://127.0.0.1:8081/ready
@@ -228,29 +183,21 @@ sudo systemctl status gfs-profile-bot.service
 sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
 ```
 
-В VK проверить:
+Ручной smoke:
 
 ```text
 /start
 /profile Москва +24
 /aero Москва +24
-/windgram Москва to=120 step=6 param=wind
-/cloudgram Москва to=72 step=3 mode=pro
-geo/location
-callback
-pin/repeat
+/windgram Москва
+/cloudgram Москва
+/map Москва
+/meteogram Москва source=gfs days=5
+/route Москва -> Санкт-Петербург
+/settings
+/schedule
 /status
 /cancel
 ```
 
-## Следующий этап паритета
-
-```text
-/map
-→ /meteogram
-→ /route
-→ /settings
-→ /schedule
-```
-
-Новые продукты должны использовать общий service/result/progress, `RuntimeResources` и `UserRecipeStore`; VK-копии GFS/geocoder/product logic не допускаются.
+Все GFS-продукты должны быть помечены как модель, не наблюдение/радиозонд.

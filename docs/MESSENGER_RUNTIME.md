@@ -1,23 +1,30 @@
 # Multi-messenger runtime: Telegram + MAX + VK
 
-Общий runtime — штатный production entrypoint. Telegram, MAX и VK используют одно метеорологическое ядро и общие product services, но жизненный цикл каждой платформы изолирован: ошибка одной платформы не должна останавливать остальные или web/API.
+Общий runtime — штатный production entrypoint. Все семь product services, settings/recipes и schedules доступны при независимом lifecycle каждой платформы.
 
-Пошаговая регистрация MAX/VK: [`MESSENGER_REGISTRATION.md`](MESSENGER_REGISTRATION.md).
+См. также:
 
-## Один процесс, независимые платформы
+- [`MESSENGER_REGISTRATION.md`](MESSENGER_REGISTRATION.md) — подключение MAX/VK;
+- [`MESSENGER_PARITY.md`](MESSENGER_PARITY.md) — итоговая матрица;
+- [`MESSENGER_SCHEDULES.md`](MESSENGER_SCHEDULES.md) — automatic delivery.
+
+## Один процесс
 
 ```text
 systemd → messenger_launcher.py
                  │
                  ├─ Telegram polling ──┐
-                 ├─ MAX webhook ───────┼→ common services / RuntimeResources
+                 ├─ MAX webhook ───────┼→ common routers/services
                  ├─ VK webhook ────────┤
-                 └─ FastAPI web/API ───┘
+                 ├─ common scheduler ──┤
+                 └─ web/API ───────────┘
+                              ↓
+                       RuntimeResources
 ```
 
-Runtime остаётся single-process (`workers=1`), без Redis/Celery. Общие GFS/cache/resource gates process-local, а provider lifecycle — независимый.
+`workers=1`. Redis/Celery не нужны.
 
-## Переключатели платформ
+## Независимый lifecycle
 
 ```env
 TELEGRAM_ENABLED=auto
@@ -25,102 +32,75 @@ MAX_ENABLED=auto
 VK_ENABLED=auto
 ```
 
-Значения:
+```text
+auto  включить при наличии/валидности локальной конфигурации
+1     явно запросить; ошибка → degraded
+0     отключить только эту платформу
+```
+
+Статусы:
 
 ```text
-auto  включить платформу только если задан token
-1     платформа явно должна работать; ошибка конфигурации → degraded
-0     карантин платформы; её старые token/secret могут остаться в .env
+ready
+degraded
+off
 ```
 
-Пример: Telegram и MAX работают, а VK временно сломан:
+`GET /health` показывает их отдельно. Общий `status=degraded` — диагностика, а не остановка runtime.
 
-```env
-TELEGRAM_ENABLED=auto
-MAX_ENABLED=auto
-VK_ENABLED=0
-```
-
-Перезапуск не требует удалять `VK_*`. Telegram/MAX продолжают работать.
-
-## Состояния
-
-У каждой платформы независимое состояние:
+Пример:
 
 ```text
-ready       локальная конфигурация валидна, adapter/gateway запущен
-degraded    платформа запрошена, но её конфигурация/startup неисправны
-off         платформа отключена
+Telegram ready
+MAX      ready
+VK       degraded
 ```
 
-`GET /health` возвращает как совместимые booleans, так и подробный `platform_status`. Например:
-
-```json
-{
-  "status": "degraded",
-  "platforms": {"telegram": true, "max": true, "vk": false},
-  "platform_status": {
-    "telegram": {"state": "ready", "ready": true},
-    "max": {"state": "ready", "ready": true},
-    "vk": {"state": "degraded", "ready": false, "reason": "..."}
-  }
-}
-```
-
-Общий `status=degraded` является диагностикой, а не отказом runtime.
-
-## Readiness
-
-`GET /ready` проверяет готовность общей HTTP/runtime инфраструктуры. Он не становится `503` только потому, что один provider degraded.
-
-Поэтому сценарий:
+Результат:
 
 ```text
-Telegram = ready
-MAX      = ready
-VK       = degraded
+/ready            200
+Telegram           работает
+MAX                работает
+/webhooks/vk       локальный 503
+web/API             работает
+MAX schedules       работают
+VK schedules        получают локальный error и будущий next_run
 ```
 
-означает:
+## `/ready` и `/health`
+
+`/ready` относится к общей HTTP/runtime инфраструктуре и не требует здоровья всех провайдеров.
+
+`/health` показывает:
 
 ```text
-/ready → 200
-Telegram работает
-MAX работает
-/webhooks/vk → 503 только для VK
-/web и API работают
+platform_status
+products = profile,aero,windgram,cloudgram,map,meteogram,route
+features = saved_recipes,settings,schedules
+shared resource limits
+scheduler.last_error
 ```
 
-До запуска самого FastAPI lifespan `/ready` возвращает `503`.
+## Telegram isolation
 
-## Telegram fault isolation
+Ошибка `getMe/initialize/start_polling/Application.start` переводит только Telegram в `degraded`. Частично созданный application очищается, FastAPI/MAX/VK продолжают работу.
 
-Telegram больше не является hard dependency FastAPI startup. Ошибка `initialize/getMe/start_polling/Application.start`:
+## MAX/VK isolation
 
-```text
-→ логируется
-→ Telegram получает state=degraded
-→ частично созданный Telegram application очищается
-→ MAX/VK/web продолжают работать
-```
+`MessengerWebhookService.from_env()` создаёт gateway отдельно для каждой locally-ready платформы. Невалидный VK не препятствует MAX gateway и наоборот.
 
-Shutdown Telegram также не должен срывать общий shutdown.
+Webhook отключённой/невалидной платформы получает свой 503. Event-task exception не завершает process.
 
-## MAX/VK fault isolation
+## Config preflight
 
-`MessengerWebhookService.from_env()` создаёт gateway только для локально `ready` платформы. Невалидный VK не препятствует созданию MAX gateway и наоборот.
-
-Webhook сломанной/отключённой платформы получает свой `503`; соседние endpoints остаются доступны. Provider task exception логируется только для соответствующего event-task и не завершает процесс.
-
-## Конфигурационный preflight
+Диагностика:
 
 ```bash
 python messenger_config_check.py
 ```
 
-по умолчанию диагностический и best-effort: runtime host/port ошибки fatal, а platform errors показываются как `degraded`.
-
-Строгая проверка только выбранной платформы:
+Строго выбранный provider:
 
 ```bash
 python messenger_config_check.py --strict-telegram
@@ -128,48 +108,66 @@ python messenger_config_check.py --strict-max
 python messenger_config_check.py --strict-vk
 ```
 
-Это используется мастером настройки конкретного provider и не затрагивает соседей.
+Обычный deploy не должен падать из-за optional degraded provider.
 
-## Регистрация provider
-
-Обычный deploy выполняет:
+## Provider registration
 
 ```bash
 python register_messenger_webhooks.py
 ```
 
-MAX и VK обрабатываются независимо. Если, например, VK API недоступен, script сообщает `ERROR VK`, но не отменяет успешно зарегистрированный MAX и не делает общий deploy неуспешным.
-
-Строгая диагностика:
+MAX и VK регистрируются независимо. Строгая проверка:
 
 ```bash
-python register_messenger_webhooks.py --status --max
-python register_messenger_webhooks.py --status --vk
+python register_messenger_webhooks.py --max --status
+python register_messenger_webhooks.py --vk --status
 ```
 
-возвращает ненулевой код, если именно выбранная платформа не работает.
+`setup_messenger_bots.sh --max` не валидирует VK; `--vk` не валидирует MAX.
 
-`setup_messenger_bots.sh --max` подготавливает и проверяет только MAX; битые старые `VK_*` не читаются. Аналогично для `--vk`.
-
-## MAX transport
-
-Production endpoint:
+## Common services
 
 ```text
-POST /webhooks/max
+/profile     messenger/profile_service.py
+/aero        messenger/aero_service.py
+/windgram    messenger/windgram_service.py
+/cloudgram   messenger/cloudgram_service.py
+/map         messenger/map_service.py
+/meteogram   messenger/meteogram_service.py
+/route       messenger/route_service.py
 ```
 
-MAX Webhook должен иметь публичный HTTPS endpoint на 443. `X-Max-Bot-Api-Secret` проверяется до обработки, update дедуплицируется, HTTP 200 возвращается быстро, а GFS расчёт идёт отдельной asyncio task.
+Все они возвращают `CommonProductResult`. Platform gateway только отображает summary/attachments.
 
-## VK transport
+`run/cycle` не сохраняются в recipes/schedules. GFS run заново выбирается по максимальному требуемому lead.
 
-Production endpoint:
+## Settings
+
+MAX/VK common state:
+
+```env
+MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
+```
+
+Ключ `platform + user_id`. Здесь находятся locations, recipes и common schedules.
+
+`SettingsRecipeStore` зеркалит successful point-products в active/recent location. Route endpoints сохраняются только history и не активируются.
+
+## Scheduler
+
+`MessengerScheduler` — одна asyncio-задача этого процесса. Он использует immutable `ProductSnapshot` и `messenger/product_executor.py`, то есть не импортирует Telegram product runners.
 
 ```text
-POST /webhooks/vk
+due schedule
+→ platform gateway
+→ common product service
+→ CommonProductResult
+→ gateway media
 ```
 
-Поддержаны `confirmation`, `message_new`, `message_event`, group/secret validation, callback/location controls и media. Ошибка VK API влияет только на VK event/setup.
+Ошибка gateway относится только к соответствующему schedule/platform.
+
+Telegram сохраняет native scheduler UI/JSON storage для backward compatibility, но все product runners, включая route adapter, идут через common services.
 
 ## Shared RuntimeResources
 
@@ -177,31 +175,29 @@ POST /webhooks/vk
 MAX_CONCURRENT_GFS=2
 MAX_CONCURRENT_GEOCODE=2
 MAX_CONCURRENT_METEOGRAM=2
+MAX_CONCURRENT_SCHEDULED=1
 ```
 
-Один pool используется Telegram/MAX/VK/web. Изоляция platform lifecycle не означает отдельные тяжёлые квоты: серверные лимиты остаются общими.
+Один pool используется Telegram/MAX/VK/web/schedules. Fault isolation не означает отдельную квоту тяжёлых расчётов на каждую платформу.
 
-## Общие продукты
+## Production deploy
 
-На текущем этапе common services:
+Fresh install/deploy записывает systemd:
 
 ```text
-/profile
-/aero
-/windgram
-/cloudgram
+ExecStart=/opt/gfs_profile/.venv/bin/python /opt/gfs_profile/messenger_launcher.py
 ```
 
-Они используют одинаковые run selection, formatter/result contract и saved recipes. `run/cycle` в recipe не сохраняются.
-
-Следующие vertical slices:
+Порядок:
 
 ```text
-/map
-/meteogram
-/route
-/settings
-/schedule
+unit/runtime tests
+→ messenger config preflight
+→ geocoder preflight
+→ restart
+→ /ready
+→ Telegram command registration
+→ MAX/VK webhook registration best-effort
 ```
 
-Каждый из них должен наследовать этот fault-isolation contract: platform adapter может отказать, но common service и остальные adapters продолжают работать.
+State/cache/env сохраняются. Подробно: [`../DEPLOY.md`](../DEPLOY.md).

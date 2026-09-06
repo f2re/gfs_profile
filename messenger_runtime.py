@@ -11,15 +11,22 @@ from fastapi.responses import JSONResponse
 from telegram import Update
 
 import app as legacy_web_module
-from messenger.settings_router import SettingsMessengerRouter
+from messenger.schedule_router import ScheduleMessengerRouter
+from messenger.scheduler import MessengerScheduler, ScheduleExecutor
 from messenger.platform_config import PlatformStatus, platform_statuses
 from messenger.runtime_resources import RuntimeResources, get_runtime_resources
 from messenger.webhooks import MessengerWebhookService
 
 LOG = logging.getLogger(__name__)
 RESOURCES = get_runtime_resources()
-ROUTER = RESOURCES.configure_router(SettingsMessengerRouter.default())
+ROUTER = RESOURCES.configure_router(ScheduleMessengerRouter.default())
 SERVICE = MessengerWebhookService.from_env(router=ROUTER)
+SCHEDULER = MessengerScheduler(
+    store=ROUTER.schedule_store,
+    executor=ScheduleExecutor(RESOURCES),
+    gateways=lambda: {"max": SERVICE.max_gateway, "vk": SERVICE.vk_gateway},
+)
+ROUTER.schedule_executor = SCHEDULER.executor
 
 
 def configure_process_resources(resources: RuntimeResources = RESOURCES) -> None:
@@ -96,10 +103,12 @@ async def lifespan(app: FastAPI):
     app.state.platform_runtime["vk"] = _status_dict(SERVICE.platform_status["vk"])
     telegram_application = await _start_telegram(app, configs["telegram"])
     app.state.telegram_application = telegram_application
+    SCHEDULER.start()
     app.state.runtime_ready = True
     try: yield
     finally:
         app.state.runtime_ready = False
+        await SCHEDULER.shutdown()
         await SERVICE.tasks.shutdown()
         try: await _stop_telegram(telegram_application)
         except Exception: LOG.exception("Telegram shutdown failed; runtime shutdown continues")
@@ -124,7 +133,8 @@ async def health() -> dict[str, object]:
         "platforms": {name: item.get("state") == "ready" for name, item in states.items()},
         "platform_status": states,
         "products": ["profile", "aero", "windgram", "cloudgram", "map", "meteogram", "route"],
-        "features": ["saved_recipes", "settings"],
+        "features": ["saved_recipes", "settings", "schedules"],
+        "scheduler": {"last_error": SCHEDULER.last_error},
         "resources": RESOURCES.snapshot(),
     }
 

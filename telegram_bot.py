@@ -36,6 +36,7 @@ def _clear_pending(context):
     context.user_data.pop("meteogram_wizard", None)
     context.user_data.pop("schedule_wizard", None)
     context.user_data.pop("schedule_profile_setup", None)
+    context.user_data.pop("schedule_route_setup", None)
 
 
 _concise_start_product_wizard = _start_product_wizard
@@ -67,6 +68,11 @@ import telegram_meteogram_common  # noqa: E402
 import telegram_route_common  # noqa: E402
 telegram_meteogram_common.install()
 telegram_route_common.install()
+
+# Fill the remaining native Telegram schedule gap without duplicating route
+# meteorology; the adapter delegates execution to the common route runner.
+import telegram_schedule_route_compat  # noqa: E402
+telegram_schedule_route_compat.install()
 
 import telegram_personal_ux  # noqa: E402
 telegram_personal_ux.install(globals())
@@ -100,6 +106,7 @@ def build_application():
     register_meteogram_handlers(application)
     telegram_schedule_ux.register_input_guards(application, globals())
     register_schedule_handlers(application, globals())
+    telegram_schedule_route_compat.register(application)
     register_route_handlers(application, gfs_semaphore=GFS_SEMAPHORE, geocode_semaphore=GEOCODE_SEMAPHORE)
     aero_single_mode.configure_application(application)
     return application
