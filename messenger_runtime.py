@@ -11,21 +11,20 @@ from fastapi.responses import JSONResponse
 from telegram import Update
 
 import app as legacy_web_module
-from messenger.meteogram_router import MeteogramMessengerRouter
+from messenger.route_router import RouteMessengerRouter
 from messenger.platform_config import PlatformStatus, platform_statuses
 from messenger.runtime_resources import RuntimeResources, get_runtime_resources
 from messenger.webhooks import MessengerWebhookService
 
 LOG = logging.getLogger(__name__)
 RESOURCES = get_runtime_resources()
-ROUTER = RESOURCES.configure_router(MeteogramMessengerRouter.default())
+ROUTER = RESOURCES.configure_router(RouteMessengerRouter.default())
 SERVICE = MessengerWebhookService.from_env(router=ROUTER)
 
 
 def configure_process_resources(resources: RuntimeResources = RESOURCES) -> None:
     import telegram_bot
     import telegram_meteogram
-
     telegram_bot.GFS_SEMAPHORE = resources.gfs_semaphore
     telegram_bot.GEOCODE_SEMAPHORE = resources.geocode_semaphore
     telegram_bot.MAX_CONCURRENT_GFS = resources.gfs_limit
@@ -40,46 +39,32 @@ configure_process_resources()
 legacy_web_app = legacy_web_module.app
 
 
-def _status_dict(status: PlatformStatus) -> dict[str, object]:
-    return status.as_dict()
-
-
-def _runtime_degraded(name: str, reason: str) -> dict[str, object]:
-    return {"requested": True, "ready": False, "state": "degraded", "reason": reason}
+def _status_dict(status: PlatformStatus) -> dict[str, object]: return status.as_dict()
+def _runtime_degraded(name: str, reason: str) -> dict[str, object]: return {"requested": True, "ready": False, "state": "degraded", "reason": reason}
 
 
 async def _cleanup_partial_telegram(application: Any | None) -> None:
-    if application is None:
-        return
+    if application is None: return
     updater = getattr(application, "updater", None)
     try:
-        if updater is not None and bool(getattr(updater, "running", False)):
-            await updater.stop()
-    except Exception:
-        LOG.exception("Telegram updater cleanup failed")
+        if updater is not None and bool(getattr(updater, "running", False)): await updater.stop()
+    except Exception: LOG.exception("Telegram updater cleanup failed")
     try:
-        if bool(getattr(application, "running", False)):
-            await application.stop()
-    except Exception:
-        LOG.exception("Telegram application cleanup failed")
-    try:
-        await application.shutdown()
-    except Exception:
-        LOG.exception("Telegram shutdown after failed startup failed")
+        if bool(getattr(application, "running", False)): await application.stop()
+    except Exception: LOG.exception("Telegram application cleanup failed")
+    try: await application.shutdown()
+    except Exception: LOG.exception("Telegram shutdown after failed startup failed")
 
 
 async def _start_telegram(app: FastAPI, config: PlatformStatus) -> Any | None:
-    if not config.ready:
-        return None
+    if not config.ready: return None
     import telegram_bot
     application = None
     try:
         application = telegram_bot.build_application()
         await application.initialize()
-        if application.post_init:
-            await application.post_init(application)
-        if application.updater is None:
-            raise RuntimeError("Telegram updater is unavailable")
+        if application.post_init: await application.post_init(application)
+        if application.updater is None: raise RuntimeError("Telegram updater is unavailable")
         await application.updater.start_polling(allowed_updates=Update.ALL_TYPES)
         await application.start()
         app.state.platform_runtime["telegram"] = {"requested": True, "ready": True, "state": "ready", "reason": ""}
@@ -92,18 +77,14 @@ async def _start_telegram(app: FastAPI, config: PlatformStatus) -> Any | None:
 
 
 async def _stop_telegram(application: Any | None) -> None:
-    if application is None:
-        return
+    if application is None: return
     updater = getattr(application, "updater", None)
-    if updater is not None and bool(getattr(updater, "running", False)):
-        await updater.stop()
+    if updater is not None and bool(getattr(updater, "running", False)): await updater.stop()
     if bool(getattr(application, "running", False)):
         await application.stop()
-        if application.post_stop:
-            await application.post_stop(application)
+        if application.post_stop: await application.post_stop(application)
     await application.shutdown()
-    if application.post_shutdown:
-        await application.post_shutdown(application)
+    if application.post_shutdown: await application.post_shutdown(application)
 
 
 @asynccontextmanager
@@ -116,15 +97,12 @@ async def lifespan(app: FastAPI):
     telegram_application = await _start_telegram(app, configs["telegram"])
     app.state.telegram_application = telegram_application
     app.state.runtime_ready = True
-    try:
-        yield
+    try: yield
     finally:
         app.state.runtime_ready = False
         await SERVICE.tasks.shutdown()
-        try:
-            await _stop_telegram(telegram_application)
-        except Exception:
-            LOG.exception("Telegram shutdown failed; runtime shutdown continues")
+        try: await _stop_telegram(telegram_application)
+        except Exception: LOG.exception("Telegram shutdown failed; runtime shutdown continues")
 
 
 app = FastAPI(title="GFS Profile Messenger Runtime", lifespan=lifespan)
@@ -132,8 +110,7 @@ app = FastAPI(title="GFS Profile Messenger Runtime", lifespan=lifespan)
 
 def _current_platform_runtime() -> dict[str, dict[str, object]]:
     value = getattr(app.state, "platform_runtime", None)
-    if isinstance(value, dict):
-        return value
+    if isinstance(value, dict): return value
     return {name: status.as_dict() for name, status in platform_statuses().items()}
 
 
@@ -146,7 +123,7 @@ async def health() -> dict[str, object]:
         "runtime": "multi-messenger",
         "platforms": {name: item.get("state") == "ready" for name, item in states.items()},
         "platform_status": states,
-        "products": ["profile", "aero", "windgram", "cloudgram", "map", "meteogram"],
+        "products": ["profile", "aero", "windgram", "cloudgram", "map", "meteogram", "route"],
         "resources": RESOURCES.snapshot(),
     }
 

@@ -61,10 +61,12 @@ import telegram_schedule_ux  # noqa: E402
 
 telegram_schedule_ux.install(globals())
 
-# Common runner first; Telegram personal UX wraps this final runner and therefore
-# keeps existing saved defaults/quick actions while sharing product logic.
+# Install messenger-neutral runners before personal wrappers. Personal UX then
+# decorates the final common runner and keeps existing Telegram preferences.
 import telegram_meteogram_common  # noqa: E402
+import telegram_route_common  # noqa: E402
 telegram_meteogram_common.install()
+telegram_route_common.install()
 
 import telegram_personal_ux  # noqa: E402
 telegram_personal_ux.install(globals())
