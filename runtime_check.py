@@ -25,10 +25,11 @@ OPTIONAL_RUNTIME_MODULES = (
     "messenger.state", "messenger.platform_config", "messenger.runtime_resources", "messenger.profile_service", "messenger.aero_service",
     "messenger.windgram_service", "messenger.cloudgram_service", "messenger.map_service", "messenger.meteogram_service", "messenger.route_service",
     "messenger.router", "messenger.personal_router", "messenger.aero_router", "messenger.windgram_router", "messenger.cloudgram_router",
-    "messenger.map_router", "messenger.meteogram_router", "messenger.route_router", "messenger.user_recipes", "messenger.max.client",
-    "messenger.max.adapter", "messenger.max.gateway", "messenger.vk.client", "messenger.vk.adapter", "messenger.vk.gateway",
-    "messenger.webhooks", "telegram_profile_common", "telegram_saved_recipes", "telegram_bot", "messenger_launcher",
-    "messenger_runtime", "messenger_config_check", "prepare_messenger_config", "register_messenger_webhooks",
+    "messenger.map_router", "messenger.meteogram_router", "messenger.route_router", "messenger.settings_router",
+    "messenger.user_recipes", "messenger.user_locations", "messenger.max.client", "messenger.max.adapter", "messenger.max.gateway",
+    "messenger.vk.client", "messenger.vk.adapter", "messenger.vk.gateway", "messenger.webhooks", "telegram_profile_common",
+    "telegram_saved_recipes", "telegram_bot", "messenger_launcher", "messenger_runtime", "messenger_config_check",
+    "prepare_messenger_config", "register_messenger_webhooks",
 )
 
 def check_modules(modules: tuple[str, ...]) -> list[str]:
@@ -44,7 +45,7 @@ def main() -> int:
     import matplotlib; matplotlib.use("Agg", force=True)
     errors=check_modules(OPTIONAL_RUNTIME_MODULES)
     if errors: _print_errors(errors); return 1
-    print("Runtime check OK: GFS/GRIB, DaData, shared runtime resources, independent platform lifecycle, common profile/aero/windgram/cloudgram/map/meteogram/route services, messenger registration setup, schedules and Telegram/MAX/VK gateways import successfully")
+    print("Runtime check OK: GFS/GRIB, DaData, shared runtime resources, independent platform lifecycle, common profile/aero/windgram/cloudgram/map/meteogram/route services, persistent common settings, messenger registration setup, schedules and Telegram/MAX/VK gateways import successfully")
     return 0
 
 def _print_errors(errors):
