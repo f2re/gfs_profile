@@ -1,6 +1,8 @@
 # 🤖 Telegram-бот GFS
 
-Telegram остаётся самым полным UI проекта, но метеорологическая логика постепенно вынесена в messenger-neutral services. `/profile`, `/aero`, `/windgram` и `/cloudgram` уже используют те же common services, что MAX/VK; Telegram отвечает за wizard, native controls, status и отправку media.
+Telegram сохраняет native wizard/UI, но все семь основных продуктов уже используют messenger-neutral services — те же расчёты и результаты, что MAX/VK.
+
+Итоговый паритет: [`docs/MESSENGER_PARITY.md`](docs/MESSENGER_PARITY.md).
 
 ## Команды
 
@@ -14,7 +16,7 @@ Telegram остаётся самым полным UI проекта, но мет
 /route       профиль по маршруту
 /aero        Skew-T log-P + годограф
 /windgram    срок × уровень
-/cloudgram   облака, осадки, видимость, гроза
+/cloudgram   облака, осадки, видимость, риски
 /meteogram   модель/ансамбль, PNG/DOCX/PDF
 /map         карта, серия, анимация
 /schedule    автоматическая отправка
@@ -24,9 +26,23 @@ Telegram остаётся самым полным UI проекта, но мет
 
 `/skewt` удалена: `/aero` всегда означает один согласованный Skew-T log-P.
 
-## Главное меню и персональное состояние
+## Common product layer
 
-`/start` показывает стабильные inline-продукты, основную точку и до двух quick recipes. Геолокационная reply-кнопка показывается только на стадии выбора точки.
+```text
+/profile   → messenger/profile_service.py
+/aero      → messenger/aero_service.py
+/windgram  → messenger/windgram_service.py
+/cloudgram → messenger/cloudgram_service.py
+/map       → messenger/map_service.py
+/meteogram → messenger/meteogram_service.py
+/route     → messenger/route_service.py
+```
+
+Telegram handlers отвечают за native controls/status/media. GFS calculations, actual run selection и result data не реализуются второй раз.
+
+## Персональное состояние
+
+`/start` показывает стабильное меню, основную точку и до двух quick recipes.
 
 Приоритет:
 
@@ -37,10 +53,32 @@ Telegram остаётся самым полным UI проекта, но мет
 → default
 ```
 
-Не сохраняются `run/cycle`, GRIB file, geocoder candidates, message/progress ids и callback state. Repeat заново выбирает актуальный опубликованный cycle.
+Не сохраняются:
+
+```text
+run/cycle
+GRIB file
+geocoder candidates
+message/progress ids
+callback state
+```
 
 ```env
 TELEGRAM_PREFERENCES_DB=.cache_gfs/telegram_preferences.sqlite3
+```
+
+Route endpoints не заменяют active point.
+
+## Defaults
+
+```text
+/profile     +24 ч
+/aero        +24 ч, Skew-T
+/windgram    wind, +0…+120, step 6, top 500 hPa
+/cloudgram   Подробно, +0…+72, step 3
+/map         MP4 +0…+48, step 3, radius 100, places
+/meteogram   GFS, 5 суток, PNG
+/route       +24, 300 км/ч, simple, grid 50 км
 ```
 
 ## `/profile`
@@ -50,86 +88,54 @@ TELEGRAM_PREFERENCES_DB=.cache_gfs/telegram_preferences.sqlite3
 /profile 59.939 30.316 run=20260714/00 +12
 ```
 
-Используется общий `messenger/profile_service.py`. Сводка показывает T/Td в °C, RH %, Zg MSL и ветер «откуда» в м/с. Telegram CSV:
+CSV:
 
 ```text
 p_hPa,Zg_m_MSL,T_C,Td_C,RH_pct,wind_from_deg,wind_speed_ms
 ```
 
+T/Td — °C, Zg — MSL, ветер — направление «откуда» и м/с.
+
 ## `/aero`
 
-```text
-/aero Москва +24
-```
-
-Общий `messenger/aero_service.py` выбирает actual run, формирует progress/result. PNG содержит Skew-T, T/Td, parcel, ice saturation, CAPE/CIN, LCL, изотермы, облачные/icing/CAT model proxies, ветер и годограф.
+Один Skew-T log-P + годограф. Включает CAPE/CIN, LCL, изотермы, облачные/icing/CAT model proxies. Фактический GFS run и valid UTC приходят из common service.
 
 ## `/windgram`
-
-Default:
-
-```text
-ветер
-+0…+120 ч
-шаг 6 ч
-до 500 гПа
-```
 
 ```text
 /windgram Москва to=240 step=12 param=temp
 ```
 
-Общий `messenger/windgram_service.py` проверяет публикацию максимального требуемого lead. Доступны wind/temp/RH, горизонты 120/240/384 и шаг 3/6/12.
+Wind/temp/RH, горизонты до +384. Cycle проверяется по максимальному требуемому lead.
 
 ## `/cloudgram`
-
-Default:
-
-```text
-Подробно
-+0…+72 ч
-шаг 3 ч
-```
 
 ```text
 /cloudgram Москва to=72 step=3 mode=pro
 /cloudgram Москва to=120 step=6 mode=simple
 ```
 
-Telegram вызывает общий `messenger/cloudgram_service.py`. Режимы в UI: `Подробно` и `Кратко`. Common result показывает actual run/cycle UTC, valid range, requested point, GFS grid, max model hazard, missing fields и PNG.
-
-Гроза/опасность всегда подписываются как модельная диагностика, не наблюдавшееся явление.
-
-Подробно: `docs/MESSENGER_CLOUDGRAM_SERVICE.md`.
+UI: `Подробно/Кратко`. Hazard/thunder — модельная диагностика, не наблюдавшееся явление.
 
 ## `/map`
 
-Первый запуск:
-
 ```text
-Анимация
-+0…+48 ч
-шаг 3 ч
-17 кадров
-радиус 100 км
+/map Москва
+/map Москва +24
+/map Москва from=0 to=96 step=6 mode=gif
 ```
 
-`/map Москва +24` — одна карта. Для длинных периодов шаг автоматически приводится к лимиту кадров. Настройки animation/single/series сохраняются независимо.
+Default animation: +0…+48 ч, step 3, 17 кадров, radius 100 км. Для длинных диапазонов step автоматически приводится к лимиту кадров. Telegram отправляет silent H.264/MP4 с fallback при необходимости.
 
 ## `/meteogram`
 
 Wizard:
 
 ```text
-точка
-→ одна модель / ансамбль
-→ модель
-→ период
-→ PNG / DOCX / PDF
-→ подтверждение
+точка → deterministic/ensemble → модель → период → PNG/DOCX/PDF → подтверждение
 ```
 
-Доступны GFS, ECMWF IFS/AIFS, ICON, GEM и их поддерживаемые ensemble systems. Разные ансамбли не смешиваются. Временной GFS surface ряд использует Open-Meteo GFS Seamless; вертикальные `/profile`, `/aero`, `/windgram`, `/cloudgram` продолжают работать с GFS 0.25 через NOMADS/GRIB2.
+Доступны GFS, ECMWF IFS/AIFS, ICON, GEM, GEFS, ECMWF ENS/AIFS ENS, ICON-EPS, GEPS. Разные ансамбли не смешиваются. Если upstream не сообщает model cycle, бот не выдумывает его.
 
 ## `/route`
 
@@ -137,37 +143,62 @@ Wizard:
 /route Москва -> Санкт-Петербург +24 speed=300 step=50 mode=pro
 ```
 
-Сетка 25/50/100 км. Route endpoints не заменяют active point пользователя.
-
-## Progress
-
-Долгая операция редактирует одно status message. Пользователь видит точку, период/lead и понятный этап без внутренних названий библиотек.
-
-Common products используют одинаковый progress contract; Telegram только отображает его.
+Run выбирается по max ETA lead. Result — PNG+CSV. `simple/pro` используют одинаковые данные/risk contract.
 
 ## Recipes
 
-После успешного расчёта сохраняется точный recipe с point+params. Result actions адресуют конкретный `recipe_id`, поэтому несколько вариантов одного продукта не конфликтуют.
+Successful result создаёт recipe `point + params`; `run/cycle` исключены. Действия адресуют конкретный recipe id, поэтому несколько вариантов одной карты/продукта не конфликтуют.
 
-`/settings → Сохранённые сценарии` позволяет повторить, изменить, pin/unpin, поставить в расписание или удалить рецепт.
+`/settings` позволяет выбирать active point, повторять/закреплять/удалять recipes и очищать персональные данные.
 
 ## Расписания
 
-Telegram scheduler хранит immutable product snapshot в:
+Telegram сохраняет native scheduler и storage:
 
-```text
-.cache_gfs/telegram_schedules.json
+```env
+TELEGRAM_SCHEDULE_FILE=.cache_gfs/telegram_schedules.json
 ```
 
-Scheduled run не меняет active point/preferences и всегда использует актуальные model data.
+Доступны **все семь продуктов**, включая `/route`.
 
-## Установка/deploy
+Route добавлен adapter-ом `telegram_schedule_route_compat.py`: native route wizard формирует immutable schedule spec, а automatic execution вызывает common route runner. Метеорологическая логика не копируется.
 
-Штатный systemd entrypoint уже multi-messenger:
+Scheduled snapshot не хранит `run/cycle`, не обновляет active point/preferences и при каждом запуске использует актуальные model data.
+
+Подробно: [`docs/MESSENGER_SCHEDULES.md`](docs/MESSENGER_SCHEDULES.md).
+
+## Platform isolation
+
+```env
+TELEGRAM_ENABLED=auto
+```
+
+Если Telegram polling/token сломан, FastAPI runtime остаётся доступен MAX/VK/web. `/health` показывает Telegram как `degraded`; соседние платформы продолжают работу.
+
+Аварийно можно отключить только Telegram:
+
+```env
+TELEGRAM_ENABLED=0
+```
+
+## Production runtime
+
+Systemd запускает:
 
 ```text
 messenger_launcher.py
 ```
+
+Общие process-wide limits:
+
+```env
+MAX_CONCURRENT_GFS=2
+MAX_CONCURRENT_GEOCODE=2
+MAX_CONCURRENT_METEOGRAM=2
+MAX_CONCURRENT_SCHEDULED=1
+```
+
+## Deploy
 
 ```bash
 git checkout telegram-bot
@@ -177,15 +208,8 @@ python runtime_check.py
 sudo bash deploy_telegram_bot.sh --yes
 ```
 
-MAX/VK подключаются отдельно после получения platform credentials:
-
-```bash
-sudo bash setup_messenger_bots.sh --max
-sudo bash setup_messenger_bots.sh --vk
-```
-
-Пошагово: `docs/MESSENGER_REGISTRATION.md`.
+MAX/VK регистрация: [`docs/MESSENGER_REGISTRATION.md`](docs/MESSENGER_REGISTRATION.md).
 
 ## Важно
 
-Все данные — модельные. GFS не радиозонд и не наблюдение. Aviation hazards/icing/CAT/cloud/thunder layers являются модельной диагностикой и не заменяют METAR/TAF/SIGMET/GAMET/NOTAM и оперативное решение.
+Все данные модельные. GFS — не наблюдение и не радиозонд. Icing/CAT/cloud/thunder/hazard layers — модельная диагностика и не заменяют официальные METAR/TAF/SIGMET/GAMET/NOTAM и эксплуатационное решение.
