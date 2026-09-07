@@ -12,14 +12,14 @@ from messenger.runtime_resources import RuntimeResources
 
 class RuntimeResourcesTests(unittest.IsolatedAsyncioTestCase):
     async def test_async_gfs_gate_is_shared_between_routers(self) -> None:
-        resources = RuntimeResources.from_limits(gfs=1, geocode=2, meteogram=2)
+        resources = RuntimeResources.from_limits(gfs=1, geocode=2, meteogram=2, weathernext3=2)
         deps1 = RouterDependencies(geocode=lambda query, limit: [])
         deps2 = RouterDependencies(geocode=lambda query, limit: [])
         router1 = resources.configure_router(MessengerRouter(deps1))
         router2 = resources.configure_router(MessengerRouter(deps2))
         self.assertIs(router1.gfs_semaphore, router2.gfs_semaphore)
         self.assertIs(router1.runtime_resources, resources)
-        self.assertEqual(resources.snapshot(), {"gfs": 1, "geocode": 2, "meteogram": 2})
+        self.assertEqual(resources.snapshot(), {"gfs": 1, "geocode": 2, "meteogram": 2, "weathernext3": 2})
 
         lock = threading.Lock()
         active = 0
@@ -68,6 +68,22 @@ class RuntimeResourcesTests(unittest.IsolatedAsyncioTestCase):
         async def work() -> None:
             nonlocal active, maximum
             async with resources.meteogram_semaphore:
+                active += 1
+                maximum = max(maximum, active)
+                await asyncio.sleep(0.03)
+                active -= 1
+
+        await asyncio.gather(work(), work())
+        self.assertEqual(maximum, 1)
+
+    async def test_weathernext3_gate_has_its_own_limit(self) -> None:
+        resources = RuntimeResources.from_limits(gfs=3, geocode=2, meteogram=2, weathernext3=1)
+        active = 0
+        maximum = 0
+
+        async def work() -> None:
+            nonlocal active, maximum
+            async with resources.weathernext3_semaphore:
                 active += 1
                 maximum = max(maximum, active)
                 await asyncio.sleep(0.03)

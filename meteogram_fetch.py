@@ -43,6 +43,10 @@ def fetch_meteogram(
 ) -> MeteogramSeries:
     source = source_for_id(source_id)
     validate_days(source, days)
+    if source.source_id == "weathernext3":
+        from weathernext3_meteogram import fetch_weathernext3_meteogram
+        return fetch_weathernext3_meteogram(point_label, lat, lon, days, progress)
+
     params = {
         "latitude": round(float(lat), 5),
         "longitude": round(float(lon), 5),

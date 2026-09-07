@@ -37,6 +37,7 @@ def _clear_pending(context):
     context.user_data.pop("schedule_wizard", None)
     context.user_data.pop("schedule_profile_setup", None)
     context.user_data.pop("schedule_route_setup", None)
+    context.user_data.pop("weathernext3_wizard", None)
 
 
 _concise_start_product_wizard = _start_product_wizard
@@ -77,6 +78,9 @@ telegram_schedule_route_compat.install()
 import telegram_personal_ux  # noqa: E402
 telegram_personal_ux.install(globals())
 
+import telegram_weathernext3  # noqa: E402
+telegram_weathernext3.install()
+
 import telegram_saved_recipes  # noqa: E402
 telegram_saved_recipes.install(globals())
 
@@ -103,6 +107,7 @@ def build_application():
     telegram_saved_recipes.register(application, globals())
     telegram_personal_ux.register(application, globals())
     telegram_concise_ux.register(application, globals())
+    telegram_weathernext3.register(application)
     register_meteogram_handlers(application)
     telegram_schedule_ux.register_input_guards(application, globals())
     register_schedule_handlers(application, globals())

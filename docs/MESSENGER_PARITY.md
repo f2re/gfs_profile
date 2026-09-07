@@ -1,6 +1,6 @@
 # Функциональный паритет Telegram / MAX / VK
 
-Статус документа: production architecture после переноса всех основных продуктов в messenger-neutral services.
+Статус документа: production architecture после переноса основных продуктов в messenger-neutral services и добавления интерактивного WeatherNext 3.
 
 ## Принцип
 
@@ -16,7 +16,7 @@ CommonProductResult
 platform-native renderer/gateway
 ```
 
-Метеорологические расчёты, выбор GFS run, geocoder contracts, saved recipes и schedule snapshots не должны копироваться по платформам.
+Метеорологические расчёты, выбор GFS run, WeatherNext 3 BigQuery queries/run selection, geocoder contracts, saved recipes и schedule snapshots не копируются по платформам.
 
 ## Матрица
 
@@ -34,38 +34,23 @@ platform-native renderer/gateway
 | `/meteogram` model/ensemble | ✅ | ✅ | ✅ |
 | meteogram PNG/DOCX/PDF | ✅ | ✅ | ✅ |
 | `/route` PNG/CSV | ✅ | ✅ | ✅ |
-| saved recipes / repeat / pin | ✅ | ✅ | ✅ |
+| `/wn3` point forecast | ✅ | ✅ | ✅ |
+| `/wn3` ensemble meteogram | ✅ | ✅ | ✅ |
+| `/wn3` cloud/layer maps | ✅ | ✅ | ✅ |
+| `/wn3` native/IMERG/experimental precipitation maps | ✅ | ✅ | ✅ |
+| `/wn3` single/series/animation | ✅ | ✅ | ✅ |
+| saved recipes / repeat / pin для 7 исходных продуктов | ✅ | ✅ | ✅ |
+| WN3 saved recipes / schedules | ⏳ | ⏳ | ⏳ |
 | `/settings` | ✅ | ✅ | ✅ |
 | active/recent point | ✅ | ✅ | ✅ |
-| `/schedule` | ✅ | ✅ | ✅ |
+| `/schedule` для 7 исходных продуктов | ✅ | ✅ | ✅ |
 | route schedules | ✅ | ✅ | ✅ |
 | platform fault isolation | ✅ | ✅ | ✅ |
 | shared server resource limits | ✅ | ✅ | ✅ |
+| отдельный WN3 BigQuery limit | ✅ | ✅ | ✅ |
 | production install/deploy | ✅ | ✅ | ✅ |
 
-Telegram сохраняет native handlers и совместимые storage/UI там, где это необходимо, но product result строится тем же common service. MAX/VK работают через общий webhook/router runtime.
-
-## Независимость платформ
-
-У каждой платформы есть переключатель:
-
-```env
-TELEGRAM_ENABLED=auto
-MAX_ENABLED=auto
-VK_ENABLED=auto
-```
-
-Значения:
-
-```text
-auto  включить только при наличии token/полной локальной конфигурации
-1     явно запросить платформу
-0     выключить/карантинировать только эту платформу
-```
-
-Runtime health показывает `ready / degraded / off` отдельно. Отказ Telegram polling не останавливает MAX/VK/web. Ошибка или отсутствие VK Callback API не блокирует Telegram/MAX. Ошибка MAX subscription не блокирует VK/Telegram.
-
-`/ready` относится к shared runtime infrastructure, а не требует, чтобы все три провайдера были healthy.
+`⏳` означает одинаково задокументированное ограничение всех платформ, а не Telegram-only/MAX-only реализацию.
 
 ## Общие продукты
 
@@ -75,43 +60,13 @@ Runtime health показывает `ready / degraded / off` отдельно. �
 
 ### Метеограмма
 
-`meteogram` использует общий model/ensemble service и одинаковые PNG/DOCX/PDF. Поставщик Open-Meteo не всегда сообщает исходный model cycle; в этом случае cycle не выдумывается.
+`meteogram` использует общий model/ensemble service. Для Open-Meteo upstream cycle не выдумывается. WeatherNext 3 также доступен как ensemble source и передаёт фактический `init_time`.
 
-## Карта
+### WeatherNext 3
 
-Первый default:
+`/wn3` использует один `weathernext3_provider.py` и `messenger/weathernext3_service.py` для всех платформ. BigQuery surface statistics дают point forecast, ансамблевую метеограмму, total/low/mid/high cloud maps и три precipitation heads. Карты используют тот же локальный Natural Earth basemap и MP4/GIF media contract, но не GFS-специфичные meteorological layers.
 
-```text
-Анимация +0…+48 ч
-step 3 ч
-17 кадров
-radius 100 км
-basemap places
-```
-
-Telegram/MAX отправляют MP4 native video/animation. VK использует native video upload; если конкретный API/token не поддерживает video upload, применяется document fallback без потери результата.
-
-## Состояние пользователя
-
-MAX/VK:
-
-```env
-MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
-```
-
-Ключ:
-
-```text
-platform + user_id
-```
-
-В этом SQLite живут locations, recipes и common schedules. Telegram сохраняет совместимый personal storage, но использует те же common product services.
-
-Route endpoints не заменяют active point.
-
-## Расписания
-
-Все семь продуктов доступны для автоматической отправки. Snapshot не содержит `run/cycle`; каждый запуск берёт свежие данные. Scheduler fault-isolated по gateway платформы.
+BigQuery не содержит WN3 pressure-level fields; поэтому `/profile`/`/aero` не маркируются как WN3 и остаются GFS до отдельного GCS/Zarr provider.
 
 ## Shared capacity
 
@@ -119,34 +74,12 @@ Route endpoints не заменяют active point.
 MAX_CONCURRENT_GFS=2
 MAX_CONCURRENT_GEOCODE=2
 MAX_CONCURRENT_METEOGRAM=2
+MAX_CONCURRENT_WEATHERNEXT3=2
 MAX_CONCURRENT_SCHEDULED=1
 ```
 
-Лимиты суммарные на один server process, а не отдельные для каждого мессенджера.
-
-## Production setup
-
-Systemd запускает:
-
-```text
-messenger_launcher.py
-```
-
-При normal production mode он поднимает Telegram polling + FastAPI MAX/VK webhook + web/API в одном worker.
-
-Подключение MAX/VK: [`MESSENGER_REGISTRATION.md`](MESSENGER_REGISTRATION.md).
-
-Deploy сначала проверяет runtime/env, затем restart, `/ready`, и только после этого выполняет platform registration best-effort. Неработающая optional platform не должна превращать успешный deploy здоровых платформ в outage.
+Лимиты суммарные на один server process. BigQuery/render WN3 не занимает GFS gate.
 
 ## Definition of Done платформенной функции
 
-Функция считается паритетной, если:
-
-1. использует один common service/use-case;
-2. имеет одинаковые defaults и параметры;
-3. возвращает одинаковую meteorological summary/files;
-4. одинаково маркирует model/source/run;
-5. поддерживает recipe/repeat без stale run;
-6. имеет native controls/media platform renderer;
-7. ошибки одной платформы не влияют на соседние;
-8. есть cross-platform contract tests.
+Функция считается паритетной, если использует один common service/use-case, одинаковые defaults/параметры/result metadata, честно показывает model/source/run, имеет native controls/media и cross-platform contract tests. Ошибка одной платформы не должна влиять на соседние.

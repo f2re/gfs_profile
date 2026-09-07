@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 from telegram import Update
 
 import app as legacy_web_module
-from messenger.schedule_router import ScheduleMessengerRouter
+from messenger.weathernext3_router import WeatherNext3MessengerRouter
 from messenger.scheduler import MessengerScheduler, ScheduleExecutor
 from messenger.platform_config import PlatformStatus, platform_statuses
 from messenger.runtime_resources import RuntimeResources, get_runtime_resources
@@ -19,7 +19,7 @@ from messenger.webhooks import MessengerWebhookService
 
 LOG = logging.getLogger(__name__)
 RESOURCES = get_runtime_resources()
-ROUTER = RESOURCES.configure_router(ScheduleMessengerRouter.default())
+ROUTER = RESOURCES.configure_router(WeatherNext3MessengerRouter.default())
 SERVICE = MessengerWebhookService.from_env(router=ROUTER)
 SCHEDULER = MessengerScheduler(
     store=ROUTER.schedule_store,
@@ -32,12 +32,15 @@ ROUTER.schedule_executor = SCHEDULER.executor
 def configure_process_resources(resources: RuntimeResources = RESOURCES) -> None:
     import telegram_bot
     import telegram_meteogram
+    import telegram_weathernext3
     telegram_bot.GFS_SEMAPHORE = resources.gfs_semaphore
     telegram_bot.GEOCODE_SEMAPHORE = resources.geocode_semaphore
     telegram_bot.MAX_CONCURRENT_GFS = resources.gfs_limit
     telegram_bot.MAX_CONCURRENT_GEOCODE = resources.geocode_limit
     telegram_meteogram.METEOGRAM_SEMAPHORE = resources.meteogram_semaphore
     telegram_meteogram.MAX_CONCURRENT_METEOGRAM = resources.meteogram_limit
+    telegram_weathernext3.WN3_SEMAPHORE = resources.weathernext3_semaphore
+    telegram_weathernext3.WN3_MAX_CONCURRENT = resources.weathernext3_limit
     telegram_meteogram.search_location_candidates = resources.wrap_blocking_geocode(telegram_meteogram.search_location_candidates)
     legacy_web_module.build_profile = resources.wrap_blocking_gfs(legacy_web_module.build_profile)
 
@@ -132,7 +135,7 @@ async def health() -> dict[str, object]:
         "runtime": "multi-messenger",
         "platforms": {name: item.get("state") == "ready" for name, item in states.items()},
         "platform_status": states,
-        "products": ["profile", "aero", "windgram", "cloudgram", "map", "meteogram", "route"],
+        "products": ["profile", "aero", "windgram", "cloudgram", "map", "meteogram", "route", "weathernext3"],
         "features": ["saved_recipes", "settings", "schedules"],
         "scheduler": {"last_error": SCHEDULER.last_error},
         "resources": RESOURCES.snapshot(),

@@ -1,8 +1,8 @@
-# 🤖 Telegram-бот GFS
+# 🤖 Telegram-бот GFS + WeatherNext 3
 
-Telegram сохраняет native wizard/UI, но все семь основных продуктов уже используют messenger-neutral services — те же расчёты и результаты, что MAX/VK.
+Telegram сохраняет native wizard/UI, но основные продукты используют messenger-neutral services — те же расчёты и результаты, что MAX/VK. WeatherNext 3 добавлен отдельным разделом поверх общего provider/service слоя.
 
-Итоговый паритет: [`docs/MESSENGER_PARITY.md`](docs/MESSENGER_PARITY.md).
+Итоговый паритет: [`docs/MESSENGER_PARITY.md`](docs/MESSENGER_PARITY.md). WeatherNext 3: [`docs/WEATHERNEXT3.md`](docs/WEATHERNEXT3.md).
 
 ## Команды
 
@@ -12,13 +12,14 @@ Telegram сохраняет native wizard/UI, но все семь основн�
 /cancel      сброс текущего выбора
 /cycle       последний цикл GFS
 /status      доступность и кэш
-/profile     вертикальный профиль
-/route       профиль по маршруту
-/aero        Skew-T log-P + годограф
-/windgram    срок × уровень
-/cloudgram   облака, осадки, видимость, риски
+/profile     вертикальный профиль GFS
+/route       профиль по маршруту GFS
+/aero        Skew-T log-P + годограф GFS
+/windgram    срок × уровень GFS
+/cloudgram   облака, осадки, видимость, риски GFS
 /meteogram   модель/ансамбль, PNG/DOCX/PDF
-/map         карта, серия, анимация
+/map         карта, серия, анимация GFS
+/wn3         WeatherNext 3: point/meteogram/cloud/precip maps
 /schedule    автоматическая отправка
 /settings    точки, параметры и recipes
 /admin       скрытая административная команда
@@ -36,9 +37,54 @@ Telegram сохраняет native wizard/UI, но все семь основн�
 /map       → messenger/map_service.py
 /meteogram → messenger/meteogram_service.py
 /route     → messenger/route_service.py
+/wn3       → messenger/weathernext3_service.py
 ```
 
-Telegram handlers отвечают за native controls/status/media. GFS calculations, actual run selection и result data не реализуются второй раз.
+Telegram handlers отвечают за native controls/status/media. GFS calculations, WeatherNext 3 BigQuery queries, actual run selection и result data не реализуются второй раз.
+
+## WeatherNext 3 `/wn3`
+
+Главное меню содержит кнопку `🛰 WeatherNext 3`. Если сохранена active point, раздел открывается сразу для неё; иначе бот запрашивает город, координаты или native Telegram location.
+
+При входе раздел открывает краткий point forecast на +24 ч. Для карт default:
+
+```text
+WeatherNext 3 · combo
++1…+48 ч
+step 3 ч
+radius 150 км
+animation MP4
+```
+
+Кнопки раздела:
+
+```text
+🌡 Прогноз 48 ч
+📊 Метеограмма
+☁️ Облачность
+☁️ Слои
+🌧 WN3 native precip
+🛰 IMERG precip
+🧪 Experimental precip
+🌦 Облака + осадки
+период / step / radius / animation
+```
+
+Прямые команды:
+
+```text
+/wn3 Москва
+/wn3 Москва +24
+/wn3 Москва kind=clouds to=48 step=3 radius=150
+/wn3 Москва kind=precip_imerg to=48 step=3
+/wn3 Москва kind=combo to=72 step=6 radius=250
+```
+
+Во время BigQuery/render операции редактируется одно status message. Итог показывает фактический WN3 `Run ...Z`, valid UTC, requested point/grid и маркировку «модельный прогноз».
+
+T/Td в point/meteogram используют station head 0.05° при наличии, остальные surface fields — 0.1°. Карты строятся из mean 64-member ensemble statistics. Метеограмма дополнительно использует p10/p25/p50/p75/p90.
+
+BigQuery не содержит 3D pressure-level fields WN3; `/profile` и `/aero` остаются GFS-продуктами до подключения GCS provider.
 
 ## Персональное состояние
 
@@ -78,6 +124,7 @@ Route endpoints не заменяют active point.
 /cloudgram   Подробно, +0…+72, step 3
 /map         MP4 +0…+48, step 3, radius 100, places
 /meteogram   GFS, 5 суток, PNG
+/wn3         point +24; карты: +1…+48, step 3, radius 150
 /route       +24, 300 км/ч, simple, grid 50 км
 ```
 
@@ -135,7 +182,7 @@ Wizard:
 точка → deterministic/ensemble → модель → период → PNG/DOCX/PDF → подтверждение
 ```
 
-Доступны GFS, ECMWF IFS/AIFS, ICON, GEM, GEFS, ECMWF ENS/AIFS ENS, ICON-EPS, GEPS. Разные ансамбли не смешиваются. Если upstream не сообщает model cycle, бот не выдумывает его.
+Доступны GFS, ECMWF IFS/AIFS, ICON, GEM, GEFS, ECMWF ENS/AIFS ENS, ICON-EPS, GEPS и WeatherNext 3 statistics. Разные ансамбли не смешиваются. Если upstream не сообщает model cycle, бот не выдумывает его. В `/wn3` WN3 init показывается явно.
 
 ## `/route`
 
@@ -151,6 +198,8 @@ Successful result создаёт recipe `point + params`; `run/cycle` исклю
 
 `/settings` позволяет выбирать active point, повторять/закреплять/удалять recipes и очищать персональные данные.
 
+WeatherNext 3 в этой версии использует active point и transient WN3 params; отдельный saved recipe/schedule для `/wn3` пока не создаётся.
+
 ## Расписания
 
 Telegram сохраняет native scheduler и storage:
@@ -159,7 +208,7 @@ Telegram сохраняет native scheduler и storage:
 TELEGRAM_SCHEDULE_FILE=.cache_gfs/telegram_schedules.json
 ```
 
-Доступны **все семь продуктов**, включая `/route`.
+Доступны семь исходных common продуктов, включая `/route`. WeatherNext 3 пока интерактивный продукт.
 
 Route добавлен adapter-ом `telegram_schedule_route_compat.py`: native route wizard формирует immutable schedule spec, а automatic execution вызывает common route runner. Метеорологическая логика не копируется.
 
@@ -195,8 +244,22 @@ messenger_launcher.py
 MAX_CONCURRENT_GFS=2
 MAX_CONCURRENT_GEOCODE=2
 MAX_CONCURRENT_METEOGRAM=2
+MAX_CONCURRENT_WEATHERNEXT3=2
 MAX_CONCURRENT_SCHEDULED=1
 ```
+
+## WeatherNext 3 config
+
+```env
+WEATHERNEXT3_BIGQUERY_PROJECT=<project-with-linked-dataset>
+WEATHERNEXT3_BIGQUERY_DATASET=<linked-dataset>
+WEATHERNEXT3_BIGQUERY_BILLING_PROJECT=
+WEATHERNEXT3_BQ_MAX_BYTES_BILLED=0
+WEATHERNEXT3_CACHE_TTL=1800
+GOOGLE_APPLICATION_CREDENTIALS=/path/outside/repo/credentials.json
+```
+
+Подробно: [`docs/WEATHERNEXT3.md`](docs/WEATHERNEXT3.md).
 
 ## Deploy
 
@@ -212,4 +275,4 @@ MAX/VK регистрация: [`docs/MESSENGER_REGISTRATION.md`](docs/MESSENGER
 
 ## Важно
 
-Все данные модельные. GFS — не наблюдение и не радиозонд. Icing/CAT/cloud/thunder/hazard layers — модельная диагностика и не заменяют официальные METAR/TAF/SIGMET/GAMET/NOTAM и эксплуатационное решение.
+Все данные модельные. GFS — не наблюдение и не радиозонд. WeatherNext 3 — экспериментальная AI-модель Google, не наблюдение/радар/спутниковый снимок и не официальный warning source. Icing/CAT/cloud/thunder/hazard layers — модельная диагностика и не заменяют официальные METAR/TAF/SIGMET/GAMET/NOTAM и эксплуатационное решение.

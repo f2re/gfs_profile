@@ -9,15 +9,16 @@ from telegram.ext import CommandHandler
 
 def _human_home_text() -> str:
     return (
-        "🌦 Метеобот GFS\n\n"
-        "Прогноз атмосферы по точке или маршруту.\n\n"
-        "📈 /profile — вертикальный профиль\n"
-        "✈️ /route — профиль вдоль маршрута\n"
+        "🌦 Метеобот GFS + WeatherNext 3\n\n"
+        "Модельный прогноз атмосферы по точке или маршруту.\n\n"
+        "📈 /profile — вертикальный профиль GFS\n"
+        "✈️ /route — профиль вдоль маршрута GFS\n"
         "🧾 /aero — аэродиаграмма с годографом\n"
         "🟦 /windgram — ветер, температура и влажность\n"
-        "☁️ /cloudgram — облака, осадки и грозы\n"
+        "☁️ /cloudgram — облака, осадки и грозы GFS\n"
         "📊 /meteogram — прогноз по времени и ансамбль\n"
-        "🗺️ /map — карта, серия или анимация\n"
+        "🗺️ /map — карта, серия или анимация GFS\n"
+        "🛰 /wn3 — WeatherNext 3: прогноз, ансамбль и карты\n"
         "🕒 /schedule — автоматическая отправка\n"
         "🕒 /cycle — последний цикл GFS\n"
         "⚙️ /status — данные и кэш\n"
@@ -39,6 +40,8 @@ def _human_help_text() -> str:
         "<code>/cloudgram Москва to=72 mode=simple</code>\n"
         "<code>/meteogram Москва ensemble=gefs days=5 format=pdf</code>\n"
         "<code>/map Москва from=0 to=24 step=3 mode=gif</code>\n"
+        "<code>/wn3 Москва +24</code>\n"
+        "<code>/wn3 Москва kind=clouds to=48 step=3</code>\n"
         "<code>/schedule</code> — менеджер автоматических отправок"
     )
 

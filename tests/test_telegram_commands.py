@@ -12,20 +12,9 @@ class TelegramCommandTests(unittest.TestCase):
         self.assertEqual(
             names,
             [
-                "start",
-                "help",
-                "profile",
-                "route",
-                "aero",
-                "windgram",
-                "cloudgram",
-                "meteogram",
-                "map",
-                "schedule",
-                "settings",
-                "cycle",
-                "status",
-                "cancel",
+                "start", "help", "profile", "route", "aero", "windgram",
+                "cloudgram", "meteogram", "map", "wn3", "schedule", "settings",
+                "cycle", "status", "cancel",
             ],
         )
         self.assertNotIn("skewt", names)

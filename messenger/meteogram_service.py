@@ -12,7 +12,7 @@ import numpy as np
 
 from meteogram_core import MeteogramError, fetch_meteogram, source_for_id
 from meteogram_plot import write_meteogram_png
-from meteogram_report import MeteogramReportError, write_meteogram_report
+from meteogram_report import write_meteogram_report
 from meteogram_request import MeteogramRequest, parse_meteogram_request
 
 from .contracts import CommonProductResult, ProductAttachment, ProgressEvent
@@ -104,13 +104,20 @@ def format_meteogram_summary(series: Any, output_format: str, fallback_reason: s
         warnings.append("PDF создать не удалось; сформирован DOCX")
     warning_text = "" if not warnings else "\n⚠️ " + "; ".join(warnings[:4])
     member_text = f"\n{member}" if member else ""
+    init = getattr(series, "init_time_utc", None)
+    init_text = f"\nRun: {init:%Y-%m-%d %HZ}" if init is not None else ""
+    provenance = (
+        "Исходный cycle не указывается, если поставщик его не передал."
+        if init is None
+        else "Показан фактический опубликованный init UTC."
+    )
     return (
         f"📊 {'Ансамблевая ' if source.ensemble else ''}метеограмма\n"
         f"📍 {series.point_label} · {float(series.requested_lat):.4f}, {float(series.requested_lon):.4f}{grid}\n"
-        f"Модель: {source.model}\nПоставщик: {source.provider}{member_text}\n"
+        f"Модель: {source.model}\nПоставщик: {source.provider}{init_text}{member_text}\n"
         f"Период: {series.times[0]:%d.%m %H:%M} — {series.times[-1]:%d.%m %H:%M} · {series.timezone}\n"
         f"Результат: {output_format.upper()}{warning_text}\n"
-        "ℹ Модельный прогноз, не наблюдение. Исходный cycle не указывается, если поставщик его не передал."
+        f"ℹ Модельный прогноз, не наблюдение. {provenance}"
     )
 
 
@@ -172,6 +179,7 @@ def build_meteogram_product_result(
                 mime,
             )]
 
+        init = getattr(series, "init_time_utc", None)
         metadata = {
             "model": source.model,
             "provider": source.provider,
@@ -186,7 +194,8 @@ def build_meteogram_product_result(
             "timezone": series.timezone,
             "member_count": series.member_count,
             "expected_member_count": series.expected_member_count,
-            "cycle": None,
+            "cycle": init.isoformat() if init is not None else None,
+            "init_time_utc": init.isoformat() if init is not None else None,
             "data_kind": "model",
             "fallback_reason": fallback_reason,
         }
@@ -198,8 +207,6 @@ def build_meteogram_product_result(
             repeat_command=meteogram_repeat_command(point, params),
         )
 
-        # The report may own extra temporary files. Keep only attachment paths;
-        # everything else can be removed after result creation.
         if report_result is not None:
             for path in report_result.cleanup_paths:
                 path = Path(path)
@@ -215,7 +222,5 @@ def build_meteogram_product_result(
             png_path.unlink(missing_ok=True)
         raise
     finally:
-        # Do not remove report_dir while its selected attachment lives there.
-        # cleanup_product_result removes the file; router then removes empty dir.
         if report_dir is not None and not attachment_paths:
             shutil.rmtree(report_dir, ignore_errors=True)

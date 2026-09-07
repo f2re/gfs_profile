@@ -39,23 +39,46 @@ class RuntimeResources:
     gfs_limit: int
     geocode_limit: int
     meteogram_limit: int
+    weathernext3_limit: int
     _gfs_gate: threading.BoundedSemaphore
     _geocode_gate: threading.BoundedSemaphore
     _meteogram_gate: threading.BoundedSemaphore
+    _weathernext3_gate: threading.BoundedSemaphore
     gfs_semaphore: AsyncThreadGate
     geocode_semaphore: AsyncThreadGate
     meteogram_semaphore: AsyncThreadGate
+    weathernext3_semaphore: AsyncThreadGate
 
     @classmethod
-    def from_limits(cls, *, gfs: int = 2, geocode: int = 2, meteogram: int = 2) -> "RuntimeResources":
-        gfs_limit = max(1, int(gfs)); geocode_limit = max(1, int(geocode)); meteogram_limit = max(1, int(meteogram))
+    def from_limits(
+        cls,
+        *,
+        gfs: int = 2,
+        geocode: int = 2,
+        meteogram: int = 2,
+        weathernext3: int = 2,
+    ) -> "RuntimeResources":
+        gfs_limit = max(1, int(gfs))
+        geocode_limit = max(1, int(geocode))
+        meteogram_limit = max(1, int(meteogram))
+        weathernext3_limit = max(1, int(weathernext3))
         gfs_gate = threading.BoundedSemaphore(gfs_limit)
         geocode_gate = threading.BoundedSemaphore(geocode_limit)
         meteogram_gate = threading.BoundedSemaphore(meteogram_limit)
+        weathernext3_gate = threading.BoundedSemaphore(weathernext3_limit)
         return cls(
-            gfs_limit=gfs_limit, geocode_limit=geocode_limit, meteogram_limit=meteogram_limit,
-            _gfs_gate=gfs_gate, _geocode_gate=geocode_gate, _meteogram_gate=meteogram_gate,
-            gfs_semaphore=AsyncThreadGate(gfs_gate), geocode_semaphore=AsyncThreadGate(geocode_gate), meteogram_semaphore=AsyncThreadGate(meteogram_gate),
+            gfs_limit=gfs_limit,
+            geocode_limit=geocode_limit,
+            meteogram_limit=meteogram_limit,
+            weathernext3_limit=weathernext3_limit,
+            _gfs_gate=gfs_gate,
+            _geocode_gate=geocode_gate,
+            _meteogram_gate=meteogram_gate,
+            _weathernext3_gate=weathernext3_gate,
+            gfs_semaphore=AsyncThreadGate(gfs_gate),
+            geocode_semaphore=AsyncThreadGate(geocode_gate),
+            meteogram_semaphore=AsyncThreadGate(meteogram_gate),
+            weathernext3_semaphore=AsyncThreadGate(weathernext3_gate),
         )
 
     @classmethod
@@ -64,20 +87,28 @@ class RuntimeResources:
             gfs=int(os.getenv("MAX_CONCURRENT_GFS", "2")),
             geocode=int(os.getenv("MAX_CONCURRENT_GEOCODE", "2")),
             meteogram=int(os.getenv("MAX_CONCURRENT_METEOGRAM", "2")),
+            weathernext3=int(os.getenv("MAX_CONCURRENT_WEATHERNEXT3", os.getenv("WEATHERNEXT3_MAX_CONCURRENT", "2"))),
         )
 
     def snapshot(self) -> dict[str, int]:
-        return {"gfs": self.gfs_limit, "geocode": self.geocode_limit, "meteogram": self.meteogram_limit}
+        return {
+            "gfs": self.gfs_limit,
+            "geocode": self.geocode_limit,
+            "meteogram": self.meteogram_limit,
+            "weathernext3": self.weathernext3_limit,
+        }
 
     def _wrap_blocking(self, func: Callable[..., T], gate: threading.BoundedSemaphore, kind: str) -> Callable[..., T]:
         marker = (kind, id(gate))
         if getattr(func, "__gfs_runtime_gate__", None) == marker:
             return func
         original = getattr(func, "__gfs_runtime_original__", func)
+
         @wraps(original)
         def limited(*args: Any, **kwargs: Any) -> T:
             with gate:
                 return original(*args, **kwargs)
+
         setattr(limited, "__gfs_runtime_gate__", marker)
         setattr(limited, "__gfs_runtime_original__", original)
         return limited
@@ -91,10 +122,15 @@ class RuntimeResources:
     def wrap_blocking_meteogram(self, func: Callable[..., T]) -> Callable[..., T]:
         return self._wrap_blocking(func, self._meteogram_gate, "meteogram")
 
+    def wrap_blocking_weathernext3(self, func: Callable[..., T]) -> Callable[..., T]:
+        return self._wrap_blocking(func, self._weathernext3_gate, "weathernext3")
+
     def configure_router(self, router: Any) -> Any:
         """Attach all process-wide gates to a common messenger router."""
         router.gfs_semaphore = self.gfs_semaphore
         router.meteogram_semaphore = self.meteogram_semaphore
+        if hasattr(router, "wn3_semaphore"):
+            router.wn3_semaphore = self.weathernext3_semaphore
         if hasattr(router, "deps") and getattr(router.deps, "geocode", None):
             router.deps.geocode = self.wrap_blocking_geocode(router.deps.geocode)
         router.runtime_resources = self

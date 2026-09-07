@@ -1,8 +1,8 @@
 # MAX Bot — регистрация, настройка и эксплуатация
 
-MAX использует тот же messenger-neutral product layer, что Telegram и VK. Все семь основных продуктов, saved recipes, `/settings` и `/schedule` доступны без копии метеорологической логики.
+MAX использует тот же messenger-neutral product layer, что Telegram и VK. Семь исходных продуктов, saved recipes, `/settings` и `/schedule` сохраняются; WeatherNext 3 добавлен отдельным common разделом `/wn3` без копии BigQuery/метеорологической логики.
 
-Полная регистрация: [`docs/MESSENGER_REGISTRATION.md`](docs/MESSENGER_REGISTRATION.md). Итоговый паритет: [`docs/MESSENGER_PARITY.md`](docs/MESSENGER_PARITY.md).
+Полная регистрация: [`docs/MESSENGER_REGISTRATION.md`](docs/MESSENGER_REGISTRATION.md). WeatherNext 3: [`docs/WEATHERNEXT3.md`](docs/WEATHERNEXT3.md).
 
 ## 1. Что создать в MAX
 
@@ -41,15 +41,6 @@ MAX_WEBHOOK_URL=https://bot.example.ru/webhooks/max
 
 `MAX_WEBHOOK_SECRET` мастер генерирует и сохраняет в `/opt/gfs_profile/.env`.
 
-Неинтерактивно:
-
-```bash
-sudo env \
-  MAX_BOT_TOKEN='<MAX_TOKEN>' \
-  MAX_WEBHOOK_URL='https://bot.example.ru/webhooks/max' \
-  bash setup_messenger_bots.sh --max --yes
-```
-
 MAX production Webhook должен иметь публичный доверенный HTTPS endpoint на 443. Внутри сервера runtime по умолчанию слушает `127.0.0.1:8081`, поэтому нужен reverse proxy.
 
 ## 3. Transport
@@ -70,28 +61,11 @@ API:
 https://platform-api2.max.ru
 ```
 
-Token используется только через `Authorization`. Production использует Webhook subscription для:
-
-```text
-bot_started
-message_created
-message_callback
-```
-
-Endpoint проверяет `X-Max-Bot-Api-Secret`, быстро отвечает 200 и передаёт тяжёлую работу в asyncio-task текущего процесса. Отдельный production Long Polling для того же бота не запускать.
-
-Регистрация после deploy:
-
-```bash
-.venv/bin/python register_messenger_webhooks.py --max
-.venv/bin/python register_messenger_webhooks.py --max --status
-```
-
-Ожидается `OK MAX: подписка активна`.
+Token используется только через `Authorization`. Production использует Webhook subscription для `bot_started`, `message_created`, `message_callback`. Endpoint проверяет `X-Max-Bot-Api-Secret`, быстро отвечает 200 и передаёт тяжёлую работу в asyncio-task текущего процесса. Отдельный production Long Polling для того же бота не запускать.
 
 ## 4. Продукты
 
-Работают одинаковые common services:
+Common GFS services:
 
 ```text
 /profile
@@ -103,7 +77,42 @@ Endpoint проверяет `X-Max-Bot-Api-Secret`, быстро отвечае�
 /route
 ```
 
-Поддерживаются город/координаты, неоднозначный город, native location для point-products, callbacks, progress, saved recipes, repeat/pin.
+WeatherNext 3:
+
+```text
+/wn3
+```
+
+Поддерживаются город/координаты, неоднозначный город, native location, callbacks и одно редактируемое progress message.
+
+### `/wn3`
+
+Раздел MAX использует тот же `messenger/weathernext3_service.py`, что Telegram/VK:
+
+```text
+🌡 point forecast
+📊 WN3 meteogram
+☁ total cloud
+☁ low/mid/high cloud layers
+🌧 native precipitation
+🛰 IMERG precipitation
+🧪 experimental precipitation
+🌦 cloud + native precip
+▶ MP4/GIF animation
+```
+
+При входе раздел показывает point forecast +24 ч. Default карт:
+
+```text
++1…+48 ч
+step 3 ч
+radius 150 км
+combo
+```
+
+WN3 BigQuery surface grid — 0.1°. T/Td в point/meteogram используют station head 0.05° при наличии. Ensemble statistics: mean/p10/p25/p50/p75/p90 по 64 членам. Фактический init определяется по реально опубликованной таблице и выводится как `Run ...Z`.
+
+Вертикальные WN3 fields в BigQuery отсутствуют; `/profile` и `/aero` не подменяются и остаются GFS до отдельного GCS provider.
 
 ### `/map`
 
@@ -121,7 +130,7 @@ MP4 отправляется как native `video` attachment.
 
 ### `/meteogram`
 
-Доступны GFS, ECMWF IFS/AIFS, ICON, GEM и ансамбли GEFS/ECMWF ENS/AIFS ENS/ICON-EPS/GEPS. Форматы PNG/DOCX/PDF.
+Доступны GFS, ECMWF IFS/AIFS, ICON, GEM, GEFS/ECMWF ENS/AIFS ENS/ICON-EPS/GEPS и WeatherNext 3 statistics. Форматы PNG/DOCX/PDF.
 
 ### `/route`
 
@@ -131,41 +140,40 @@ MP4 отправляется как native `video` attachment.
 
 PNG и CSV строятся тем же common route service. Run выбирается по максимальному ETA lead.
 
-## 5. Настройки и recipes
+## 5. WeatherNext 3 config
+
+```env
+WEATHERNEXT3_BIGQUERY_PROJECT=<project-with-linked-dataset>
+WEATHERNEXT3_BIGQUERY_DATASET=<linked-dataset>
+WEATHERNEXT3_BIGQUERY_BILLING_PROJECT=
+WEATHERNEXT3_BIGQUERY_LOCATION=
+WEATHERNEXT3_BQ_MAX_BYTES_BILLED=0
+WEATHERNEXT3_CACHE_TTL=1800
+MAX_CONCURRENT_WEATHERNEXT3=2
+GOOGLE_APPLICATION_CREDENTIALS=/path/outside/repo/credentials.json
+```
+
+BigQuery SDK использует Google Application Default Credentials. Credential JSON не коммитить. Cache живёт в `.cache_gfs/weathernext3` и сохраняется deploy-скриптом вместе с остальным GFS cache.
+
+## 6. Настройки и recipes
 
 ```env
 MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
 ```
 
-Ключ:
+Ключ: `max + user_id`.
 
-```text
-max + user_id
-```
+`/settings` позволяет выбрать active point, посмотреть последние точки, запускать/закреплять/удалять recipes и очищать персональные настройки. Route endpoints сохраняются в history, но не заменяют active point. `run/cycle` не сохраняются в recipes.
 
-`/settings` позволяет выбрать active point, посмотреть последние точки, запускать/закреплять/удалять recipes и очищать персональные настройки.
+WeatherNext 3 использует общую active point, но в этой версии отдельные WN3 recipes/schedules не записывает.
 
-Route endpoints сохраняются в history, но не заменяют active point.
+## 7. Расписания
 
-`run/cycle` не сохраняются в recipes.
-
-## 6. Расписания
-
-`/schedule` поддерживает все семь продуктов.
-
-```text
-saved recipe
-→ частота 1/2/3/7 или 1–30 дней
-→ local HH:MM
-→ IANA timezone
-→ подтверждение
-```
-
-Schedule snapshot не содержит `run/cycle`; каждый automatic run получает актуальные данные. Ограничение — два schedule на `max + user_id`.
+`/schedule` поддерживает семь исходных common продуктов. Schedule snapshot не содержит `run/cycle`; каждый automatic run получает актуальные данные. WeatherNext 3 пока интерактивный раздел.
 
 Подробно: [`docs/MESSENGER_SCHEDULES.md`](docs/MESSENGER_SCHEDULES.md).
 
-## 7. Fault isolation
+## 8. Fault isolation
 
 ```env
 MAX_ENABLED=auto
@@ -177,22 +185,21 @@ MAX_ENABLED=auto
 MAX_ENABLED=0
 ```
 
-Telegram/VK/web продолжат работать. И наоборот, `VK=degraded` не мешает MAX. `/health` показывает состояние каждой платформы независимо.
+Telegram/VK/web продолжат работать. `/health` показывает состояние каждой платформы независимо.
 
-Ошибка MAX schedule не останавливает scheduler и не влияет на VK/Telegram schedules.
-
-## 8. Shared resources
+## 9. Shared resources
 
 ```env
 MAX_CONCURRENT_GFS=2
 MAX_CONCURRENT_GEOCODE=2
 MAX_CONCURRENT_METEOGRAM=2
+MAX_CONCURRENT_WEATHERNEXT3=2
 MAX_CONCURRENT_SCHEDULED=1
 ```
 
 Это суммарные process-wide лимиты для всех платформ, а не квота MAX.
 
-## 9. Проверка
+## 10. Проверка
 
 ```bash
 curl -fsS http://127.0.0.1:8081/ready
@@ -212,6 +219,9 @@ sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
 /cloudgram Москва
 /map Москва
 /meteogram Москва source=gfs days=5
+/wn3 Москва +24
+/wn3 Москва kind=clouds to=24 step=3 radius=150
+/wn3 Москва kind=precip_native to=24 step=3 radius=150
 /route Москва -> Санкт-Петербург
 /settings
 /schedule
@@ -219,4 +229,4 @@ sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
 /cancel
 ```
 
-Все GFS-результаты должны показывать фактический run/cycle и маркировку «модель, не наблюдение/радиозонд».
+Все GFS-результаты должны показывать фактический run/cycle и маркировку модели. WN3 должен показывать фактический init/valid UTC и маркировку «модельный прогноз, не наблюдение/радар/спутниковый снимок».
