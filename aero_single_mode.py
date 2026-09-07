@@ -9,20 +9,17 @@ from telegram.ext import CommandHandler
 
 def _human_home_text() -> str:
     return (
-        "🌦 Метеобот GFS + WeatherNext 3\n\n"
-        "Модельный прогноз атмосферы по точке или маршруту.\n\n"
-        "📈 /profile — вертикальный профиль GFS\n"
-        "✈️ /route — профиль вдоль маршрута GFS\n"
-        "🧾 /aero — аэродиаграмма с годографом\n"
-        "🟦 /windgram — ветер, температура и влажность\n"
-        "☁️ /cloudgram — облака, осадки и грозы GFS\n"
-        "📊 /meteogram — прогноз по времени и ансамбль\n"
-        "🗺️ /map — карта, серия или анимация GFS\n"
-        "🛰 /wn3 — WeatherNext 3: прогноз, ансамбль и карты\n"
-        "🕒 /schedule — автоматическая отправка\n"
-        "🕒 /cycle — последний цикл GFS\n"
-        "⚙️ /status — данные и кэш\n"
-        "✖ /cancel — сброс выбора\n\n"
+        "🌦 GFS + WeatherNext 3\n\n"
+        "📈 /profile — профиль\n"
+        "✈️ /route — маршрут\n"
+        "🧾 /aero — аэродиаграмма\n"
+        "🟦 /windgram — срок × уровень\n"
+        "☁️ /cloudgram — облака и осадки\n"
+        "📊 /meteogram — метеограмма/ансамбль\n"
+        "🗺️ /map — карты GFS\n"
+        "🛰 /wn3 — WeatherNext 3\n"
+        "🕒 /schedule — автоотправка\n"
+        "🕒 /cycle — цикл GFS · ⚙️ /status — данные · ✖ /cancel — сброс\n\n"
         "Выберите продукт."
     )
 
