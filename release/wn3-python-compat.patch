@@ -1,0 +1,231 @@
+--- a/requirements-weathernext3.txt
++++ b/requirements-weathernext3.txt
+@@ -1,5 +1,4 @@
+-# Optional GCS/Zarr access for WN3 upper-air products. BigQuery is in requirements.txt.
+-# ObjectStore exists in 3.0.10; preserve Python 3.10 deploy compatibility.
+-zarr==3.0.10; python_version < "3.11"
++# GCS upper-air access requires Python 3.11+ (Zarr 3 metadata requirement).
++# Python 3.10 retains GFS and WN3 BigQuery without installing unsupported Zarr.
+ zarr>=3.1.3,<3.2; python_version >= "3.11"
+-obstore>=0.8,<1
++obstore>=0.8,<1; python_version >= "3.11"
+--- a/weathernext3_zarr.py
++++ b/weathernext3_zarr.py
+@@ -9,6 +9,7 @@
+ import math
+ import os
+ import re
++import sys
+ from dataclasses import dataclass
+ from datetime import datetime, timedelta, timezone
+ from pathlib import Path
+@@ -28,6 +29,12 @@
+ BUCKET = 'weathernext3_spatial'
+ PREFIX = 'weathernext_3_0_0/zarr/2026_to_present/'
+ RUN_RE = re.compile(r'(\d{8})_(\d{2})hr_(\d+)_preds/')
++
++
++def ensure_upper_runtime() -> None:
++    if sys.version_info < (3, 11):
++        raise WeatherNext3Error('Для вертикальной WeatherNext 3 через GCS/Zarr нужен Python 3.11+. '
++                                'На Python 3.10 доступны GFS и поверхностная WN3 через BigQuery.')
+ 
+ 
+ @dataclass(frozen=True)
+@@ -103,6 +110,7 @@
+ 
+     @classmethod
+     def from_env(cls):
++        ensure_upper_runtime()
+         return cls(billing_project=os.getenv('WEATHERNEXT3_GCS_BILLING_PROJECT', ''),
+                    max_subset_bytes=int(os.getenv('WEATHERNEXT3_ZARR_MAX_SUBSET_BYTES', '33554432')),
+                    max_chunk_bytes=int(os.getenv('WEATHERNEXT3_ZARR_MAX_CHUNK_BYTES', '134217728')),
+@@ -128,6 +136,7 @@
+     def _list_runs(self) -> list[ZarrRun]:
+         if self._candidates is not None:
+             return sorted(self._candidates(), key=lambda run: (run.init, run.revision, run.uri), reverse=True)
++        ensure_upper_runtime()
+         if not self.billing_project:
+             raise WeatherNext3Error('Для вертикальной WN3 задайте WEATHERNEXT3_GCS_BILLING_PROJECT и ADC; GCS использует Requester Pays')
+         try:
+@@ -165,6 +174,7 @@
+     def open(self, uri: str):
+         if self._opener:
+             return self._opener(uri)
++        ensure_upper_runtime()
+         try:
+             import obstore.store
+             import xarray as xr
+@@ -175,7 +185,7 @@
+                 client_options={'default_headers': {'x-goog-user-project': self.billing_project}})
+             return xr.open_zarr(zarr.storage.ObjectStore(store, read_only=True), chunks=None, consolidated=False)
+         except ImportError as exc:
+-            raise WeatherNext3Error('Установите requirements-weathernext3.txt для GCS/Zarr') from exc
++            raise WeatherNext3Error('Для GCS/Zarr используйте Python 3.11+ и requirements-weathernext3.txt') from exc
+ 
+     def profiles(self, lat: float, lon: float, leads: Sequence[int], *, member: str = 'mean', progress=None) -> list[ProfileResult]:
+         validate_coordinates(lat, lon)
+--- a/weathernext3_status.py
++++ b/weathernext3_status.py
+@@ -2,6 +2,7 @@
+ from __future__ import annotations
+ import importlib.util
+ import os
++import sys
+ 
+ 
+ def status() -> dict:
+@@ -11,6 +12,7 @@
+     gcs = present('WEATHERNEXT3_GCS_BILLING_PROJECT')
+     deps = all(importlib.util.find_spec(name) is not None for name in ('zarr', 'obstore'))
+     return {'bigquery_configured': bq, 'gcs_configured': gcs, 'zarr_dependencies': deps,
++            'upper_runtime_supported': sys.version_info >= (3, 11),
+             'cloud_access_verified': False, 'data_kind': 'model'}
+ 
+ 
+@@ -18,5 +20,6 @@
+     value = status()
+     return ('WeatherNext 3\nBigQuery: ' + ('настройки заданы' if value['bigquery_configured'] else 'не настроен') +
+             '\nGCS: ' + ('настройки заданы' if value['gcs_configured'] else 'не настроен') +
++            ('\nВерхняя атмосфера: нужен Python 3.11+' if not value['upper_runtime_supported'] else '') +
+             '\nZarr/obstore: ' + ('установлены' if value['zarr_dependencies'] else 'установите requirements-weathernext3.txt') +
+             '\nЭто проверка конфигурации, не подтверждение ADC/allowlist или публикации прогноза.')
+--- a/tests/test_wn3_release_data.py
++++ b/tests/test_wn3_release_data.py
+@@ -1,5 +1,6 @@
+ from __future__ import annotations
+ import json
++import sys
+ import tempfile
+ import threading
+ import time
+@@ -96,6 +97,14 @@
+         leads=_map_leads(p); self.assertLessEqual(len(leads),32); self.assertEqual(p['step'],leads[1]-leads[0])
+ 
+ class ZarrReleaseTests(unittest.TestCase):
++    def test_python310_is_rejected_before_any_cloud_request(self):
++        from weathernext3_status import status
++        with patch('weathernext3_zarr.sys.version_info', (3, 10, 0)):
++            with self.assertRaisesRegex(WeatherNext3Error, 'Python 3.11'):
++                WeatherNext3ZarrProvider.from_env()
++            with self.assertRaisesRegex(WeatherNext3Error, 'Python 3.11'):
++                WeatherNext3ZarrProvider(billing_project='test').runs()
++            self.assertFalse(status()['upper_runtime_supported'])
+     def test_pairwise_exact_hour_selection(self):
+         ds=upper_dataset(); array=ds.temperature.sel(level=1000).isel(init_time=0,sample=0,lat_0p25=0,lon_0p25=0)
+         selected=select_hours(array,[1,6,7,24]); self.assertEqual(selected.shape,(4,))
+@@ -135,6 +144,7 @@
+         with self.assertRaises(WeatherNext3Error): upper_provider(ds).profiles(POINT.lat,POINT.lon,[1])
+         ds=upper_dataset().assign_coords(lead_subtime=np.arange(6))
+         with self.assertRaises(WeatherNext3Error): upper_provider(ds).profiles(POINT.lat,POINT.lon,[1])
++    @unittest.skipIf(sys.version_info < (3, 11), 'GCS/Zarr 3 requires Python 3.11+; surface tests remain active')
+     def test_real_zarr_roundtrip_and_cache(self):
+         with tempfile.TemporaryDirectory() as tmp:
+             path=Path(tmp)/'fixture.zarr'; upper_dataset().to_zarr(path,zarr_format=2)
+--- a/docs/WEATHERNEXT3.md
++++ b/docs/WEATHERNEXT3.md
+@@ -20,8 +20,8 @@
+ | `precip_native`, `precip_imerg`, `precip_experimental`, `combo` | BigQuery 0.1° | Часовые осадки, отдельно или вместе с облачностью |
+ | `temperature`, `temperature_spread` | BigQuery 0.1° | T2 и ширина интервала p90−p10 |
+ | `wind100`, `solar` | BigQuery 0.1° | Скорость ветра 100 м; средний поток радиации за час |
+-| `profile`, `aero` | GCS raw ensemble, 13 уровней 0.25° | Общий профиль/Skew-T и CSV |
+-| `windgram` | GCS raw ensemble, 13 уровней 0.25° | Ветер/T/RH: срок × уровень, PNG + CSV |
++| `profile`, `aero` | GCS raw ensemble, Python 3.11+, 13 уровней 0.25° | Общий профиль/Skew-T и CSV |
++| `windgram` | GCS raw ensemble, Python 3.11+, 13 уровней 0.25° | Ветер/T/RH: срок × уровень, PNG + CSV |
+ 
+ Все карты: `mode=single|series|animation`, PNG или MP4/H.264 с GIF при недоступности кодировщика. Карты дополнительно возвращают CSV. Для большинства слоёв `stat=mean|p10|p25|p50|p75|p90`; `temperature_spread` всегда p90−p10. Цветовая шкала фиксирована во всех кадрах одной анимации.
+ 
+@@ -55,7 +55,7 @@
+ 
+ Преобразования: K→°C, Pa→гПа, доли облаков→%, m за час→мм за час, J/m² за час→средние W/m² делением на 3600. Скорость ветра — средняя скалярная; направление «откуда» — направление среднего вектора, при штиле не определяется. RH поверхности — диагностика **из средних T/Td**, не средняя RH ансамбля. Нет выдуманных порывов, weather code, высоты нижней границы или видимости.
+ 
+-Верхняя атмосфера читается из raw GCS для основных 00/06/12/18 UTC. Поддерживаются схема с координатой `level` и плоские переменные с суффиксом уровня. 13 уровней: 1000,925,850,700,600,500,400,300,250,200,150,100,50 гПа. Геопотенциал делится на 9.80665; Td рассчитывается из удельной влажности и давления. `member=0..63` выбирает член по его координате, `mean` — средний профиль из фактически прочитанных членов.
++Верхняя атмосфера требует **Python 3.11+** и читается из raw GCS для основных 00/06/12/18 UTC. Поддерживаются схема с координатой `level` и плоские переменные с суффиксом уровня. 13 уровней: 1000,925,850,700,600,500,400,300,250,200,150,100,50 гПа. Геопотенциал делится на 9.80665; Td рассчитывается из удельной влажности и давления. `member=0..63` выбирает член по его координате, `mean` — средний профиль из фактически прочитанных членов.
+ 
+ На рисунке и в сводке указано: **13 уровней; уровни ниже рельефа не маскированы**. Диагностика среднего профиля — не среднее диагностики ансамбля. CAPE/CIN, облачность, обледенение и турбулентность, полученные из такого профиля, нельзя трактовать как сертифицированный авиационный прогноз. Особенно осторожно применять в горах. Все продукты модельные, не радиозонд/радар/спутниковое наблюдение.
+ 
+@@ -93,7 +93,7 @@
+ 
+ Google ADC/allowlist должны соответствовать **учётной записи, от которой работает systemd**, а не только интерактивному пользователю. GCS full ensemble использует Requester Pays. Credential JSON хранится вне checkout с минимальными правами. Ни ключ, ни токены в Git не коммитить.
+ 
+-`requirements.txt` включает `requirements-weathernext3.txt`; обычный deploy устанавливает зависимости. Для Python 3.10 зафиксирован Zarr 3.0.10, для 3.11+ — совместимая ветка 3.1; поддержка ObjectStore необходима. Без конфигурации Google обычные GFS-продукты продолжают работать. Для MP4 нужен ffmpeg; без него используется GIF.
++`requirements.txt` включает `requirements-weathernext3.txt`; обычный deploy устанавливает зависимости. **Для полного набора WN3 нужен Python 3.11+.** Zarr 3 требует Python ≥3.11; зависимости Zarr/obstore на 3.10 не устанавливаются. На Python 3.10 продолжают работать GFS, WN3 BigQuery, поверхностные карты/метеограммы/сценарии; запрос верхней атмосферы возвращает понятную ошибку до обращения к Google. Используется ветка Zarr 3.1 с ObjectStore, без обхода Requires-Python. Без конфигурации Google обычные GFS-продукты продолжают работать. Для MP4 нужен ffmpeg; без него используется GIF.
+ 
+ ```bash
+ .venv/bin/python weathernext3_check.py
+@@ -130,3 +130,5 @@
+ - https://developers.google.com/weathernext/guides/dissemination
+ 
+ Контрактные тесты не доказывают, что разрешения вашего Google-проекта настроены или что будущая схема поставщика не изменится.
++
++Требование Python для Zarr подтверждено метаданными пакета: https://pypi.org/project/zarr/3.0.10/ (Requires-Python ≥3.11). В CI на 3.10 пропускается только файловый Zarr roundtrip; явная ошибка неподдерживаемого runtime, BigQuery, сценарии и остальные расчёты проверяются. На 3.11 Zarr roundtrip обязателен.
+--- a/docs/WN3_REVIEW_HANDOFF.md
++++ b/docs/WN3_REVIEW_HANDOFF.md
+@@ -9,4 +9,6 @@
+ | Визуализация и поставка | Все map kinds, PNG/CSV, профиль/Skew-T, MP4/GIF, DOCX/PDF | `python -m unittest discover -s tests -p test_wn3_release_render.py -v` |
+ | Google-инфраструктура (Юрий) | Allowlist, ADC пользователя службы, linked dataset, точная актуальная схема, реальные чанки и стоимость | `python weathernext3_check.py --live` и `--live --upper`; сопоставить с исходными таблицами/официальным Zarr |
+ 
+-Параллельные задания релизной проверки выполняют полный набор на Python 3.10/3.11. Отдельный live-GFS job проверяет +24/+384 и существующие weather smoke. Реальная приёмка WN3 с учётной записью Google не делегировалась фиктивному агенту и остаётся явно выделенной эксплуатационной проверкой. При её выполнении не снимать лимиты автоматически и не публиковать credentials в логах.
++Параллельные задания релизной проверки выполняют полный набор на Python 3.10/3.11. Шаг live-GFS в задании Python 3.11 проверяет +24/+384 и существующие weather smoke. Реальная приёмка WN3 с учётной записью Google не делегировалась фиктивному агенту и остаётся явно выделенной эксплуатационной проверкой. При её выполнении не снимать лимиты автоматически и не публиковать credentials в логах.
++
++Python 3.10: GFS/BigQuery и общие сценарии; Python 3.11+: полный набор и обязательный файловый Zarr roundtrip. В 3.10 единственный файловый Zarr-тест пропущен по явному ограничению поставщика, проверяется отказ до сетевого запроса.
+--- a/release/WEATHERNEXT3_RC1.md
++++ b/release/WEATHERNEXT3_RC1.md
+@@ -14,11 +14,13 @@
+ 
+ ## Проверки
+ 
+-Публикация допускается только после успешных полных unit/contract/render тестов на Python 3.10 и 3.11, runtime/import check и реальных GFS smoke +24/+384, meteorology_live_smoke и meteogram_live_smoke. Новые WN3-тесты проверяют синтетическую BigQuery-схему, настоящий локальный Zarr, PNG/DOCX/PDF, MP4/GIF, общий сценарий и API. Локальный полный набор перед передачей в CI: 542 теста, Python 3.13.
++Публикация допускается только после успешных полных unit/contract/render тестов на Python 3.10 и 3.11, runtime/import check и реальных GFS smoke +24/+384, meteorology_live_smoke и meteogram_live_smoke. Новые WN3-тесты проверяют синтетическую BigQuery-схему, настоящий локальный Zarr, PNG/DOCX/PDF, MP4/GIF, общий сценарий и API. Локальный полный набор до проверки совместимости: 542 теста, Python 3.13. Итоговый набор CI дополнительно проверяет отказ GCS на Python 3.10.
+ 
+ **Google WN3 live-доступ, allowlist/ADC/billing, production-чаты и deploy сервера этим выпуском не подтверждены.** Синтетические данные не являются оперативными прогнозами; в архив релиза включён исходный код, а не глобальные модельные данные.
+ 
+ ## Ограничения RC
++
++**Полный набор WN3 требует Python 3.11+.** На Python 3.10 поддержаны GFS и поверхностные продукты BigQuery; верхняя атмосфера явно отключена до обновления интерпретатора. Zarr 3 не поддерживает Python 3.10. В CI 3.10 пропущен только файловый Zarr roundtrip, на 3.11 этот тест обязателен.
+ 
+ WN3-маршруты, вертикальная скорость, вероятности событий по всем членам и сравнение циклов ещё не реализованы. Квантили поверхности не используются для выдумывания точных вероятностей. В профилях 13 уровней, уровни ниже рельефа не маскированы; диагностика среднего профиля не равна средней диагностике ансамбля и не является сертифицированной авиационной продукцией.
+ 
+--- a/DEPLOY.md
++++ b/DEPLOY.md
+@@ -295,7 +295,7 @@
+ bash deploy_telegram_bot.sh
+ ```
+ 
+-Обычные requirements включают WN3 GCS/Zarr с совместимостью Python 3.10/3.11. Deploy обновляет общий runtime Telegram/MAX/VK; сохраняет `.env`, `.install-state`, `.venv`, `.cache_gfs`. Credential JSON размещайте вне checkout, например `/etc/gfs_profile/google-adc.json`; задайте `GOOGLE_APPLICATION_CREDENTIALS` в установленном `.env`, обеспечьте чтение только пользователю службы. Google project/dataset/billing не угадываются и не создаются автоматически.
++Для полного набора WN3 используйте Python 3.11+; requirements устанавливают GCS/Zarr только на поддерживаемом Python. На Python 3.10 сохраняются GFS и поверхностная WN3 через BigQuery, но верхняя атмосфера требует обновления интерпретатора. Deploy обновляет общий runtime Telegram/MAX/VK; сохраняет `.env`, `.install-state`, `.venv`, `.cache_gfs`. Credential JSON размещайте вне checkout, например `/etc/gfs_profile/google-adc.json`; задайте `GOOGLE_APPLICATION_CREDENTIALS` в установленном `.env`, обеспечьте чтение только пользователю службы. Google project/dataset/billing не угадываются и не создаются автоматически.
+ 
+ Подробная настройка: [WeatherNext 3](docs/WEATHERNEXT3.md). Для WN3-расписаний Telegram оставьте `MESSENGER_RUNTIME_ENABLED=1`. `python weathernext3_check.py` без `--live` не обращается к Google; `--live` и `--live --upper` — отдельные, потенциально платные проверки от имени пользователя службы. `/health` разделяет наличие конфигурации и фактическую проверку облака.
+ 
+--- a/README.md
++++ b/README.md
+@@ -327,3 +327,5 @@
+ Общий сценарий Telegram/MAX/VK: owner-bound кнопки после перезапуска, пагинация +1…+360, статус/отмена, защита от двойного запуска, сценарии/повтор/расписания. BigQuery: точка, метеограмма PNG/DOCX/PDF, облачность по времени, три варианта осадков, карты/MP4/GIF/CSV, T2, p90−p10, ветер 100 м и радиация. GCS: profile/aero/windgram на 13 уровнях, средний профиль или member=0..63.
+ 
+ Точные команды, подключение и ограничения: [WEATHERNEXT3.md](docs/WEATHERNEXT3.md). Google live-доступ и production-доставка не проверены этим RC. Маршрут WN3 и вероятности событий не заявляются реализованными.
++
++Для GCS-профиля, аэродиаграммы и ветровой матрицы WN3 требуется Python 3.11+. Python 3.10 поддерживает GFS и поверхностную WN3 через BigQuery; неподдерживаемые зависимости Zarr на нём не устанавливаются.
+--- a/TELEGRAM_BOT.md
++++ b/TELEGRAM_BOT.md
+@@ -283,3 +283,5 @@
+ Общий сценарий Telegram/MAX/VK: owner-bound кнопки после перезапуска, пагинация +1…+360, статус/отмена, защита от двойного запуска, сценарии/повтор/расписания. BigQuery: точка, метеограмма PNG/DOCX/PDF, облачность по времени, три варианта осадков, карты/MP4/GIF/CSV, T2, p90−p10, ветер 100 м и радиация. GCS: profile/aero/windgram на 13 уровнях, средний профиль или member=0..63.
+ 
+ Точные команды, подключение и ограничения: [WEATHERNEXT3.md](docs/WEATHERNEXT3.md). Google live-доступ и production-доставка не проверены этим RC. Маршрут WN3 и вероятности событий не заявляются реализованными.
++
++Для GCS-профиля, аэродиаграммы и ветровой матрицы WN3 требуется Python 3.11+. Python 3.10 поддерживает GFS и поверхностную WN3 через BigQuery; неподдерживаемые зависимости Zarr на нём не устанавливаются.
+--- a/MAX_BOT.md
++++ b/MAX_BOT.md
+@@ -237,3 +237,5 @@
+ Общий сценарий Telegram/MAX/VK: owner-bound кнопки после перезапуска, пагинация +1…+360, статус/отмена, защита от двойного запуска, сценарии/повтор/расписания. BigQuery: точка, метеограмма PNG/DOCX/PDF, облачность по времени, три варианта осадков, карты/MP4/GIF/CSV, T2, p90−p10, ветер 100 м и радиация. GCS: profile/aero/windgram на 13 уровнях, средний профиль или member=0..63.
+ 
+ Точные команды, подключение и ограничения: [WEATHERNEXT3.md](docs/WEATHERNEXT3.md). Google live-доступ и production-доставка не проверены этим RC. Маршрут WN3 и вероятности событий не заявляются реализованными.
++
++Для GCS-профиля, аэродиаграммы и ветровой матрицы WN3 требуется Python 3.11+. Python 3.10 поддерживает GFS и поверхностную WN3 через BigQuery; неподдерживаемые зависимости Zarr на нём не устанавливаются.
+--- a/VK_BOT.md
++++ b/VK_BOT.md
+@@ -205,3 +205,5 @@
+ ## WeatherNext 3
+ 
+ `/wn3` и кнопка главного меню используют тот же сценарий и service, что Telegram/MAX. Доступны point, meteogram, cloudgram, precip_compare, десять картографических слоёв, profile/aero/windgram через GCS, PNG/CSV и MP4/GIF. Сценарии, расписания, отмена и пагинация до +360 — общие. Подключение Google, команды и ограничения RC: [docs/WEATHERNEXT3.md](docs/WEATHERNEXT3.md). VK transport не менялся. Доставку в рабочее сообщество необходимо проверить отдельно.
++
++Для GCS-профиля, аэродиаграммы и ветровой матрицы WN3 требуется Python 3.11+. Python 3.10 поддерживает GFS и поверхностную WN3 через BigQuery; неподдерживаемые зависимости Zarr на нём не устанавливаются.

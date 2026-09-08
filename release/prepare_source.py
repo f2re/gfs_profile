@@ -40,6 +40,16 @@ def main() -> None:
         git("apply", "--index", str(decoded))
         git("rm", "--", *(str(path.relative_to(ROOT)) for path in paths))
         print("Applied the SHA-256-pinned source diff; transfer files removed from release tree")
+    compat = ROOT / "release" / "wn3-python-compat.patch"
+    if compat.is_file():
+        content = compat.read_bytes()
+        if hashlib.sha256(content).hexdigest() != "fd7b99d6953b99c6c06008df45ce76d010eb94c1ce8aa74b1208121f21110c5b":
+            raise RuntimeError("Python compatibility patch SHA-256 mismatch")
+        (AUDIT / "python-compatibility.patch").write_bytes(content)
+        git("apply", "--check", "--index", str(compat))
+        git("apply", "--index", str(compat))
+        git("rm", "--", "release/wn3-python-compat.patch")
+        print("Applied reviewed Python runtime compatibility fix")
     git("diff", "--cached", "--check")
     tree = git("write-tree")
     (AUDIT / "TREE_SHA").write_text(tree + "\n", encoding="utf-8")
