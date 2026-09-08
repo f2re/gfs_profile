@@ -1,60 +1,43 @@
 #!/usr/bin/env python3
-"""Apply the reviewed offline diff to a checkout, then record the tested Git tree.
+"""Apply the reviewed RC2 diff in a checkout and record the exact tested tree.
 
-The SHA-256 values pin one specific source patch. The transfer files are removed
-from the release tree, and the decoded diff is kept in the CI audit artifact.
-No network calls, credential handling, branch changes, or commits happen here.
+The human-readable source patch is SHA-256 pinned and copied to the validation
+artifact. Its transfer copy is removed before packaging. No network requests,
+credentials, branch movement or commits are performed by this script.
 """
 from __future__ import annotations
 
 import hashlib
-import lzma
 import subprocess
 from pathlib import Path
 
-COMPRESSED_SHA256 = "aece5bd19cb1f9695233649f8dd385ebf8c0009b5107ed4878d70736dbb37906"
-PATCH_SHA256 = "c179b4b5e61c84fb7712a09951b6ef6c9556e6aed7309a5ce1678b25d73efe54"
 ROOT = Path(__file__).resolve().parent.parent
-AUDIT = Path("/tmp/wn3-ci")
+AUDIT = Path('/tmp/wn3-ci')
+PATCH = ROOT / 'release' / 'wn3-stage' / 'mean-view.patch'
+PATCH_SHA256 = 'c2cad886ace94bda59ab7ba8177c5198324460e65d2677cc9d4064981ec5904e'
 
 
 def git(*args: str) -> str:
-    return subprocess.check_output(["git", *args], cwd=ROOT, text=True).strip()
+    return subprocess.check_output(['git', *args], cwd=ROOT, text=True).strip()
 
 
 def main() -> None:
     AUDIT.mkdir(parents=True, exist_ok=True)
-    paths = [ROOT / "release" / "wn3-stage" / f"part-{i}.bin" for i in range(6)]
-    if any(path.exists() for path in paths):
-        if not all(path.is_file() for path in paths):
-            raise RuntimeError("Incomplete reviewed source transfer")
-        packed = b"".join(path.read_bytes() for path in paths)
-        if len(packed) != 56416 or hashlib.sha256(packed).hexdigest() != COMPRESSED_SHA256:
-            raise RuntimeError("Source transfer SHA-256 mismatch")
-        patch = lzma.decompress(packed, memlimit=256 * 1024 * 1024)
-        if len(patch) != 256668 or hashlib.sha256(patch).hexdigest() != PATCH_SHA256:
-            raise RuntimeError("Reviewed patch SHA-256 mismatch")
-        decoded = AUDIT / "reviewed-source.patch"
-        decoded.write_bytes(patch)
-        git("apply", "--check", "--index", str(decoded))
-        git("apply", "--index", str(decoded))
-        git("rm", "--", *(str(path.relative_to(ROOT)) for path in paths))
-        print("Applied the SHA-256-pinned source diff; transfer files removed from release tree")
-    compat = ROOT / "release" / "wn3-python-compat.patch"
-    if compat.is_file():
-        content = compat.read_bytes()
-        if hashlib.sha256(content).hexdigest() != "fd7b99d6953b99c6c06008df45ce76d010eb94c1ce8aa74b1208121f21110c5b":
-            raise RuntimeError("Python compatibility patch SHA-256 mismatch")
-        (AUDIT / "python-compatibility.patch").write_bytes(content)
-        git("apply", "--check", "--index", str(compat))
-        git("apply", "--index", str(compat))
-        git("rm", "--", "release/wn3-python-compat.patch")
-        print("Applied reviewed Python runtime compatibility fix")
-    git("diff", "--cached", "--check")
-    tree = git("write-tree")
-    (AUDIT / "TREE_SHA").write_text(tree + "\n", encoding="utf-8")
-    print("Candidate tree:", tree)
+    if PATCH.exists():
+        raw = PATCH.read_bytes()
+        if len(raw) != 29414 or hashlib.sha256(raw).hexdigest() != PATCH_SHA256:
+            raise RuntimeError('Reviewed WN3 RC2 source patch SHA-256 mismatch')
+        evidence = AUDIT / 'mean-view.patch'
+        evidence.write_bytes(raw)
+        git('apply', '--check', '--index', str(evidence))
+        git('apply', '--index', str(evidence))
+        git('rm', '--', str(PATCH.relative_to(ROOT)))
+        print('Applied reviewed WN3 mean/ensemble views; transfer patch removed')
+    git('diff', '--cached', '--check')
+    tree = git('write-tree')
+    (AUDIT / 'TREE_SHA').write_text(tree + '\n', encoding='utf-8')
+    print('Candidate tree:', tree)
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

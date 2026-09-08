@@ -116,7 +116,7 @@ jobs:
           git config user.name 'gfs-profile release bot'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           if ! git diff --cached --quiet; then
-            git commit -m 'feat: complete WeatherNext 3 products and shared workflows'
+            git commit -m 'feat: expose WN3 mean forecasts and ensemble views'
             git push origin HEAD:refs/heads/telegram-bot
           fi
           test "$(git rev-parse HEAD^{tree})" = "$(cat /tmp/wn3-ci/TREE_SHA)"
@@ -129,6 +129,9 @@ jobs:
         run: |
           tag=$(cat release/WN3_VERSION)
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-wn3\.rc[0-9]+$ ]] || exit 1
+          rc=${tag##*.rc}
+          notes="release/WEATHERNEXT3_RC${rc}.md"
+          test -s "$notes"
           if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
             echo 'Release tag already exists; no overwrite is allowed'; exit 1
           fi
@@ -151,5 +154,5 @@ jobs:
           PY
           (cd dist && sha256sum * > SHA256SUMS)
           gh release create "$tag" --repo "$REPOSITORY" --target "$(git rev-parse HEAD)" \
-            --prerelease --latest=false --title "WeatherNext 3 · RC1" \
-            --notes-file release/WEATHERNEXT3_RC1.md dist/*
+            --prerelease --latest=false --title "WeatherNext 3 · RC${rc}" \
+            --notes-file "$notes" dist/*
