@@ -7,6 +7,8 @@ on:
     paths:
       - '.github/workflows/wn3-release.yml'
       - 'release/WN3_VERSION'
+      - 'release/prepare_source.py'
+      - 'release/wn3-stage/**'
 
 permissions:
   contents: read
@@ -15,23 +17,139 @@ concurrency:
   group: wn3-release-${{ github.ref }}
   cancel-in-progress: false
 
+defaults:
+  run:
+    shell: bash
+
+env:
+  MPLBACKEND: Agg
+
 jobs:
-  source:
+  verify:
+    if: github.ref == 'refs/heads/telegram-bot'
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.10', '3.11']
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ github.sha }}
           persist-credentials: false
-      - name: Package tracked source only
-        run: |
-          mkdir -p dist
-          git archive --format=zip --output=dist/source.zip HEAD
-          git rev-parse HEAD > dist/SOURCE_COMMIT
-          sha256sum dist/source.zip > dist/SHA256SUMS
-      - uses: actions/upload-artifact@v4
+      - uses: actions/setup-python@v7
         with:
-          name: wn3-source-${{ github.sha }}
-          path: dist/
+          python-version: ${{ matrix.python }}
+      - name: Prepare reviewed checkout
+        run: python release/prepare_source.py
+      - name: Install dependencies
+        run: |
+          python -m pip install --quiet --upgrade pip setuptools wheel
+          python -m pip install --quiet --prefer-binary -r requirements.txt
+          python -m pip check
+          if ! command -v ffmpeg; then sudo apt-get update -qq && sudo apt-get install -y ffmpeg; fi
+          ffmpeg -version > /tmp/wn3-ci/ffmpeg.log
+          head -n 1 /tmp/wn3-ci/ffmpeg.log
+      - name: Compile and runtime check
+        run: |
+          python -m compileall -q .
+          python runtime_check.py | tee /tmp/wn3-ci/runtime.log
+      - name: All unit, contract and render tests
+        run: |
+          python -m unittest discover -s tests > /tmp/wn3-ci/unittest.log 2>&1
+          tail -n 25 /tmp/wn3-ci/unittest.log
+      - name: Live GFS and surface smoke
+        if: matrix.python == '3.11'
+        env:
+          GFS_REQUEST_TIMEOUT: '60'
+          METEOGRAM_HTTP_TIMEOUT: '90'
+          METEOGRAM_HTTP_RETRIES: '3'
+        run: |
+          {
+            python -m gfs_core --lat 45.0355 --lon 38.9753 --lead 24
+            python -m gfs_core --lat 55.75 --lon 37.62 --lead 384
+            python meteorology_live_smoke.py
+            python meteogram_live_smoke.py
+          } > /tmp/wn3-ci/live-gfs-smoke.log 2>&1
+          tail -n 30 /tmp/wn3-ci/live-gfs-smoke.log
+      - name: Confirm tests did not alter source
+        run: |
+          git diff --exit-code
+          test "$(git write-tree)" = "$(cat /tmp/wn3-ci/TREE_SHA)"
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wn3-validated-py${{ matrix.python }}
+          path: /tmp/wn3-ci/
           retention-days: 3
           if-no-files-found: error
+
+  publish:
+    needs: verify
+    if: github.ref == 'refs/heads/telegram-bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wn3-validated-py*
+          path: /tmp/wn3-validated
+      - name: Prepare and match both validated trees
+        run: |
+          python release/prepare_source.py
+          test "$(cat /tmp/wn3-ci/TREE_SHA)" = "$(cat /tmp/wn3-validated/wn3-validated-py3.10/TREE_SHA)"
+          test "$(cat /tmp/wn3-ci/TREE_SHA)" = "$(cat /tmp/wn3-validated/wn3-validated-py3.11/TREE_SHA)"
+      - name: Commit reviewed implementation to the working branch
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+        run: |
+          remote_head=$(git ls-remote origin refs/heads/telegram-bot | cut -f1)
+          test "$remote_head" = "$EXPECTED_HEAD" || { echo 'Branch advanced; refusing to overwrite'; exit 1; }
+          git config user.name 'gfs-profile release bot'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if ! git diff --cached --quiet; then
+            git commit -m 'feat: complete WeatherNext 3 products and shared workflows'
+            git push origin HEAD:refs/heads/telegram-bot
+          fi
+          test "$(git rev-parse HEAD^{tree})" = "$(cat /tmp/wn3-ci/TREE_SHA)"
+      - name: Package and publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+          VALIDATION_COMMIT: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          tag=$(cat release/WN3_VERSION)
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+-wn3\.rc[0-9]+$ ]] || exit 1
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" >/dev/null 2>&1; then
+            echo 'Release tag already exists; no overwrite is allowed'; exit 1
+          fi
+          mkdir -p dist
+          git archive --format=zip --output="dist/${tag}-source.zip" HEAD
+          git rev-parse HEAD > dist/SOURCE_COMMIT
+          python - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          git = lambda arg: subprocess.check_output(['git', 'rev-parse', arg], text=True).strip()
+          provenance = {
+              'source_commit': git('HEAD'), 'tested_tree': git('HEAD^{tree}'),
+              'validation_commit': os.environ['VALIDATION_COMMIT'],
+              'workflow_url': 'https://github.com/' + os.environ['REPOSITORY'] + '/actions/runs/' + os.environ['RUN_ID'],
+              'python': ['3.10', '3.11'], 'live_gfs_verified': True,
+              'google_wn3_live_verified': False, 'production_deployed': False,
+              'notes': 'Both validation jobs tested this exact Git tree before commit and publication.'
+          }
+          Path('dist/PROVENANCE.json').write_text(json.dumps(provenance, indent=2) + '\n')
+          PY
+          (cd dist && sha256sum * > SHA256SUMS)
+          gh release create "$tag" --repo "$REPOSITORY" --target "$(git rev-parse HEAD)" \
+            --prerelease --latest=false --title "WeatherNext 3 · RC1" \
+            --notes-file release/WEATHERNEXT3_RC1.md dist/*
