@@ -297,7 +297,7 @@ def _plot_metpy_diagram(result: ProfileResult, out_path: Path) -> None:
 
         add_footer(
             fig,
-            "GFS grid, не радиозонд. Облачность, обледенение и болтанка — диагностические модельные слои.",
+            f"{getattr(result, 'model_label', 'GFS 0.25°')} · модель, не радиозонд. {getattr(result, 'diagnostics_note', '') or 'Облачность, обледенение и болтанка — диагностические модельные слои.'}",
             y=0.022,
         )
         # Keep the exact canvas geometry. tight bbox reflows outside artists and

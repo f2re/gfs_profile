@@ -21,7 +21,8 @@ from .meteogram_service import build_meteogram_product_result
 from weathernext3_map import KIND_TITLES, write_weathernext3_animation, write_weathernext3_map_png
 from weathernext3_provider import MAP_KINDS, WeatherNext3Error, WeatherNext3Provider, provider_from_env
 
-WN3_KINDS = ("point", "meteogram", *MAP_KINDS)
+UPPER_KINDS = ("profile", "aero", "windgram")
+WN3_KINDS = ("point", "meteogram", "cloudgram", "precip_compare", *UPPER_KINDS, *MAP_KINDS)
 MAP_MODES = ("animation", "single", "series")
 DEFAULT_WN3_PARAMS: dict[str, Any] = {
     "kind": "point",
@@ -33,6 +34,11 @@ DEFAULT_WN3_PARAMS: dict[str, Any] = {
     "radius": 150,
     "mode": "animation",
     "basemap": "places",
+    "stat": "mean",
+    "member": "mean",
+    "param": "wind",
+    "top": 500,
+    "format": "png",
 }
 
 _KIND_ALIASES = {
@@ -117,13 +123,42 @@ def normalize_wn3_params(value: Mapping[str, Any] | None = None) -> dict[str, An
     result["radius"] = float(result["radius"])
     result["mode"] = normalize_wn3_mode(result["mode"])
     result["basemap"] = str(result.get("basemap", "places")).strip().lower() or "places"
+    result['stat'] = str(result['stat']).lower()
+    result['member'] = str(result['member']).lower()
+    result['param'] = str(result['param']).lower()
+    result['top'] = int(result['top'])
+    result['format'] = str(result['format']).lower()
+    if result['stat'] not in {'mean', 'p10', 'p25', 'p50', 'p75', 'p90'}:
+        raise WeatherNext3Error('stat: mean, p10, p25, p50, p75, p90')
+    if result['member'] != 'mean' and (not result['member'].isdigit() or not 0 <= int(result['member']) < 64):
+        raise WeatherNext3Error('member: mean или 0..63')
+    if result['param'] not in {'wind', 'temp', 'rh'}:
+        raise WeatherNext3Error('param: wind, temp, rh')
+    if result['top'] not in {1000, 925, 850, 700, 600, 500, 400, 300, 250, 200, 150, 100, 50}:
+        raise WeatherNext3Error('top: опубликованный изобарический уровень WN3')
+    if result['format'] not in {'png', 'pdf', 'docx'}:
+        raise WeatherNext3Error('format: png, pdf, docx (PDF/DOCX — только метеограмма)')
+    if result['kind'] != 'meteogram' and result['format'] != 'png':
+        raise WeatherNext3Error('PDF/DOCX поддерживаются только для kind=meteogram')
+    if result['basemap'] not in {'basic', 'places', 'roads'}:
+        raise WeatherNext3Error('basemap: basic, places, roads')
+    if not 1 <= result['step'] <= 360 or not 1 <= result['from'] <= result['to'] <= 360:
+        raise WeatherNext3Error('from/to/step: 1..360; from не больше to')
     if not 1 <= result["hours"] <= 360:
         raise WeatherNext3Error("hours должен быть 1..360")
     if not 1 <= result["days"] <= 15:
         raise WeatherNext3Error("days должен быть 1..15")
     if not 25 <= result["radius"] <= 500:
         raise WeatherNext3Error("radius должен быть 25..500 км")
-    if result["kind"] in MAP_KINDS:
+    if result['kind'] not in MAP_KINDS and result['stat'] != 'mean':
+        raise WeatherNext3Error('stat применяется только к картам; точка и метеограмма показывают весь набор статистик')
+    if result['kind'] == 'temperature_spread' and result['stat'] != 'mean':
+        raise WeatherNext3Error('Разброс T2 всегда равен p90−p10; отдельный stat не применяется')
+    if result['kind'] not in UPPER_KINDS and result['member'] != 'mean':
+        raise WeatherNext3Error('Отдельный member доступен только для верхней атмосферы GCS')
+    if result["kind"] == "windgram":
+        result["mode"] = "animation"
+    if result["kind"] in (*MAP_KINDS, "windgram"):
         if result["mode"] == "single":
             result["to"] = result["from"]
         leads = _map_leads(result)
@@ -149,12 +184,14 @@ def parse_weathernext3_input(raw: str) -> ParsedWeatherNext3Input:
             params[key] = int(value)
         elif key in {"radius", "radius_km"}:
             params["radius"] = float(value)
-        elif key in {"mode", "format"}:
-            params["mode"] = value
+        elif key in {"mode", "format", "stat", "member", "param"}:
+            params[key] = value
+        elif key == "top":
+            params[key] = int(value)
         elif key in {"basemap", "base"}:
             params["basemap"] = value
         else:
-            continue
+            raise WeatherNext3Error(f"Неизвестный параметр WN3: {key}")
         explicit = True
         text = text.replace(match.group(0), " ", 1)
 
@@ -189,6 +226,11 @@ def wn3_kind_title(kind: str) -> str:
     return {
         "point": "Прогноз по точке",
         "meteogram": "Ансамблевая метеограмма",
+        "cloudgram": "Облачность по времени",
+        "precip_compare": "Сравнение вариантов осадков",
+        "profile": "Вертикальный профиль",
+        "aero": "Аэродиаграмма",
+        "windgram": "Срок × уровень",
         **KIND_TITLES,
     }[normalize_wn3_kind(kind)]
 
@@ -202,81 +244,32 @@ def _finite(value: Any, *, scale: float = 1.0, offset: float = 0.0) -> float | N
 
 
 def _row_for_hour(rows: list[dict[str, Any]], hour: int) -> dict[str, Any]:
-    if not rows:
-        raise WeatherNext3Error("WeatherNext 3 не вернул точечный прогноз")
-    return min(rows, key=lambda row: abs(int(row.get("forecast_hour", hour)) - hour))
+    matches = [row for row in rows if int(row.get('forecast_hour', -1)) == hour]
+    if len(matches) != 1:
+        raise WeatherNext3Error(f'WN3: запрошенный срок +{hour} не опубликован или дублирован')
+    return matches[0]
 
 
-def _wind_from(u: float | None, v: float | None) -> tuple[float | None, float | None]:
-    if u is None or v is None:
-        return None, None
-    speed = math.hypot(u, v)
-    direction = (math.degrees(math.atan2(-u, -v)) + 360.0) % 360.0
-    return direction, speed
+def _fmt(value, suffix='', digits=1):
+    return '—' if value is None or not math.isfinite(float(value)) else f'{value:.{digits}f}{suffix}'
 
 
-def _rh(temp: float | None, dew: float | None) -> float | None:
-    if temp is None or dew is None:
-        return None
-    try:
-        value = 100.0 * math.exp((17.625 * dew) / (243.04 + dew) - (17.625 * temp) / (243.04 + temp))
-    except (ValueError, OverflowError, ZeroDivisionError):
-        return None
-    return max(0.0, min(100.0, value))
-
-
-def _fmt(value: float | None, suffix: str, digits: int = 1) -> str:
-    return "—" if value is None else f"{value:.{digits}f}{suffix}"
-
-
-def _point_summary(point: Any, series: Any, hour: int) -> str:
-    row = _row_for_hour(series.rows, hour)
-    actual_hour = int(row.get("forecast_hour", hour))
-    valid = row.get("forecast_time")
-    if not isinstance(valid, datetime):
-        valid = datetime.fromisoformat(str(valid).replace("Z", "+00:00"))
-    if valid.tzinfo is None:
-        valid = valid.replace(tzinfo=timezone.utc)
-    valid = valid.astimezone(timezone.utc)
-
-    temp = _finite(row.get("station_temperature_mean"), offset=-273.15)
-    dew = _finite(row.get("station_dewpoint_mean"), offset=-273.15)
-    if temp is None:
-        temp = _finite(row.get("temperature_mean"), offset=-273.15)
-    if dew is None:
-        dew = _finite(row.get("dewpoint_mean"), offset=-273.15)
-    t10 = _finite(row.get("station_temperature_p10"), offset=-273.15)
-    t90 = _finite(row.get("station_temperature_p90"), offset=-273.15)
-    if t10 is None:
-        t10 = _finite(row.get("temperature_p10"), offset=-273.15)
-    if t90 is None:
-        t90 = _finite(row.get("temperature_p90"), offset=-273.15)
-    pressure = _finite(row.get("pressure_mean"), scale=0.01)
-    cloud = _finite(row.get("cloud_total_mean"), scale=100.0)
-    u, v = _finite(row.get("wind_u_mean")), _finite(row.get("wind_v_mean"))
-    direction, speed = _wind_from(u, v)
-    native = _finite(row.get("precip_native_mean"), scale=1000.0)
-    imerg = _finite(row.get("precip_imerg_mean"), scale=1000.0)
-    experimental = _finite(row.get("precip_experimental_mean"), scale=1000.0)
-    station_note = "station head 0.05°" if row.get("station_temperature_mean") is not None else "grid 0.1°"
-    grid_lat = series.station_grid_lat if series.station_grid_lat is not None else series.grid_lat
-    grid_lon = series.station_grid_lon if series.station_grid_lon is not None else series.grid_lon
-    grid_line = ""
-    if grid_lat is not None and grid_lon is not None:
-        grid_line = f"\n📐 WN3 grid: {float(grid_lat):.4f}, {float(grid_lon):.4f} · {station_note}"
-    spread = ""
-    if t10 is not None and t90 is not None:
-        spread = f" · p10…p90 {_fmt(t10, '°C')}…{_fmt(t90, '°C')}"
-    wind = "—" if speed is None or direction is None else f"{direction:.0f}° откуда · {speed:.1f} м/с"
+def _point_summary(point, series, hour):
+    from weathernext3_surface import surface_rows
+    _row_for_hour(series.rows, hour)
+    row = next(row for row in surface_rows(series) if row['lead_hour'] == hour)
     return (
-        "🛰 WeatherNext 3 · прогноз по точке\n"
-        f"Run {series.run.init_time_utc:%Y-%m-%d %HZ} · +{actual_hour} ч · valid {valid:%d.%m %H:%M UTC}\n"
-        f"📍 {getattr(point, 'label', 'точка')} · {float(point.lat):.4f}, {float(point.lon):.4f}{grid_line}\n"
-        f"🌡 T {_fmt(temp, '°C')}{spread} · Td {_fmt(dew, '°C')} · RH {_fmt(_rh(temp, dew), '%', 0)}\n"
-        f"💨 {wind} · MSLP {_fmt(pressure, ' гПа', 0)} · ☁ {_fmt(cloud, '%', 0)}\n"
-        f"🌧 1 ч: native {_fmt(native, ' мм')} · IMERG {_fmt(imerg, ' мм')} · experimental {_fmt(experimental, ' мм')}\n"
-        "64-членный ансамбль · показаны готовые статистики BigQuery\n"
-        "WeatherNext 3 • Google • модельный прогноз, не наблюдение/радар/спутниковый снимок"
+        f"🛰 WeatherNext 3 · {point.label}\n"
+        f"Run {series.run.init_time_utc:%Y-%m-%d %HZ} · +{hour} ч · valid {row['valid_utc']:%d.%m %H:%M UTC}\n"
+        f"Точка: {point.lat:.4f}, {point.lon:.4f}\n"
+        f"Сетка поверхности: {series.grid_lat}, {series.grid_lon} · 0.1°\n"
+        f"T/Td: {row['temperature_grid_lat']}, {row['temperature_grid_lon']} · {row['temperature_source']}\n"
+        f"T {_fmt(row['temperature_mean_c'], '°C')} · p10…p90 {_fmt(row['temperature_p10_c'])}…{_fmt(row['temperature_p90_c'], '°C')}\n"
+        f"Td {_fmt(row['dewpoint_mean_c'], '°C')} · RH≈{_fmt(row['rh_from_mean_pct'], '%', 0)} (из средних T/Td)\n"
+        f"Ветер {_fmt(row['wind_from_mean_vector_deg'], '°', 0)} откуда · {_fmt(row['wind_speed_mean_ms'], ' м/с')} (средняя скалярная скорость)\n"
+        f"MSLP {_fmt(row['pressure_msl_hpa'], ' гПа')} · облачность {_fmt(row['cloud_total_pct'], '%', 0)}\n"
+        f"Осадки за час: основные {_fmt(row['precip_native_mean_mm'], ' мм')}; IMERG {_fmt(row['precip_imerg_mean_mm'], ' мм')}; эксперимент {_fmt(row['precip_experimental_mean_mm'], ' мм')}\n"
+        "Google BigQuery · готовые статистики ансамбля · модель, не наблюдение"
     )
 
 
@@ -309,6 +302,7 @@ def build_weathernext3_product_result(
     basemap: str = "places",
     progress_callback: Callable[[ProgressEvent], None] | None = None,
     provider: WeatherNext3Provider | None = None,
+    upper_provider: Any | None = None,
     **extra: Any,
 ) -> CommonProductResult:
     if "from" in extra:
@@ -316,53 +310,74 @@ def build_weathernext3_product_result(
     params = normalize_wn3_params({
         "kind": kind, "hours": hours, "days": days, "from": from_, "to": to,
         "step": step, "radius": radius, "mode": mode, "basemap": basemap,
+        **{key: value for key, value in extra.items() if key in DEFAULT_WN3_PARAMS},
     })
     kind = params["kind"]
 
-    if kind == "meteogram":
-        if progress_callback:
-            progress_callback(ProgressEvent("fetch", "Получаю ансамблевую метеограмму WeatherNext 3"))
-        result = build_meteogram_product_result(
-            point,
-            "weathernext3",
-            int(params["days"]),
-            "png",
-            progress_callback=progress_callback,
-        )
-        result.product = "weathernext3"
-        result.metadata.update({"kind": "meteogram", "product": "weathernext3"})
-        result.repeat_command = f"/wn3 {float(point.lat):.4f} {float(point.lon):.4f} kind=meteogram days={params['days']}"
+    from weathernext3_products import upper_product, csv_attachment, surface_plot
+    from weathernext3_surface import surface_rows
+    repeat = f"/wn3 {float(point.lat):.4f} {float(point.lon):.4f} " + ' '.join(f'{key}={value}' for key, value in params.items())
+    if kind in UPPER_KINDS:
+        result = upper_product(point, kind, params, provider=upper_provider, progress_callback=progress_callback)
+        result.repeat_command = repeat
         return result
-
+    if kind == 'meteogram':
+        from weathernext3_meteogram import fetch_weathernext3_meteogram
+        def progress(text):
+            if progress_callback:
+                progress_callback(ProgressEvent('fetch', text))
+        series = fetch_weathernext3_meteogram(point.label, point.lat, point.lon, params['days'], progress, provider=provider)
+        result = build_meteogram_product_result(point, 'weathernext3', params['days'], params['format'],
+                    progress_callback=progress_callback, series=series)
+        try:
+            export = [{'model': 'WeatherNext 3', 'run_utc': series.init_time_utc.isoformat(), 'valid_utc': valid,
+                       **{name: values[i] for name, values in series.fields.items()}}
+                      for i, valid in enumerate(series.times)]
+            result.attachments.append(csv_attachment(export, 'meteogram'))
+        except BaseException:
+            from messenger.profile_service import cleanup_product_result
+            cleanup_product_result(result)
+            raise
+        result.product = 'weathernext3'
+        result.metadata['kind'] = kind
+        result.repeat_command = repeat
+        return result
     provider = provider or provider_from_env()
-    if kind == "point":
+    if kind in {'point', 'cloudgram', 'precip_compare'}:
         if progress_callback:
-            progress_callback(ProgressEvent("check", "Ищу опубликованный запуск WeatherNext 3"))
-        series = provider.point_series(str(point.label), float(point.lat), float(point.lon), int(params["hours"]))
-        if progress_callback:
-            progress_callback(ProgressEvent("format", "Формирую точечный прогноз"))
-        return CommonProductResult(
-            product="weathernext3",
-            summary=_point_summary(point, series, int(params["hours"])),
-            attachments=[],
-            metadata={
-                "product": "weathernext3", "kind": "point", "model": "WeatherNext 3",
-                "provider": "Google BigQuery Analytics Hub", "data_kind": "model",
-                "run": series.run.init_time_utc.isoformat(), "lead": int(params["hours"]),
-                "requested_lat": float(point.lat), "requested_lon": float(point.lon),
-                "grid_lat": series.station_grid_lat if series.station_grid_lat is not None else series.grid_lat,
-                "grid_lon": series.station_grid_lon if series.station_grid_lon is not None else series.grid_lon,
-                "ensemble_members": 64,
-            },
-            repeat_command=f"/wn3 {float(point.lat):.4f} {float(point.lon):.4f} +{params['hours']}",
-        )
+            progress_callback(ProgressEvent('check', 'Выбираю опубликованный цикл и точные сроки WN3'))
+        hours_to = params['hours'] if kind == 'point' else params['days'] * 24
+        series = provider.point_series(point.label, point.lat, point.lon, hours_to)
+        attachments = []
+        try:
+            if kind == 'point':
+                summary = _point_summary(point, series, params['hours'])
+            else:
+                path = surface_plot(point, series, kind)
+                attachments.append(ProductAttachment('image', path, path.name, wn3_kind_title(kind) + ' · WeatherNext 3', 'image/png'))
+                rows = surface_rows(series)
+                summary = (f"WeatherNext 3 · {wn3_kind_title(kind)} · {point.label}\n"
+                           f"Run {series.run.init_time_utc:%Y-%m-%d %HZ} · +1…+{hours_to} ч\n"
+                           f"valid {rows[0]['valid_utc']:%d.%m %H:%M} — {rows[-1]['valid_utc']:%d.%m %H:%M UTC}\n"
+                           f"Точка {point.lat:.4f}, {point.lon:.4f}; сетка 0.1° {series.grid_lat}, {series.grid_lon}\n"
+                           "Google BigQuery · готовое среднее ансамбля · модель, не наблюдение")
+            attachments.append(csv_attachment(surface_rows(series), kind))
+            return CommonProductResult('weathernext3', summary, attachments,
+                {'kind': kind, 'model': 'WeatherNext 3', 'provider': 'Google BigQuery', 'data_kind': 'model',
+                 'run': series.run.init_time_utc.isoformat(), 'lead': params['hours'] if kind == 'point' else None,
+                 'lead_from': 1, 'lead_to': hours_to, 'grid_lat': series.grid_lat, 'grid_lon': series.grid_lon,
+                 'nominal_members': 64, 'member_count': None, 'warnings': getattr(series, 'warnings', [])}, repeat)
+        except BaseException:
+            for attachment in attachments:
+                attachment.path.unlink(missing_ok=True)
+            raise
 
     leads = _map_leads(params)
     if progress_callback:
         progress_callback(ProgressEvent("check", "Ищу опубликованный запуск WeatherNext 3"))
     frames = provider.map_frames(
         str(point.label), float(point.lat), float(point.lon), leads,
-        radius_km=float(params["radius"]), kind=kind,
+        radius_km=float(params["radius"]), kind=kind, statistic=params["stat"],
     )
     selected = frames[0].run
     paths: list[Path] = []
@@ -406,6 +421,21 @@ def build_weathernext3_product_result(
                 "image/png",
             )]
 
+        csv_rows = []
+        units = {'precip': 'precipitation_1h_mm', 'cloud_total': 'cloud_total_pct',
+                 'cloud_low': 'cloud_low_pct', 'cloud_mid': 'cloud_mid_pct', 'cloud_high': 'cloud_high_pct',
+                 'temperature': 'temperature_c', 'temperature_spread': 'temperature_p90_minus_p10_c',
+                 'wind100': 'wind_100m_ms', 'solar': 'solar_mean_wm2'}
+        for frame in frames:
+            for row in frame.rows:
+                csv_rows.append({'model': 'WeatherNext 3', 'run_utc': selected.init_time_utc.isoformat(),
+                                 'valid_utc': frame.valid_time_utc.isoformat(), 'lead_hour': frame.lead_hour,
+                                 'statistic': 'p90-p10' if kind == 'temperature_spread' else params['stat'],
+                                 **{units.get(k, k): v for k, v in row.items() if k not in {'forecast_time', 'forecast_hour'}}})
+        csv = csv_attachment(csv_rows, kind)
+        paths.append(csv.path)
+        attachments.append(csv)
+        stat_text = 'p90−p10' if kind == 'temperature_spread' else params['stat']
         first_valid, last_valid = frames[0].valid_time_utc, frames[-1].valid_time_utc
         period = f"+{leads[0]} ч" if len(leads) == 1 else f"+{leads[0]}…+{leads[-1]} ч · шаг {params['step']} ч"
         precip_note = {
@@ -419,7 +449,7 @@ def build_weathernext3_product_result(
             f"Run {selected.init_time_utc:%Y-%m-%d %HZ} · {period}\n"
             f"valid {first_valid:%d.%m %H:%M} — {last_valid:%d.%m %H:%M UTC}\n"
             f"📍 {getattr(point, 'label', 'точка')} · {float(point.lat):.4f}, {float(point.lon):.4f}\n"
-            f"Область: радиус {int(params['radius'])} км · surface grid 0.1° · 64-member mean{note}\n"
+            f"Область: радиус {int(params['radius'])} км · surface grid 0.1° · {stat_text} ансамбля{note}\n"
             "WeatherNext 3 • Google BigQuery • модельный прогноз, не радар/наблюдение/спутниковый снимок"
         )
         time_part = (
@@ -436,12 +466,9 @@ def build_weathernext3_product_result(
                 "run": selected.init_time_utc.isoformat(), "lead_from": leads[0], "lead_to": leads[-1],
                 "step": int(params["step"]), "mode": params["mode"], "radius": float(params["radius"]),
                 "requested_lat": float(point.lat), "requested_lon": float(point.lon),
-                "frame_count": len(frames), "ensemble_members": 64,
+                "leads": leads, "frame_count": len(frames), "nominal_members": 64, "member_count": None, "statistic": stat_text,
             },
-            repeat_command=(
-                f"/wn3 {float(point.lat):.4f} {float(point.lon):.4f} kind={kind} {time_part} "
-                f"radius={int(params['radius'])} basemap={params['basemap']}"
-            ),
+            repeat_command=repeat,
         )
     except Exception:
         for path in paths:

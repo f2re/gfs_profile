@@ -1,142 +1,134 @@
-# WeatherNext 3 в GFS Bot
+# WeatherNext 3: BigQuery, GCS и продукция
 
-WeatherNext 3 подключён как отдельный модельный источник рядом с GFS. Метеорологическая логика не живёт в Telegram/MAX/VK: все платформы вызывают один `weathernext3_provider.py` + `messenger/weathernext3_service.py`.
+Статус: предварительный выпуск `v2026.9.8-wn3.rc1`. Код проверяется на синтетических данных официальной схемы; доступ к конкретному Google-проекту, allowlist и доставка в production-чаты требуют отдельной приёмки. Успешный GFS smoke не является проверкой WN3.
 
-> WeatherNext 3 — экспериментальная AI-модель Google. Это не наблюдение, не радар, не спутниковый снимок и не официальный warning source.
+## Архитектура
 
-## Источник и ограничения
+`Telegram / MAX / VK → общий WeatherNext3MessengerRouter → общий service → BigQuery или GCS/Zarr → общие результаты → native gateway`.
 
-Оперативная surface-продукция читается из WeatherNext 3 BigQuery Analytics Hub linked dataset:
+Telegram сохраняет обычные GFS-команды. Его раздел `/wn3` использует тот же сценарий, расчёты и кнопки, что MAX/VK, а не копию сценария. GFS не используется как скрытая замена WN3.
 
-```text
-weathernext_3_0_0_0p1deg  0.1° surface statistics
-weathernext_3_0_0_0p05deg 0.05° station-head T/Td statistics
-```
+## Продукция
 
-В каждой таблице `init_time` — partition key, `forecast` — repeated record с `time`, `hours` и статистиками `_mean/_p10/_p25/_p50/_p75/_p90`. `forecast.hours` начинается с +1 ч. Основные 00/06/12/18 UTC запуски дают до +360 ч; промежуточные почасовые — до +48 ч.
+| `kind` | Данные | Результат |
+|---|---|---|
+| `point` | BigQuery, точный срок +1…+360 | Сводка, CSV с единицами и двумя узлами |
+| `meteogram` | BigQuery, 1–15 суток от init | PNG/DOCX/PDF и CSV; среднее и p10/p25/p50/p75/p90 |
+| `cloudgram` | BigQuery, общая/нижняя/средняя/верхняя облачность | Временные ряды PNG + CSV |
+| `precip_compare` | BigQuery, три варианта осадков | PNG + CSV; это сравнение прогнозов, не наблюдений |
+| `clouds`, `cloud_layers` | BigQuery 0.1° | Карта общей облачности или контуры ярусов |
+| `precip_native`, `precip_imerg`, `precip_experimental`, `combo` | BigQuery 0.1° | Часовые осадки, отдельно или вместе с облачностью |
+| `temperature`, `temperature_spread` | BigQuery 0.1° | T2 и ширина интервала p90−p10 |
+| `wind100`, `solar` | BigQuery 0.1° | Скорость ветра 100 м; средний поток радиации за час |
+| `profile`, `aero` | GCS raw ensemble, Python 3.11+, 13 уровней 0.25° | Общий профиль/Skew-T и CSV |
+| `windgram` | GCS raw ensemble, Python 3.11+, 13 уровней 0.25° | Ветер/T/RH: срок × уровень, PNG + CSV |
 
-BigQuery содержит только surface statistics. Полный 64-member ensemble и 3D pressure-level fields 0.25° доступны через GCS/Zarr и намеренно не подменяются surface-полями.
+Все карты: `mode=single|series|animation`, PNG или MP4/H.264 с GIF при недоступности кодировщика. Карты дополнительно возвращают CSV. Для большинства слоёв `stat=mean|p10|p25|p50|p75|p90`; `temperature_spread` всегда p90−p10. Цветовая шкала фиксирована во всех кадрах одной анимации.
 
-Официальные материалы:
+Картографические пределы: радиус 25–500 км, широта до 85° по модулю, максимум 32 кадра анимации/24 PNG серии. Для длинного диапазона шаг анимации увеличивается. Конечный запрошенный срок добавляется отдельно, если не кратен шагу. Это дискретные модельные кадры, без выдуманной временной интерполяции.
 
-- https://developers.google.com/weathernext/guides/models
-- https://developers.google.com/weathernext/guides/bigquery
-- https://developers.google.com/weathernext/guides/dissemination
-
-## Реализованная продукция
-
-`/wn3`:
-
-```text
-point                краткий прогноз на +N
-meteogram            1–15 суток, mean + p10/p25/p50/p75/p90
-clouds               общая облачность
-cloud_layers          low / medium / high + total cloud
-precip_native         total_precipitation_1hr
-precip_imerg          imerg_tp_1hr
-precip_experimental   experimental_tp_1hr
-combo                 total cloud + native precipitation
-```
-
-Карты поддерживают `animation`, `single`, `series`. Default карты: +1…+48 ч, step 3 ч, radius 150 км. Анимация ограничена 32 кадрами и использует MP4/H.264; если `ffmpeg` недоступен — GIF fallback.
-
-Примеры:
+Примеры для всех трёх мессенджеров:
 
 ```text
 /wn3 Москва +24
-/wn3 Москва kind=meteogram days=5
-/wn3 Москва kind=clouds from=1 to=48 step=3 radius=150
-/wn3 Москва kind=cloud_layers from=1 to=48 step=3 radius=150
-/wn3 Москва kind=precip_imerg from=1 to=72 step=3 radius=250
-/wn3 Москва kind=combo from=1 to=48 step=3 radius=150
+/wn3 Москва kind=meteogram days=5 format=png
+/wn3 Москва kind=cloudgram days=3
+/wn3 Москва kind=precip_compare days=3
+/wn3 Москва kind=clouds from=1 to=48 step=3 mode=animation
+/wn3 Москва kind=precip_imerg +24 stat=p90
+/wn3 Москва kind=temperature_spread from=1 to=120 step=6
+/wn3 Москва kind=wind100 +24
+/wn3 Москва kind=solar +24
+/wn3 Москва kind=profile +24 member=0
+/wn3 Москва kind=aero +24 member=mean
+/wn3 Москва kind=windgram from=1 to=48 step=6 param=wind top=500
+/meteogram Москва source=weathernext3 days=5 format=pdf
 ```
 
-## Метеорологические преобразования
+Обычные `/profile`, `/aero`, `/windgram`, `/map`, `/route` по-прежнему означают GFS. WN3 выбирается явно через `/wn3 kind=...`.
 
-- `station_head_temperature_2m` / `station_head_dewpoint_temperature_2m`: K → °C, 0.05°. При отсутствии station-head значения берутся из 0.1° grid T/Td.
-- `mean_sea_level_pressure`: Pa → hPa.
-- cloud fractions: 0…1 → 0…100 %.
-- все 1-hour precipitation heads: m → mm.
-- wind direction вычисляется по `u/v` как метеорологическое направление **откуда** дует.
-- RH рассчитывается из T/Td по Magnus approximation.
-- day/night для метеограммы определяется астрономически по UTC/координатам, а не по порогу SSRD.
+## Достоверность и ограничения
 
-Карты используют ensemble mean. Метеограмма и точечный прогноз показывают uncertainty statistics там, где они доступны.
+BigQuery содержит **готовые поверхностные статистики**, а не отдельных членов. Номинальный ансамбль — 64 члена, но фактический размер по каждому сроку таблицы не передают: бот не пишет ложное «64/64». p90−p10 — диапазон, не вероятность события. Часовые квантили нельзя складывать для получения квантиля суммы. Вероятности событий по полному ансамблю, вертикальная скорость, WN3-маршруты и сравнение циклов в данном RC не реализованы.
 
-## Выбор фактического init
+T/Td station head 0.05° используются только при наличии полного согласованного комплекта их статистик за выбранный период. Иначе весь комплект T/Td берётся из 0.1°, чтобы не смешивать источники в одном интервале. CSV точечного прогноза сохраняет координаты обоих узлов и источник T/Td. Остальные поверхностные поля — 0.1°. Station head — модельный продукт, не измерение станции.
 
-Provider не предполагает цикл по часам публикации. Перед запросом он ищет максимальный фактически опубликованный `init_time`, который содержит требуемый `forecast.hours` для выбранной точки:
+Преобразования: K→°C, Pa→гПа, доли облаков→%, m за час→мм за час, J/m² за час→средние W/m² делением на 3600. Скорость ветра — средняя скалярная; направление «откуда» — направление среднего вектора, при штиле не определяется. RH поверхности — диагностика **из средних T/Td**, не средняя RH ансамбля. Нет выдуманных порывов, weather code, высоты нижней границы или видимости.
 
-```sql
-WHERE init_time >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 72 HOUR)
-  AND ST_INTERSECTS(geography_polygon, ST_GEOGPOINT(@lon, @lat))
-GROUP BY init_time
-HAVING MAX(f.hours) >= @required_hour
-ORDER BY init_time DESC
-LIMIT 1
-```
+Верхняя атмосфера требует **Python 3.11+** и читается из raw GCS для основных 00/06/12/18 UTC. Поддерживаются схема с координатой `level` и плоские переменные с суффиксом уровня. 13 уровней: 1000,925,850,700,600,500,400,300,250,200,150,100,50 гПа. Геопотенциал делится на 9.80665; Td рассчитывается из удельной влажности и давления. `member=0..63` выбирает член по его координате, `mean` — средний профиль из фактически прочитанных членов.
 
-Поэтому запрос +120 автоматически отбрасывает свежий interim-run с горизонтом +48 и выбирает последний опубликованный synoptic run.
+На рисунке и в сводке указано: **13 уровней; уровни ниже рельефа не маскированы**. Диагностика среднего профиля — не среднее диагностики ансамбля. CAPE/CIN, облачность, обледенение и турбулентность, полученные из такого профиля, нельзя трактовать как сертифицированный авиационный прогноз. Особенно осторожно применять в горах. Все продукты модельные, не радиозонд/радар/спутниковое наблюдение.
 
-## BigQuery cost/security
+## Циклы, целостность и стоимость
 
-Все рабочие queries:
+BigQuery выбирает опубликованный init, содержащий все необходимые сроки. В точечном ряду соседний срок не заменяет отсутствующий; проверяется `valid = init + lead`, отсутствие дублей и единый узел. Карты проверяют одинаковое множество узлов во всех кадрах. Ошибочные, пустые и неполные ответы не кэшируются.
 
-1. содержат partition filter по `init_time`;
-2. выбирают только необходимые columns, без `SELECT *`;
-3. ограничивают region `ST_INTERSECTS`/`ST_DWITHIN`;
-4. используют query parameters для координат, сроков и run;
-5. допускают `maximum_bytes_billed`;
-6. кэшируются в `.cache_gfs/weathernext3/`.
+SQL содержит partition filter по init, явные колонки и параметризованные координаты/сроки, пространственную подвыборку; карта ограничена 200 000 строк. По умолчанию **1 000 000 000 байт на один BigQuery query**. Это не дневной бюджет: один продукт может состоять из нескольких запросов. `0` явно отключает этот предел. Стоимость аккаунта дополнительно ограничивайте квотами Google.
 
-Project/dataset identifiers валидируются до SQL interpolation.
+GCS каталог обнаруживается по опубликованным каталогам и ревизиям, без предположения `_01`. Часы выбираются по сумме `lead_time + lead_subtime`, включая отрицательные подшаги. Сначала выбираются поле, уровень, точка, часы и члены; только затем материализуются значения. Нет глобального `ds.load()`.
 
-## Настройка
+Независимые пределы GCS: 32 MiB подвыборки, 128 MiB одного несжатого чанка, 512 MiB консервативной оценки чтения чанков. Оценка не является счётом Google или гарантией сетевого трафика; библиотека может повторно читать чанк. Если оперативная раскладка чанков не укладывается, запрос завершается понятной ошибкой, а не снимает ограничения автоматически.
 
-После allowlist + Analytics Hub subscription:
+Кэш: `.cache_gfs/weathernext3/`, ключ содержит SQL/schema либо URI+revision+узел+уровни+сроки+member. Атомарная запись, межпроцессный flock, проверка содержимого при чтении. Run не сохраняется в пользовательских сценариях. TTL кэша не заменяет политику очистки старых файлов на сервере.
+
+## Настройка сервера
+
+После одобрения доступа Google и создания Analytics Hub linked dataset:
 
 ```env
-WEATHERNEXT3_BIGQUERY_PROJECT=my-project
-WEATHERNEXT3_BIGQUERY_DATASET=weathernext3_linked
-WEATHERNEXT3_BIGQUERY_BILLING_PROJECT=my-billing-project
+WEATHERNEXT3_BIGQUERY_PROJECT=your-linked-project
+WEATHERNEXT3_BIGQUERY_DATASET=your-linked-dataset
+WEATHERNEXT3_BIGQUERY_BILLING_PROJECT=your-billing-project
 WEATHERNEXT3_BIGQUERY_LOCATION=
-WEATHERNEXT3_BQ_MAX_BYTES_BILLED=0
+WEATHERNEXT3_BQ_MAX_BYTES_BILLED=1000000000
 WEATHERNEXT3_BIGQUERY_TIMEOUT=180
 WEATHERNEXT3_CACHE_TTL=1800
+WEATHERNEXT3_GCS_BILLING_PROJECT=your-billing-project
+WEATHERNEXT3_ZARR_MAX_SUBSET_BYTES=33554432
+WEATHERNEXT3_ZARR_MAX_CHUNK_BYTES=134217728
+WEATHERNEXT3_ZARR_MAX_READ_BYTES=536870912
 MAX_CONCURRENT_WEATHERNEXT3=2
-WEATHERNEXT3_MAP_PIXEL_SIZE=1280
-WEATHERNEXT3_MAP_FRAME_DURATION_MS=700
-WEATHERNEXT3_MAP_FPS=8
-WEATHERNEXT3_PRECIP_VMAX_MM=30
+GOOGLE_APPLICATION_CREDENTIALS=/etc/gfs_profile/google-adc.json
 ```
 
-Авторизация — Google Application Default Credentials. На сервере предпочтителен service account с минимальными BigQuery read/job permissions; секрет JSON не коммитится.
+Google ADC/allowlist должны соответствовать **учётной записи, от которой работает systemd**, а не только интерактивному пользователю. GCS full ensemble использует Requester Pays. Credential JSON хранится вне checkout с минимальными правами. Ни ключ, ни токены в Git не коммитить.
 
-Проверка ADC:
+`requirements.txt` включает `requirements-weathernext3.txt`; обычный deploy устанавливает зависимости. **Для полного набора WN3 нужен Python 3.11+.** Zarr 3 требует Python ≥3.11; зависимости Zarr/obstore на 3.10 не устанавливаются. На Python 3.10 продолжают работать GFS, WN3 BigQuery, поверхностные карты/метеограммы/сценарии; запрос верхней атмосферы возвращает понятную ошибку до обращения к Google. Используется ветка Zarr 3.1 с ObjectStore, без обхода Requires-Python. Без конфигурации Google обычные GFS-продукты продолжают работать. Для MP4 нужен ffmpeg; без него используется GIF.
 
 ```bash
-gcloud auth application-default login --no-launch-browser
+.venv/bin/python weathernext3_check.py
+# Следующие команды выполняют облачные запросы и могут тарифицироваться:
+.venv/bin/python weathernext3_check.py --live --lat 55.75 --lon 37.62 --lead 1
+.venv/bin/python weathernext3_check.py --live --upper --lat 55.75 --lon 37.62 --lead 6
 ```
 
-или задайте `GOOGLE_APPLICATION_CREDENTIALS` на защищённый локальный service-account JSON.
+Без `--live` выполняется только локальная проверка конфигурации. `/status` внутри WN3 и `/health` также не выдают наличие env за подтверждение доступа Google.
 
-## Messenger parity
+## Пользовательский сценарий и расписания
 
-Один common service используется Telegram, MAX и VK. Нативные адаптеры отвечают только за point picker, callbacks, progress и media upload.
+Город/координаты/геолокация → карточка продукта → срок/период → построить. `Москва +24` в открытом WN3 запускает сразу. Каталог разбит на страницы; все часы +1…+360 доступны через пагинацию. Несколько найденных городов дают выбор.
 
-В первой версии WN3 использует active point, но не создаёт отдельные saved recipes/schedules. Это одинаковое ограничение всех трёх платформ и не влияет на существующие семь GFS/common scheduled products.
+Кнопки сохраняются в SQLite до 48 часов и привязаны к platform/user/chat; работают после перезапуска, чужой пользователь не может использовать сохранённый callback. Старые кнопки поддерживаются совместимостью, но некоторые старые state-only callbacks требуют заново открыть раздел.
 
-## Следующее расширение
+Тяжёлый запрос немедленно создаёт status message и отдельную asyncio-задачу. Повторное нажатие не создаёт второй запрос для того же пользователя/чата. `/cancel` прекращает следующие этапы и отправку файлов; уже начатый сетевой запрос не всегда можно оборвать мгновенно. Ресурсный слот не освобождается, пока рабочий поток не завершён.
 
-Для полного паритета вертикальной продукции нужен отдельный GCS/Zarr provider для 00/06/12/18 UTC:
+Успешный результат создаёт сценарий с параметрами, без init. Повтор/закрепление/расписание используют общий service. Для Telegram WN3-сценарии и расписания находятся в общем SQLite, старые GFS-сценарии и native scheduler сохранены. В native `/settings` и `/schedule` добавлены переходы в WN3. Лимит common расписаний — два на platform/user; старые Telegram GFS-расписания учитываются отдельно. Для автоматической WN3-отправки нужен `MESSENGER_RUNTIME_ENABLED=1`.
 
-```text
-geopotential_{level}
-temperature_{level}
-specific_humidity_{level}
-u_component_of_wind_{level}
-v_component_of_wind_{level}
-vertical_velocity_{level}
-```
+## API
 
-После него WN3 можно честно подключить к profile/aero/windgram без копирования существующей GFS-визуализации.
+По умолчанию выключен. При `WEATHERNEXT3_API_KEY` доступен `POST /api/wn3/product` с заголовком `X-API-Key`. Тело: `{"lat":55.75,"lon":37.62,"label":"Москва","params":{"kind":"clouds","hours":24,"from":24,"to":24,"mode":"single"}}`.
+
+Ответ ZIP содержит metadata.json и файлы того же service. Неизвестные параметры — 422, неверный ключ — 403, выключенный API — 503, ошибка данных — 502. Endpoint предназначен для доверенного клиента за HTTPS/reverse proxy, не для анонимного публичного доступа; серверные квоты и ограничение частоты задавайте на proxy.
+
+## Официальные источники схемы
+
+Проверены 8 сентября 2026 года:
+
+- https://developers.google.com/weathernext/guides/models
+- https://developers.google.com/weathernext/guides/bigquery
+- https://developers.google.com/weathernext/guides/gcs
+- https://developers.google.com/weathernext/guides/dissemination
+
+Контрактные тесты не доказывают, что разрешения вашего Google-проекта настроены или что будущая схема поставщика не изменится.
+
+Требование Python для Zarr подтверждено метаданными пакета: https://pypi.org/project/zarr/3.0.10/ (Requires-Python ≥3.11). В CI на 3.10 пропускается только файловый Zarr roundtrip; явная ошибка неподдерживаемого runtime, BigQuery, сценарии и остальные расчёты проверяются. На 3.11 Zarr roundtrip обязателен.

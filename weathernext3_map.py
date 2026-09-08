@@ -33,6 +33,10 @@ KIND_TITLES = {
     "precip_imerg": "Осадки · IMERG",
     "precip_experimental": "Осадки · experimental",
     "combo": "Облачность + осадки",
+    "temperature": "Температура 2 м",
+    "temperature_spread": "Разброс T2 · p90−p10",
+    "wind100": "Скорость ветра 100 м",
+    "solar": "Солнечная радиация за час",
 }
 
 
@@ -104,7 +108,7 @@ def _cloud_layers(ax, frame: WeatherNext3MapFrame):
     total = _cloud(ax, frame, alpha=0.45)
     for key, color, label in (("cloud_low", "#16a34a", "низкая"), ("cloud_mid", "#2563eb", "средняя"), ("cloud_high", "#9333ea", "высокая")):
         xs, ys, values = _grid(frame, key)
-        if np.isfinite(values).any() and float(np.nanmax(values)) >= 50.0:
+        if min(values.shape) >= 2 and np.isfinite(values).any() and float(np.nanmax(values)) >= 50.0:
             ax.contour(xs, ys, values, levels=[50, 80], colors=[color, color], linewidths=[0.8, 1.5], alpha=0.9, zorder=5)
         ax.plot([], [], color=color, linewidth=1.5, label=f"{label} ≥50/80%")
     ax.legend(loc="lower left", fontsize=7, framealpha=0.8)
@@ -119,31 +123,43 @@ def write_weathernext3_map_png(frame: WeatherNext3MapFrame, path: str | Path | N
     overlay = basemap_overlay if basemap_overlay is not None else local_basemap_overlay(frame.requested_lat, frame.requested_lon, frame.radius_km, basemap)
     dpi = 128
     fig, ax = plt.subplots(figsize=(pixel_size / dpi, pixel_size / dpi), dpi=dpi)
-    ax.set_facecolor("#f8fafc")
-    _draw_basemap(ax, overlay)
-    if frame.kind == "clouds":
-        mesh = _cloud(ax, frame); fig.colorbar(mesh, ax=ax, fraction=0.035, pad=0.02).set_label("Облачность, %")
-    elif frame.kind == "cloud_layers":
-        mesh = _cloud_layers(ax, frame); fig.colorbar(mesh, ax=ax, fraction=0.035, pad=0.02).set_label("Общая облачность, %")
-    elif frame.kind in {"precip_native", "precip_imerg", "precip_experimental"}:
-        mesh = _precip(ax, frame); fig.colorbar(mesh, ax=ax, fraction=0.035, pad=0.02).set_label("Осадки за 1 ч, мм")
-    elif frame.kind == "combo":
-        _cloud(ax, frame, alpha=0.5); mesh = _precip(ax, frame, alpha=0.9); fig.colorbar(mesh, ax=ax, fraction=0.035, pad=0.02).set_label("Осадки за 1 ч, мм")
-    else:
-        raise WeatherNext3Error(f"Неизвестный вид карты: {frame.kind}")
-    radius = float(frame.radius_km)
-    for ring in range(50, int(radius) + 1, 50):
-        ax.add_patch(Circle((0.0, 0.0), ring, fill=False, linewidth=0.45, alpha=0.3, color="#334155", zorder=8))
-    ax.scatter([0], [0], marker="+", s=90, linewidths=1.8, color="#dc2626", zorder=9)
-    ax.text(3, 3, frame.point_label[:42], fontsize=8, color="#7f1d1d", zorder=9)
-    ax.set(xlim=(-radius, radius), ylim=(-radius, radius), xlabel="км от точки", ylabel="км от точки")
-    ax.set_aspect("equal", adjustable="box"); ax.grid(alpha=0.12, linewidth=0.4)
-    ax.set_title(f"WeatherNext 3 · {KIND_TITLES.get(frame.kind, frame.kind)}\nrun {frame.run.init_time_utc:%Y-%m-%d %HZ} · +{frame.lead_hour} ч · valid {frame.valid_time_utc:%d.%m %H:%M UTC}", fontsize=11)
-    fig.text(0.5, 0.012, "WeatherNext 3 • Google • 64-member statistics • модельный прогноз, не радар и не спутниковое наблюдение", ha="center", va="bottom", fontsize=7, color="#475569")
-    fig.tight_layout(rect=(0.01, 0.035, 0.99, 0.98)); fig.savefig(output, dpi=dpi, facecolor="white"); plt.close(fig)
-    if not output.exists() or output.stat().st_size < 1024:
-        output.unlink(missing_ok=True); raise WeatherNext3Error("PNG-карта WeatherNext 3 не создана")
-    return output
+    try:
+        ax.set_facecolor("#f8fafc")
+        _draw_basemap(ax, overlay)
+        if frame.kind == "clouds":
+            mesh = _cloud(ax, frame); fig.colorbar(mesh, ax=ax, fraction=0.035, pad=0.02).set_label("Облачность, %")
+        elif frame.kind == "cloud_layers":
+            mesh = _cloud_layers(ax, frame); fig.colorbar(mesh, ax=ax, fraction=0.035, pad=0.02).set_label("Общая облачность, %")
+        elif frame.kind in {"precip_native", "precip_imerg", "precip_experimental"}:
+            mesh = _precip(ax, frame); fig.colorbar(mesh, ax=ax, fraction=0.035, pad=0.02).set_label("Осадки за 1 ч, мм")
+        elif frame.kind == "combo":
+            _cloud(ax, frame, alpha=0.5); mesh = _precip(ax, frame, alpha=0.9); fig.colorbar(mesh, ax=ax, fraction=0.035, pad=0.02).set_label("Осадки за 1 ч, мм")
+        elif frame.kind in {'temperature', 'temperature_spread', 'wind100', 'solar'}:
+            styles = {'temperature': ('coolwarm', -40, 40, 'Температура, °C'),
+                      'temperature_spread': ('viridis', 0, 15, 'p90−p10, °C (не вероятность)'),
+                      'wind100': ('viridis', 0, 40, 'Ветер 100 м, м/с'),
+                      'solar': ('inferno', 0, 1200, 'Средний поток за час, Вт/м²')}
+            cmap, low, high, label = styles[frame.kind]
+            xs, ys, values = _grid(frame, frame.kind)
+            mesh = ax.pcolormesh(xs, ys, np.ma.masked_invalid(values), shading='nearest', cmap=cmap, vmin=low, vmax=high, zorder=2)
+            fig.colorbar(mesh, ax=ax, fraction=.035, pad=.02, extend='both').set_label(label)
+        else:
+            raise WeatherNext3Error(f"Неизвестный вид карты: {frame.kind}")
+        radius = float(frame.radius_km)
+        for ring in range(50, int(radius) + 1, 50):
+            ax.add_patch(Circle((0.0, 0.0), ring, fill=False, linewidth=0.45, alpha=0.3, color="#334155", zorder=8))
+        ax.scatter([0], [0], marker="+", s=90, linewidths=1.8, color="#dc2626", zorder=9)
+        ax.text(3, 3, frame.point_label[:42], fontsize=8, color="#7f1d1d", zorder=9)
+        ax.set(xlim=(-radius, radius), ylim=(-radius, radius), xlabel="км от точки", ylabel="км от точки")
+        ax.set_aspect("equal", adjustable="box"); ax.grid(alpha=0.12, linewidth=0.4)
+        ax.set_title(f"WeatherNext 3 · {KIND_TITLES.get(frame.kind, frame.kind)} · {('p90−p10' if frame.kind == 'temperature_spread' else frame.statistic)}\nrun {frame.run.init_time_utc:%Y-%m-%d %HZ} · +{frame.lead_hour} ч · valid {frame.valid_time_utc:%d.%m %H:%M UTC}", fontsize=11)
+        fig.text(0.5, 0.012, "WeatherNext 3 • Google • 64-member statistics • модельный прогноз, не радар и не спутниковое наблюдение", ha="center", va="bottom", fontsize=7, color="#475569")
+        fig.tight_layout(rect=(0.01, 0.035, 0.99, 0.98)); fig.savefig(output, dpi=dpi, facecolor="white")
+        if not output.exists() or output.stat().st_size < 1024:
+            output.unlink(missing_ok=True); raise WeatherNext3Error("PNG-карта WeatherNext 3 не создана")
+        return output
+    finally:
+        plt.close(fig)
 
 
 def _encode_mp4(paths: list[Path], output: Path) -> None:
@@ -160,7 +176,7 @@ def _encode_mp4(paths: list[Path], output: Path) -> None:
     concat.write_text("\n".join(lines) + "\n", encoding="utf-8")
     cmd = [ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", str(concat), "-vf", f"fps={max(1, min(30, FPS))},scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p", "-an", "-c:v", "libx264", "-profile:v", "high", "-preset", "veryfast", "-crf", "21", "-movflags", "+faststart", str(output)]
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=180)
     finally:
         concat.unlink(missing_ok=True)
 
@@ -179,6 +195,11 @@ def write_weathernext3_animation(frames: list[WeatherNext3MapFrame], path: str |
     if len(frames) > 32:
         raise WeatherNext3Error("Анимация WeatherNext 3 ограничена 32 кадрами")
     first = frames[0]
+    signature = (first.run, first.requested_lat, first.requested_lon, first.radius_km, first.kind, first.statistic)
+    if any((frame.run, frame.requested_lat, frame.requested_lon, frame.radius_km, frame.kind, frame.statistic) != signature for frame in frames):
+        raise WeatherNext3Error('Нельзя смешивать циклы, области или статистики в одной анимации')
+    if any(b.lead_hour <= a.lead_hour for a, b in zip(frames, frames[1:])):
+        raise WeatherNext3Error('Сроки анимации должны строго возрастать')
     target = Path(path) if path else Path(CACHE_DIR) / "weathernext3" / f"wn3_{first.kind}_{first.run.init_time_utc:%Y%m%d%H}_{time.time_ns()}.mp4"
     target.parent.mkdir(parents=True, exist_ok=True)
     overlay = local_basemap_overlay(first.requested_lat, first.requested_lon, first.radius_km, basemap)
@@ -191,7 +212,7 @@ def write_weathernext3_animation(frames: list[WeatherNext3MapFrame], path: str |
         _emit(progress_callback, "encode", "Кодирую анимацию", total=len(frames))
         try:
             _encode_mp4(paths, target)
-        except (FileNotFoundError, subprocess.CalledProcessError):
+        except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
             target.unlink(missing_ok=True); target = target.with_suffix(".gif"); _encode_gif(paths, target)
     if not target.exists() or target.stat().st_size < 1024:
         target.unlink(missing_ok=True); raise WeatherNext3Error("Анимация WeatherNext 3 не создана")

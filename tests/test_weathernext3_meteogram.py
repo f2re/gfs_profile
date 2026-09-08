@@ -29,7 +29,7 @@ class MeteogramAdapterTests(unittest.TestCase):
         self.assertAlmostEqual(series.values("cloud_cover")[0],75.0,places=4)
         self.assertAlmostEqual(series.values("wind_direction_10m")[0],0.0,places=4)
         self.assertTrue(0.0 <= series.values("relative_humidity_2m")[0] <= 100.0)
-        self.assertEqual(series.member_count,64); self.assertEqual(series.init_time_utc.hour,0)
+        self.assertIsNone(series.member_count); self.assertTrue(series.ensemble_statistics_only); self.assertEqual(series.init_time_utc.hour,0)
         self.assertTrue(np.isnan(series.values("wind_gusts_10m")[0]))
 
 if __name__ == "__main__": unittest.main()

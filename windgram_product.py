@@ -65,6 +65,7 @@ class WindgramData:
     levels_hpa: list[int]
     cells: list[WindgramCell]
     param: str = "wind"
+    model_label: str = "GFS 0.25"
 
     def to_frame(self) -> pd.DataFrame:
         return pd.DataFrame([cell.__dict__ for cell in self.cells])

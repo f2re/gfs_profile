@@ -13,6 +13,12 @@ RUN = datetime(2026, 9, 7, 0, tzinfo=timezone.utc)
 class FakeExecutor:
     def __init__(self): self.calls = []
     def query(self, sql, parameters):
+        rows = self._query(sql, parameters)
+        if "lead_to" in parameters:
+            return [{**row, "forecast_hour": hour, "forecast_time": RUN + timedelta(hours=hour)} for hour in range(1, parameters["lead_to"]+1) for row in rows]
+        return rows
+
+    def _query(self, sql, parameters):
         self.calls.append((sql, dict(parameters)))
         if "MAX(f.hours) AS max_hour" in sql:
             return [{"init_time": RUN, "max_hour": 360}]
@@ -46,7 +52,7 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(point.station_grid_lat, 55.75); self.assertEqual(point.rows[0]["station_temperature_mean"], 274.15)
         point_sql = [sql for sql, _ in executor.calls if "AS grid_lon" in sql][0]
         station_sql = [sql for sql, _ in executor.calls if "station_head_temperature_2m_mean" in sql][0]
-        self.assertIn("t.init_time = @init_time", point_sql); self.assertIn("t.init_time = @init_time", station_sql); self.assertNotIn("SELECT *", point_sql.upper())
+        self.assertIn("init_time = @init_time", point_sql); self.assertIn("init_time = @init_time", station_sql); self.assertNotIn("SELECT *", point_sql.upper())
 
     def test_map_converts_fraction_and_metres(self):
         executor = FakeExecutor(); provider = self.make_provider(executor)

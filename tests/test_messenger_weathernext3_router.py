@@ -70,6 +70,7 @@ class WeatherNext3RouterTests(unittest.IsolatedAsyncioTestCase):
         )
 
     async def asyncTearDown(self):
+        await self.router.shutdown_wn3()
         self.tmp.cleanup()
 
     async def test_start_exposes_weathernext3_on_max_and_vk(self):
@@ -85,7 +86,9 @@ class WeatherNext3RouterTests(unittest.IsolatedAsyncioTestCase):
         gateway = Gateway("max")
         event = NormalizedEvent("max", "1", "COMMAND", "42", "chat", text="/wn3 Москва +24", command="wn3")
         await self.router.handle(event, gateway)
+        await self.router.wn3_wait_idle()
         self.assertEqual(self.built[-1][0:2], ("Москва", "point"))
+        await self.router.wn3_wait_idle()
         self.assertEqual(self.built[-1][2]["hours"], 24)
         self.assertTrue(any(call[0] == "edit_text" and "WN3 point" in call[1] for call in gateway.calls))
 
@@ -97,6 +100,7 @@ class WeatherNext3RouterTests(unittest.IsolatedAsyncioTestCase):
             command="wn3",
         )
         await self.router.handle(event, gateway)
+        await self.router.wn3_wait_idle()
         _, kind, params = self.built[-1]
         self.assertEqual(kind, "clouds")
         self.assertEqual((params["from"], params["to"], params["step"], int(params["radius"])), (1, 24, 3, 100))
@@ -128,6 +132,7 @@ class WeatherNext3RouterTests(unittest.IsolatedAsyncioTestCase):
             NormalizedEvent("max", "8", "CALLBACK", "42", "chat", callback_payload=encode_callback("wn3", "run"), callback_id="8"),
             gateway,
         )
+        await self.router.wn3_wait_idle()
         _, kind, params = self.built[-1]
         self.assertEqual(kind, "clouds")
         self.assertEqual((params["mode"], params["from"], params["to"]), ("single", 24, 24))

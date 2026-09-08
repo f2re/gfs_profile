@@ -105,7 +105,7 @@ animation            H.264 MP4, GIF fallback
 
 T/Td используют station head 0.05° при наличии; остальные surface fields — 0.1°. BigQuery `forecast.hours` начинается с +1 ч, поэтому WN3 map default — `+1…+48`.
 
-Вертикальные поля 0.25° доступны только через GCS Full Ensemble Zarr для 00/06/12/18 UTC и не подменяются BigQuery-полями. Подробно: [`docs/WEATHERNEXT3.md`](docs/WEATHERNEXT3.md).
+Вертикальная продукция подключена через `/wn3 kind=profile|aero|windgram`: GCS Full Ensemble Zarr, 13 уровней 0.25°, только 00/06/12/18 UTC, без подмены BigQuery-полями. Подробно: [`docs/WEATHERNEXT3.md`](docs/WEATHERNEXT3.md).
 
 ## Defaults
 
@@ -146,7 +146,7 @@ Telegram сохраняет совместимый native personal UX/storage, �
 
 ## Расписания
 
-Семь исходных GFS/common продуктов доступны для автоматической отправки. WeatherNext 3 пока запускается как интерактивный common product; `run/cycle` всегда определяется заново при запуске и не сохраняется в UI state.
+Семь исходных продуктов и WN3 поддерживают автоматическую отправку; `run/cycle` выбирается заново. Telegram WN3 использует common scheduler; прежние GFS-расписания сохранены отдельно.
 
 MAX/VK flow:
 
@@ -313,10 +313,19 @@ python -m gfs_core --lat 45.0355 --lon 38.9753 --lead 24
 python -m gfs_core --lat 55.75 --lon 37.62 --lead 384
 ```
 
-Для WN3 без credentials unit tests используют fake BigQuery executor; после настройки Analytics Hub smoke выполняется вручную через `/wn3`.
+WN3 проверяется на fake BigQuery, настоящем локальном Zarr и рендерерах. Приёмка Google-проекта: `python weathernext3_check.py --live`; эта операция может тарифицироваться.
 
 CI дополнительно выполняет live weather smoke.
 
 ## Важно
 
 Все продукты являются модельными. Диагностические icing/CAT/hazard layers — модельные прокси. WeatherNext 3 — экспериментальная AI-система Google и не является официальным warning source. Продукция проекта не заменяет официальные METAR/TAF/SIGMET/GAMET, NOTAM и эксплуатационное решение специалиста/командира.
+
+
+## WN3 RC: расширение 8 сентября 2026
+
+Общий сценарий Telegram/MAX/VK: owner-bound кнопки после перезапуска, пагинация +1…+360, статус/отмена, защита от двойного запуска, сценарии/повтор/расписания. BigQuery: точка, метеограмма PNG/DOCX/PDF, облачность по времени, три варианта осадков, карты/MP4/GIF/CSV, T2, p90−p10, ветер 100 м и радиация. GCS: profile/aero/windgram на 13 уровнях, средний профиль или member=0..63.
+
+Точные команды, подключение и ограничения: [WEATHERNEXT3.md](docs/WEATHERNEXT3.md). Google live-доступ и production-доставка не проверены этим RC. Маршрут WN3 и вероятности событий не заявляются реализованными.
+
+Для GCS-профиля, аэродиаграммы и ветровой матрицы WN3 требуется Python 3.11+. Python 3.10 поддерживает GFS и поверхностную WN3 через BigQuery; неподдерживаемые зависимости Zarr на нём не устанавливаются.

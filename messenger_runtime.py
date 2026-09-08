@@ -24,7 +24,7 @@ SERVICE = MessengerWebhookService.from_env(router=ROUTER)
 SCHEDULER = MessengerScheduler(
     store=ROUTER.schedule_store,
     executor=ScheduleExecutor(RESOURCES),
-    gateways=lambda: {"max": SERVICE.max_gateway, "vk": SERVICE.vk_gateway},
+    gateways=lambda: {"max": SERVICE.max_gateway, "vk": SERVICE.vk_gateway, "telegram": __import__("telegram_weathernext3").gateway_for_application(getattr(app.state, "telegram_application", None))},
 )
 ROUTER.schedule_executor = SCHEDULER.executor
 
@@ -41,6 +41,7 @@ def configure_process_resources(resources: RuntimeResources = RESOURCES) -> None
     telegram_meteogram.MAX_CONCURRENT_METEOGRAM = resources.meteogram_limit
     telegram_weathernext3.WN3_SEMAPHORE = resources.weathernext3_semaphore
     telegram_weathernext3.WN3_MAX_CONCURRENT = resources.weathernext3_limit
+    telegram_weathernext3.set_router(ROUTER)
     telegram_meteogram.search_location_candidates = resources.wrap_blocking_geocode(telegram_meteogram.search_location_candidates)
     legacy_web_module.build_profile = resources.wrap_blocking_gfs(legacy_web_module.build_profile)
 
@@ -113,6 +114,7 @@ async def lifespan(app: FastAPI):
         app.state.runtime_ready = False
         await SCHEDULER.shutdown()
         await SERVICE.tasks.shutdown()
+        await ROUTER.shutdown_wn3()
         try: await _stop_telegram(telegram_application)
         except Exception: LOG.exception("Telegram shutdown failed; runtime shutdown continues")
 
@@ -139,6 +141,7 @@ async def health() -> dict[str, object]:
         "features": ["saved_recipes", "settings", "schedules"],
         "scheduler": {"last_error": SCHEDULER.last_error},
         "resources": RESOURCES.snapshot(),
+        "weathernext3": __import__("weathernext3_status").status(),
     }
 
 
@@ -149,5 +152,7 @@ async def ready():
     return await health()
 
 
+from messenger.weathernext3_api import router as wn3_api_router
+app.include_router(wn3_api_router)
 app.include_router(SERVICE.api_router())
 app.mount("/", legacy_web_app)

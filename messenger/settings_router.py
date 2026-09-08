@@ -30,6 +30,7 @@ PRODUCT_TITLES = {
     "map": "Карта",
     "meteogram": "Метеограмма",
     "route": "Маршрут",
+    "weathernext3": "WeatherNext 3",
 }
 
 
@@ -84,6 +85,8 @@ def _recipe_label(recipe: UserRecipe) -> str:
         if endpoints:
             return f"{marker} {title}: {endpoints[0].get('label', 'старт')} → {endpoints[1].get('label', 'финиш')}"[:58]
     point = recipe.point or {}
+    if recipe.product == "weathernext3":
+        title += " / " + str(recipe.params.get("kind", "point"))
     return f"{marker} {title}: {point.get('label', 'точка')}"[:58]
 
 

@@ -27,13 +27,23 @@ class ScheduleExecutor:
         self.resources = resources or get_runtime_resources()
 
     def _gate(self, product: str):
+        if product == "weathernext3":
+            return self.resources.weathernext3_semaphore
         return self.resources.meteogram_semaphore if product == "meteogram" else self.resources.gfs_semaphore
 
     async def execute(self, item: MessengerSchedule, gateway: MessengerGateway) -> bool:
         result = None
         try:
             async with self._gate(item.product):
-                result = await asyncio.to_thread(build_snapshot_result, item.snapshot())
+                worker = asyncio.create_task(asyncio.to_thread(build_snapshot_result, item.snapshot()))
+                try:
+                    result = await asyncio.shield(worker)
+                except asyncio.CancelledError:
+                    try:
+                        result = await worker
+                    except Exception:
+                        pass
+                    raise
             await gateway.send_text(item.chat_id, "🕒 По расписанию\n" + result.summary)
             for attachment in result.attachments:
                 if attachment.kind == "image":

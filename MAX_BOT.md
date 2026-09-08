@@ -112,7 +112,7 @@ combo
 
 WN3 BigQuery surface grid — 0.1°. T/Td в point/meteogram используют station head 0.05° при наличии. Ensemble statistics: mean/p10/p25/p50/p75/p90 по 64 членам. Фактический init определяется по реально опубликованной таблице и выводится как `Run ...Z`.
 
-Вертикальные WN3 fields в BigQuery отсутствуют; `/profile` и `/aero` не подменяются и остаются GFS до отдельного GCS provider.
+Вертикальные WN3-поля читаются отдельным GCS provider через `/wn3 kind=profile|aero|windgram`. Обычные GFS-команды не меняют модель.
 
 ### `/map`
 
@@ -147,7 +147,7 @@ WEATHERNEXT3_BIGQUERY_PROJECT=<project-with-linked-dataset>
 WEATHERNEXT3_BIGQUERY_DATASET=<linked-dataset>
 WEATHERNEXT3_BIGQUERY_BILLING_PROJECT=
 WEATHERNEXT3_BIGQUERY_LOCATION=
-WEATHERNEXT3_BQ_MAX_BYTES_BILLED=0
+WEATHERNEXT3_BQ_MAX_BYTES_BILLED=1000000000
 WEATHERNEXT3_CACHE_TTL=1800
 MAX_CONCURRENT_WEATHERNEXT3=2
 GOOGLE_APPLICATION_CREDENTIALS=/path/outside/repo/credentials.json
@@ -165,11 +165,11 @@ MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
 
 `/settings` позволяет выбрать active point, посмотреть последние точки, запускать/закреплять/удалять recipes и очищать персональные настройки. Route endpoints сохраняются в history, но не заменяют active point. `run/cycle` не сохраняются в recipes.
 
-WeatherNext 3 использует общую active point, но в этой версии отдельные WN3 recipes/schedules не записывает.
+WeatherNext 3 использует общую active point и записывает сценарии с параметрами, но без фактического init.
 
 ## 7. Расписания
 
-`/schedule` поддерживает семь исходных common продуктов. Schedule snapshot не содержит `run/cycle`; каждый automatic run получает актуальные данные. WeatherNext 3 пока интерактивный раздел.
+`/schedule` поддерживает семь исходных common продуктов. Schedule snapshot не содержит `run/cycle`; каждый automatic run получает актуальные данные. WN3 также поддерживает common schedules.
 
 Подробно: [`docs/MESSENGER_SCHEDULES.md`](docs/MESSENGER_SCHEDULES.md).
 
@@ -230,3 +230,12 @@ sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
 ```
 
 Все GFS-результаты должны показывать фактический run/cycle и маркировку модели. WN3 должен показывать фактический init/valid UTC и маркировку «модельный прогноз, не наблюдение/радар/спутниковый снимок».
+
+
+## WN3 RC: расширение 8 сентября 2026
+
+Общий сценарий Telegram/MAX/VK: owner-bound кнопки после перезапуска, пагинация +1…+360, статус/отмена, защита от двойного запуска, сценарии/повтор/расписания. BigQuery: точка, метеограмма PNG/DOCX/PDF, облачность по времени, три варианта осадков, карты/MP4/GIF/CSV, T2, p90−p10, ветер 100 м и радиация. GCS: profile/aero/windgram на 13 уровнях, средний профиль или member=0..63.
+
+Точные команды, подключение и ограничения: [WEATHERNEXT3.md](docs/WEATHERNEXT3.md). Google live-доступ и production-доставка не проверены этим RC. Маршрут WN3 и вероятности событий не заявляются реализованными.
+
+Для GCS-профиля, аэродиаграммы и ветровой матрицы WN3 требуется Python 3.11+. Python 3.10 поддерживает GFS и поверхностную WN3 через BigQuery; неподдерживаемые зависимости Zarr на нём не устанавливаются.

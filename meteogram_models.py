@@ -93,6 +93,7 @@ class MeteogramSeries:
     expected_member_count: int | None = None
     warnings: list[str] = field(default_factory=list)
     init_time_utc: datetime | None = None
+    ensemble_statistics_only: bool = False
 
     def values(self, name: str) -> np.ndarray:
         return self.fields.get(name, np.full(len(self.times), np.nan, dtype=float))

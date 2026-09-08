@@ -47,14 +47,14 @@ def _nearest_rows(df, levels: tuple[int, ...], tolerance_hpa: float = 35.0):
 
 def _profile_title(result: ProfileResult) -> str:
     return (
-        f"GFS 0.25 · вертикальный профиль · запуск {result.run.date} {result.run.cycle}Z · "
+        f"{result.model_label} · вертикальный профиль · запуск {result.run.date} {result.run.cycle}Z · "
         f"срок +{result.lead_hour} ч · узел {result.grid_lat:.2f}, {result.grid_lon:.2f}"
     )
 
 
 def _diagnostic_text(result: ProfileResult, df) -> str:
     lines = [
-        "Модельная точка GFS",
+        f"Модельная точка {result.model_label}",
         f"действительно {result.valid_time_utc:%Y-%m-%d %H:%M UTC}",
     ]
     if "wind_speed_ms" in df:
@@ -141,7 +141,7 @@ def write_profile_png(result: ProfileResult) -> Path:
         for axis in axes:
             _setup_pressure_axis(axis, df)
 
-        add_footer(fig, "Модельный профиль GFS 0.25; Zg — геопотенциальная высота над средним уровнем моря (MSL), не AGL.")
+        add_footer(fig, f"Модельный профиль {result.model_label}; Zg — геопотенциальная высота над средним уровнем моря (MSL), не AGL.")
         fig.tight_layout(rect=(0, 0.045, 1, 0.94))
         fig.savefig(out_path, dpi=170, bbox_inches="tight")
     except Exception:

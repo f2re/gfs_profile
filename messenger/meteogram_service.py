@@ -79,6 +79,8 @@ def meteogram_repeat_command(point: Any, params: dict[str, Any]) -> str:
 
 def _member_text(series: Any) -> tuple[str, str]:
     source = series.source
+    if getattr(series, "ensemble_statistics_only", False):
+        return "Ансамбль: опубликованные статистики (номинально 64 члена)", "Число реально доступных членов не передано"
     if not source.ensemble:
         return "", ""
     observed = int(series.member_count or 0)
@@ -128,6 +130,7 @@ def build_meteogram_product_result(
     output_format: str = "png",
     *,
     progress_callback: Callable[[ProgressEvent], None] | None = None,
+    series: Any | None = None,
 ) -> CommonProductResult:
     params = normalize_meteogram_params({"source": source_id, "days": days, "format": output_format})
     source = source_for_id(params["source"])
@@ -143,7 +146,11 @@ def build_meteogram_product_result(
     report_result = None
     attachment_paths: list[Path] = []
     try:
-        series = fetch_meteogram(
+        fetch = fetch_meteogram
+        if source.source_id == "weathernext3" and series is None:
+            from .runtime_resources import get_runtime_resources
+            fetch = get_runtime_resources().wrap_blocking_weathernext3(fetch)
+        series = series if series is not None else fetch(
             source.source_id,
             str(point.label),
             float(point.lat),
@@ -193,6 +200,7 @@ def build_meteogram_product_result(
             "grid_lon": series.grid_lon,
             "timezone": series.timezone,
             "member_count": series.member_count,
+            "ensemble_statistics_only": bool(getattr(series, "ensemble_statistics_only", False)),
             "expected_member_count": series.expected_member_count,
             "cycle": init.isoformat() if init is not None else None,
             "init_time_utc": init.isoformat() if init is not None else None,

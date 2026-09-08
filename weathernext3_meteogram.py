@@ -10,6 +10,8 @@ import numpy as np
 
 from meteogram_models import MeteogramSeries, source_for_id
 from weathernext3_provider import WeatherNext3Provider, provider_from_env
+from weathernext3_surface import surface_rows
+from weathernext3_math import wind_from, relative_humidity
 
 Progress = Callable[[str], None] | None
 
@@ -33,13 +35,7 @@ def _station_or_grid(rows: list[dict[str, Any]], station_key: str, grid_key: str
     return np.where(np.isfinite(station), station, grid)
 
 
-def _relative_humidity(temp_c: np.ndarray, dewpoint_c: np.ndarray) -> np.ndarray:
-    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
-        gamma_td = (17.625 * dewpoint_c) / (243.04 + dewpoint_c)
-        gamma_t = (17.625 * temp_c) / (243.04 + temp_c)
-        rh = 100.0 * np.exp(gamma_td - gamma_t)
-    rh[~np.isfinite(temp_c) | ~np.isfinite(dewpoint_c)] = np.nan
-    return np.clip(rh, 0.0, 100.0)
+_relative_humidity = relative_humidity
 
 
 def _astronomical_is_day(times: list[Any], lat: float, lon: float) -> np.ndarray:
@@ -59,11 +55,7 @@ def _astronomical_is_day(times: list[Any], lat: float, lon: float) -> np.ndarray
     return np.asarray(result, dtype=float)
 
 
-def _wind_direction(u: np.ndarray, v: np.ndarray) -> np.ndarray:
-    with np.errstate(invalid="ignore"):
-        result = (np.degrees(np.arctan2(-u, -v)) + 360.0) % 360.0
-    result[~np.isfinite(u) | ~np.isfinite(v)] = np.nan
-    return result
+_wind_direction = wind_from
 
 
 def _stat_map(rows: list[dict[str, Any]], prefix: str, *, scale: float = 1.0, offset: float = 0.0, station_prefix: str | None = None) -> dict[str, np.ndarray]:
@@ -92,53 +84,50 @@ def fetch_weathernext3_meteogram(point_label: str, lat: float, lon: float, days:
     if progress:
         progress("Преобразую статистики 64-членного ансамбля WeatherNext 3")
 
-    times = [_to_datetime(row.get("forecast_time")) for row in rows]
-    temperature = _station_or_grid(rows, "station_temperature_mean", "temperature_mean")
-    dewpoint = _station_or_grid(rows, "station_dewpoint_mean", "dewpoint_mean")
-    u = _series(rows, "wind_u_mean")
-    v = _series(rows, "wind_v_mean")
-    precipitation = _series(rows, "precip_native_mean", scale=1000.0)
+    converted = surface_rows(point)
+    def field(key):
+        return np.array([row.get(key, np.nan) for row in converted], dtype=float)
+    times = [row['valid_utc'] for row in converted]
+    temperature = field('temperature_mean_c')
+    dewpoint = field('dewpoint_mean_c')
+    precipitation = field('precip_native_mean_mm')
     fields = {
-        "temperature_2m": temperature,
-        "dew_point_2m": dewpoint,
-        "relative_humidity_2m": _relative_humidity(temperature, dewpoint),
-        "precipitation": precipitation,
-        "precipitation_intensity": precipitation.copy(),
-        "pressure_msl": _series(rows, "pressure_mean", scale=0.01),
-        "cloud_cover": _series(rows, "cloud_total_mean", scale=100.0),
-        "cloud_cover_low": _series(rows, "cloud_low_mean", scale=100.0),
-        "cloud_cover_mid": _series(rows, "cloud_mid_mean", scale=100.0),
-        "cloud_cover_high": _series(rows, "cloud_high_mean", scale=100.0),
-        "wind_speed_10m": _series(rows, "wind_speed_mean"),
-        "wind_direction_10m": _wind_direction(u, v),
-        "wind_gusts_10m": np.full(len(rows), np.nan, dtype=float),
-        "weather_code": np.full(len(rows), np.nan, dtype=float),
+        "temperature_2m": temperature, "dew_point_2m": dewpoint,
+        "relative_humidity_2m": field('rh_from_mean_pct'),
+        "precipitation": precipitation, "precipitation_intensity": precipitation.copy(),
+        "pressure_msl": field('pressure_msl_hpa'),
+        "cloud_cover": field('cloud_total_pct'), "cloud_cover_low": field('cloud_low_pct'),
+        "cloud_cover_mid": field('cloud_mid_pct'), "cloud_cover_high": field('cloud_high_pct'),
+        "wind_speed_10m": field('wind_speed_mean_ms'),
+        "wind_direction_10m": field('wind_from_mean_vector_deg'),
+        "wind_gusts_10m": np.full(len(rows), np.nan), "weather_code": np.full(len(rows), np.nan),
         "is_day": _astronomical_is_day(times, float(lat), float(lon)),
-        "ensemble_member_count": np.full(len(rows), 64.0, dtype=float),
-        "precipitation_imerg": _series(rows, "precip_imerg_mean", scale=1000.0),
-        "precipitation_experimental": _series(rows, "precip_experimental_mean", scale=1000.0),
-        "surface_solar_radiation_1hr": _series(rows, "solar_mean"),
+        # BigQuery does not provide per-time valid-member counts.
+        "ensemble_member_count": np.full(len(rows), np.nan),
+        "precipitation_imerg": field('precip_imerg_mean_mm'),
+        "precipitation_experimental": field('precip_experimental_mean_mm'),
+        "surface_solar_radiation_1hr": field('solar_mean_wm2') * 3600,
     }
-    stats = {
-        "temperature_2m": _stat_map(rows, "temperature", offset=-273.15, station_prefix="station_temperature"),
-        "dew_point_2m": _stat_map(rows, "dewpoint", offset=-273.15, station_prefix="station_dewpoint"),
-        "precipitation": _stat_map(rows, "precip_native", scale=1000.0),
-        "wind_speed_10m": _stat_map(rows, "wind_speed"),
-    }
+    stats = {}
+    for target, prefix, unit in (('temperature_2m', 'temperature', 'c'), ('dew_point_2m', 'dewpoint', 'c'),
+                                  ('precipitation', 'precip_native', 'mm'), ('wind_speed_10m', 'wind_speed', 'ms')):
+        stats[target] = {('q' + suffix[1:] if suffix.startswith('p') else suffix): field(f'{prefix}_{suffix}_{unit}')
+                         for suffix in ('mean', 'p10', 'p25', 'p50', 'p75', 'p90')}
+
     for key in ("q10", "q25", "q50", "q75", "q90", "mean"):
         stats["precipitation"][f"{key}_intensity"] = stats["precipitation"][key].copy()
-    warnings = [
+    warnings = list(getattr(point, "warnings", [])) + [
         "WeatherNext 3 BigQuery: готовые статистики 64-членного ансамбля, без загрузки отдельных членов",
         "T/Td используют station head 0.05° при наличии; остальные поля — сетка 0.1°",
-        "Порывы и weather code в BigQuery surface statistics отсутствуют",
+        "Порывы и weather code отсутствуют; RH из средних T/Td — диагностическая оценка, не среднее RH",
+        "Период от init; число доступных членов и вероятности событий BigQuery не передаёт",
     ]
     return MeteogramSeries(
         source=source,
         point_label=str(point_label), requested_lat=float(lat), requested_lon=float(lon),
-        grid_lat=point.station_grid_lat if point.station_grid_lat is not None else point.grid_lat,
-        grid_lon=point.station_grid_lon if point.station_grid_lon is not None else point.grid_lon,
+        grid_lat=point.grid_lat, grid_lon=point.grid_lon,
         timezone="UTC", times=times, fields=fields, stats=stats,
-        retrieved_at_utc=datetime.now(timezone.utc), member_count=64, expected_member_count=64,
+        retrieved_at_utc=datetime.now(timezone.utc), member_count=None, expected_member_count=64, ensemble_statistics_only=True,
         warnings=warnings, init_time_utc=point.run.init_time_utc,
     )
 

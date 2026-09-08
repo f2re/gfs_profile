@@ -1,370 +1,190 @@
+"""Thin Telegram transport for the same WN3 router used by MAX and VK."""
 from __future__ import annotations
 
-"""Native Telegram adapter for the common WeatherNext 3 service."""
+from functools import partial
+from types import SimpleNamespace
 
-import asyncio
-from threading import Lock
-from pathlib import Path
-from typing import Any
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
+from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler, CommandHandler, MessageHandler, filters
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
-from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
-
-from geocode import GeoPoint
-from geocode_choices import search_location_candidates
-from messenger.profile_service import cleanup_product_result
+from messenger.callback_codec import decode_callback, encode_callback
+from messenger.contracts import Location, NormalizedEvent, PlatformMessage
 from messenger.runtime_resources import get_runtime_resources
-from messenger.weathernext3_service import (
-    DEFAULT_WN3_PARAMS,
-    MAP_KINDS,
-    build_weathernext3_product_result,
-    normalize_wn3_params,
-    parse_weathernext3_input,
-    wn3_kind_title,
-)
+from messenger.weathernext3_router import WeatherNext3MessengerRouter, _card_keyboard as common_keyboard
+from messenger.weathernext3_service import DEFAULT_WN3_PARAMS, normalize_wn3_params
 from telegram_file_send import reply_png_file
-from telegram_user_state import get_active_location, get_recent_locations, remember_location
-from user_location_session import match_recent_location_button, recent_location_button_label
 
-SESSION_KEY = "weathernext3_wizard"
+SESSION_KEY = 'weathernext3_wizard'
 _RESOURCES = get_runtime_resources()
 WN3_SEMAPHORE = _RESOURCES.weathernext3_semaphore
-GEOCODE_SEMAPHORE = _RESOURCES.geocode_semaphore
 WN3_MAX_CONCURRENT = _RESOURCES.weathernext3_limit
 _INSTALLED = False
-
-KIND_BUTTONS = (
-    ("point", "🌡 Прогноз"), ("meteogram", "📊 Метеограмма"),
-    ("clouds", "☁ Облачность"), ("cloud_layers", "☁ Слои"),
-    ("precip_native", "🌧 Native"), ("precip_imerg", "🛰 IMERG"),
-    ("precip_experimental", "🧪 Experimental"), ("combo", "🗺 Облака+осадки"),
-)
+_ROUTER = None
 
 
-def _uid(update: Update) -> int:
-    return int(update.effective_user.id) if update.effective_user else 0
+def set_router(router):
+    global _ROUTER
+    _ROUTER = router
 
 
-def _pack_point(point: Any) -> dict[str, Any]:
-    return {"lat": float(point.lat), "lon": float(point.lon), "label": str(point.label), "source": str(getattr(point, "source", "telegram"))}
+def get_router():
+    global _ROUTER
+    if _ROUTER is None:
+        _ROUTER = get_runtime_resources().configure_router(WeatherNext3MessengerRouter.default())
+    return _ROUTER
 
 
-def _unpack_point(value: dict[str, Any]) -> GeoPoint:
-    return GeoPoint(float(value["lat"]), float(value["lon"]), str(value.get("label", "точка")), str(value.get("source", "telegram")))
-
-
-def _state(context: ContextTypes.DEFAULT_TYPE) -> dict[str, Any] | None:
-    value = context.user_data.get(SESSION_KEY)
-    return value if isinstance(value, dict) else None
-
-
-def _save(context: ContextTypes.DEFAULT_TYPE, *, point: Any | None = None, params: dict[str, Any] | None = None, step: str = "params", candidates: list[Any] | None = None) -> dict[str, Any]:
-    state = {
-        "step": step,
-        "params": normalize_wn3_params(params or DEFAULT_WN3_PARAMS),
-        "point": _pack_point(point) if point is not None else None,
-        "candidates": [_pack_point(item) for item in (candidates or [])],
-    }
-    context.user_data[SESSION_KEY] = state
-    return state
-
-
-def _point_keyboard(user_id: int) -> ReplyKeyboardMarkup:
-    rows: list[list[KeyboardButton]] = [[KeyboardButton("📍 Моя геолокация", request_location=True)]]
-    recent = get_recent_locations(user_id, 4)
-    for index in range(0, len(recent), 2):
-        rows.append([KeyboardButton(recent_location_button_label(item)) for item in recent[index:index + 2]])
-    rows.append([KeyboardButton("✖ Отмена")])
-    return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=True, selective=True, input_field_placeholder="Город или координаты")
-
-
-def _card_text(point: GeoPoint, params: dict[str, Any]) -> str:
-    p = normalize_wn3_params(params)
-    if p["kind"] == "point":
-        detail = f"Срок +{p['hours']} ч"
-    elif p["kind"] == "meteogram":
-        detail = f"{p['days']} суток · p10/p25/p50/p75/p90"
-    else:
-        mode = {"animation": "анимация", "single": "одна карта", "series": "серия PNG"}[p["mode"]]
-        detail = f"{mode} · +{p['from']}…+{p['to']} ч · шаг {p['step']} ч · {int(p['radius'])} км"
-    return (
-        "🛰 WeatherNext 3\n"
-        f"📍 {point.label} · {point.lat:.4f}, {point.lon:.4f}\n"
-        f"{wn3_kind_title(p['kind'])} · {detail}\n\n"
-        "64-членный ансамбль · T/Td station head 0.05° · surface/maps 0.1°."
-    )
-
-
-def _card_keyboard(params: dict[str, Any]) -> InlineKeyboardMarkup:
-    p = normalize_wn3_params(params)
-    rows = [[InlineKeyboardButton("▶ Построить", callback_data="wn3:run")]]
-    for index in range(0, len(KIND_BUTTONS), 2):
-        row = []
-        for key, label in KIND_BUTTONS[index:index + 2]:
-            row.append(InlineKeyboardButton(("✓ " if key == p["kind"] else "") + label, callback_data=f"wn3:kind:{key}"))
-        rows.append(row)
-    if p["kind"] == "point":
-        rows.append([InlineKeyboardButton(("✓ " if p["hours"] == value else "") + f"+{value}ч", callback_data=f"wn3:hours:{value}") for value in (6, 12, 24, 48)])
-    elif p["kind"] == "meteogram":
-        rows.append([InlineKeyboardButton(("✓ " if p["days"] == value else "") + f"{value} сут", callback_data=f"wn3:days:{value}") for value in (3, 5, 10, 15)])
-    else:
-        if p["mode"] == "single":
-            rows.append([InlineKeyboardButton(("✓ " if p["from"] == value else "") + f"+{value}ч", callback_data=f"wn3:lead:{value}") for value in (6, 12, 24, 48)])
-        else:
-            rows.append([InlineKeyboardButton(("✓ " if p["to"] == value else "") + f"до +{value}", callback_data=f"wn3:to:{value}") for value in (24, 48, 72, 120)])
-            rows.append([InlineKeyboardButton(("✓ " if p["step"] == value else "") + f"шаг {value}", callback_data=f"wn3:step:{value}") for value in (1, 3, 6, 12)])
-        rows.append([InlineKeyboardButton(("✓ " if int(p["radius"]) == value else "") + f"{value} км", callback_data=f"wn3:radius:{value}") for value in (100, 150, 250, 400)])
-        rows.append([
-            InlineKeyboardButton(("✓ " if p["mode"] == "animation" else "") + "Анимация", callback_data="wn3:mode:animation"),
-            InlineKeyboardButton(("✓ " if p["mode"] == "single" else "") + "Одна", callback_data="wn3:mode:single"),
-            InlineKeyboardButton(("✓ " if p["mode"] == "series" else "") + "PNG", callback_data="wn3:mode:series"),
-        ])
-    rows.append([InlineKeyboardButton("📍 Другая точка", callback_data="wn3:point"), InlineKeyboardButton("🏠 Главное меню", callback_data="wn3:home")])
+def telegram_markup(keyboard):
+    if keyboard is None:
+        return None
+    if any(button.action == 'request_location' for row in keyboard.rows for button in row):
+        return ReplyKeyboardMarkup([[KeyboardButton('📍 Геолокация', request_location=True)], [KeyboardButton('✖ Отмена')]],
+                                   resize_keyboard=True, one_time_keyboard=True)
+    rows = []
+    for row in keyboard.rows:
+        buttons = []
+        for button in row:
+            if button.action == 'callback':
+                buttons.append(InlineKeyboardButton(button.text, callback_data=button.payload))
+            elif button.action == 'link':
+                buttons.append(InlineKeyboardButton(button.text, url=button.url))
+        if buttons:
+            rows.append(buttons)
     return InlineKeyboardMarkup(rows)
 
 
-async def _show_card(message, context: ContextTypes.DEFAULT_TYPE, point: GeoPoint, params: dict[str, Any]) -> None:
-    state = _save(context, point=point, params=params)
-    await message.reply_text(_card_text(point, state["params"]), reply_markup=_card_keyboard(state["params"]))
+class TelegramGateway:
+    platform = 'telegram'
+
+    def __init__(self, bot):
+        self.bot = bot
+
+    def remember_point(self, user_id, point):
+        from telegram_user_state import remember_location
+        remember_location(int(user_id), point, activate=True)
+
+    def _message(self, chat, response):
+        return PlatformMessage(self.platform, str(chat), str(response.message_id))
+
+    async def send_text(self, chat_id, text, *, keyboard=None, parse_mode=None):
+        response = await self.bot.send_message(chat_id=chat_id, text=text, reply_markup=telegram_markup(keyboard), parse_mode=parse_mode)
+        return self._message(chat_id, response)
+
+    async def edit_text(self, chat_id, message_id, text, *, keyboard=None, parse_mode=None):
+        await self.bot.edit_message_text(chat_id=chat_id, message_id=int(message_id), text=text,
+                                         reply_markup=telegram_markup(keyboard), parse_mode=parse_mode)
+        return PlatformMessage(self.platform, str(chat_id), str(message_id))
+
+    async def send_image(self, chat_id, path, *, caption=''):
+        message = SimpleNamespace(reply_photo=partial(self.bot.send_photo, chat_id=chat_id),
+                                  reply_document=partial(self.bot.send_document, chat_id=chat_id))
+        await reply_png_file(message, path, caption=caption[:1000])
+        return PlatformMessage(self.platform, str(chat_id), '')
+
+    async def send_file(self, chat_id, path, *, caption='', filename=None):
+        with path.open('rb') as handle:
+            result = await self.bot.send_document(chat_id=chat_id, document=handle, filename=filename or path.name, caption=caption[:1000])
+        return self._message(chat_id, result)
+
+    async def send_animation(self, chat_id, path, *, caption=''):
+        with path.open('rb') as handle:
+            result = await self.bot.send_animation(chat_id=chat_id, animation=handle, caption=caption[:1000], read_timeout=120, write_timeout=120)
+        return self._message(chat_id, result)
+
+    async def answer_callback(self, event, *, text=None):
+        if event.callback_id:
+            await self.bot.answer_callback_query(callback_query_id=event.callback_id, text=text)
 
 
-async def _ask_point(message, context: ContextTypes.DEFAULT_TYPE, params: dict[str, Any]) -> None:
-    _save(context, params=params, step="await_point")
-    await message.reply_text("🛰 WeatherNext 3\nУкажите город, координаты или отправьте геолокацию.", reply_markup=_point_keyboard(_uid_from_message(message)))
-
-
-def _uid_from_message(message) -> int:
-    user = getattr(message, "from_user", None)
-    return int(getattr(user, "id", 0) or 0)
-
-
-async def _resolve_point(message, context: ContextTypes.DEFAULT_TYPE, query: str, params: dict[str, Any], *, direct: bool = False) -> None:
-    user_id = _uid_from_message(message)
-    recent = match_recent_location_button(user_id, query)
-    if recent is not None:
-        if direct:
-            await _run(message, context, recent, params)
-        else:
-            await _show_card(message, context, recent, params)
-        return
-    async with GEOCODE_SEMAPHORE:
-        candidates = await asyncio.to_thread(search_location_candidates, query, 5)
-    if not candidates:
-        await message.reply_text("Точка не найдена. Уточните город или используйте координаты.")
-        return
-    if len(candidates) > 1:
-        state = _save(context, params=params, step="choose_place", candidates=candidates[:5])
-        state["direct"] = bool(direct)
-        rows = [[InlineKeyboardButton(str(item.label)[:58], callback_data=f"wn3:place:{index}")] for index, item in enumerate(candidates[:5])]
-        rows.append([InlineKeyboardButton("Отмена", callback_data="wn3:cancel")])
-        await message.reply_text("Найдено несколько точек. Выберите нужную:", reply_markup=InlineKeyboardMarkup(rows))
-        return
-    point = candidates[0]
-    if direct:
-        await _run(message, context, point, params)
-    else:
-        await _show_card(message, context, point, params)
-
-
-async def _send_result(message, result) -> None:
-    for attachment in result.attachments:
-        path = Path(attachment.path)
-        if attachment.kind == "image":
-            await reply_png_file(message, path, caption=attachment.caption, prefer_photo=True)
-        elif attachment.kind == "animation":
-            with path.open("rb") as handle:
-                await message.reply_animation(animation=handle, caption=attachment.caption)
-        else:
-            with path.open("rb") as handle:
-                await message.reply_document(document=handle, caption=attachment.caption, filename=attachment.filename)
-
-
-async def _run(message, context: ContextTypes.DEFAULT_TYPE, point: GeoPoint, params: dict[str, Any]) -> None:
-    p = normalize_wn3_params(params)
-    _save(context, point=point, params=p)
-    status = await message.reply_text(f"⏳ WeatherNext 3 · {wn3_kind_title(p['kind'])}\n📍 {point.label}\nПроверяю опубликованный init…", reply_markup=ReplyKeyboardRemove())
-    result = None
-    snapshot = {"event": None}
-    lock = Lock()
-    stopped = False
-
-    def progress(event) -> None:
-        with lock:
-            snapshot["event"] = event
-
-    async def reporter() -> None:
-        last = ""
-        while not stopped:
-            with lock:
-                event = snapshot["event"]
-            if event is not None:
-                if event.stage in {"check", "fetch_start"}:
-                    body = "1/4 Проверяю опубликованный init…"
-                elif event.stage in {"fetch", "format"}:
-                    body = f"2/4 {event.message or 'Получаю BigQuery данные'}…"
-                elif event.stage in {"render", "plot_start", "plot_frame"}:
-                    body = f"3/4 Рисую кадры {event.current}/{event.total}…" if event.current and event.total else f"3/4 {event.message or 'Рисую продукт'}…"
-                elif event.stage == "encode":
-                    body = "4/4 Кодирую анимацию…"
-                else:
-                    body = event.message or "Выполняю расчёт…"
-                text = f"⏳ WeatherNext 3 · {wn3_kind_title(p['kind'])}\n📍 {point.label}\n{body}"
-                if text != last:
-                    try:
-                        await status.edit_text(text)
-                        last = text
-                    except Exception:
-                        pass
-            await asyncio.sleep(1.0)
-
-    task = asyncio.create_task(reporter())
-    try:
-        async with WN3_SEMAPHORE:
-            result = await asyncio.to_thread(
-                build_weathernext3_product_result,
-                point,
-                p["kind"],
-                progress_callback=progress,
-                **{key: value for key, value in p.items() if key != "kind"},
-            )
-        stopped = True
-        await task
-        await status.edit_text(result.summary)
-        await _send_result(message, result)
-        if result.repeat_command:
-            await message.reply_text(f"📋 Повторить:\n{result.repeat_command}")
-        remember_location(_uid_from_message(message), point, activate=True)
-    except Exception as exc:
-        stopped = True
-        await task
-        await status.edit_text(f"Ошибка WeatherNext 3: {exc}")
-    finally:
-        if result is not None:
-            cleanup_product_result(result)
-
-
-async def wn3_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+def _normalized(update):
+    user, chat = update.effective_user, update.effective_chat
+    if user is None or chat is None:
+        return None
     message = update.effective_message
-    if message is None:
-        return
-    args = " ".join(context.args or []).strip()
-    if not args:
-        active = get_active_location(_uid(update))
-        if active is not None:
-            await _show_card(message, context, GeoPoint(active.lat, active.lon, active.label, active.source), dict(DEFAULT_WN3_PARAMS))
-        else:
-            await _ask_point(message, context, dict(DEFAULT_WN3_PARAMS))
-        raise ApplicationHandlerStop
-    active = get_active_location(_uid(update))
-    if active is not None and (args.startswith("+") or any(args.startswith(prefix) for prefix in ("kind=", "days=", "hours=", "lead=", "from=", "to=", "step=", "radius=", "mode=", "basemap=", "base="))):
-        parsed = parse_weathernext3_input(f"0 0 {args}")
-        await _run(message, context, GeoPoint(active.lat, active.lon, active.label, active.source), parsed.params)
-        raise ApplicationHandlerStop
-    try:
-        parsed = parse_weathernext3_input(args)
-    except Exception as exc:
-        await message.reply_text(f"Ошибка WeatherNext 3: {exc}")
-        raise ApplicationHandlerStop
-    await _resolve_point(message, context, parsed.location_query, parsed.params, direct=parsed.direct_run)
-    raise ApplicationHandlerStop
+    callback = update.callback_query
+    text = message.text if message else None
+    command = text.split()[0].lstrip('/').split('@')[0] if text and text.startswith('/') else None
+    location = getattr(message, 'location', None)
+    payload = callback.data if callback else None
+    if payload == 'home:wn3':
+        payload = encode_callback('product', 'open', 'weathernext3')
+    elif payload and payload.startswith('wn3:'):
+        parts = payload.split(':', 2)
+        payload = encode_callback('wn3', parts[1], parts[2] if len(parts) > 2 else None)
+    return NormalizedEvent('telegram', str(update.update_id), 'CALLBACK' if callback else 'LOCATION' if location else 'COMMAND' if command else 'TEXT',
+        str(user.id), str(chat.id), message_id=str(message.message_id) if message else None,
+        text=text, command=command, callback_payload=payload, callback_id=callback.id if callback else None,
+        location=Location(location.latitude, location.longitude) if location else None)
 
 
-async def wn3_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    query = update.callback_query
-    if query is None:
+async def wn3_update(update, context):
+    event = _normalized(update)
+    if event is None:
         return
-    data = query.data or ""
-    await query.answer()
-    message = query.message
-    if message is None:
-        return
-    if data == "home:wn3":
-        active = get_active_location(_uid(update))
-        if active is not None:
-            await _show_card(message, context, GeoPoint(active.lat, active.lon, active.label, active.source), dict(DEFAULT_WN3_PARAMS))
-        else:
-            await _ask_point(message, context, dict(DEFAULT_WN3_PARAMS))
-        raise ApplicationHandlerStop
-    state = _state(context)
-    if state is None:
-        await message.reply_text("Сценарий WeatherNext 3 устарел. Запустите /wn3.")
-        raise ApplicationHandlerStop
-    parts = data.split(":", 2)
-    action = parts[1] if len(parts) > 1 else ""
-    value = parts[2] if len(parts) > 2 else ""
-    if action in {"cancel", "home"}:
+    router = get_router()
+    if event.callback_payload == encode_callback('wn3', 'home'):
+        from telegram_personal_ux import _show_home
+        await context.bot.answer_callback_query(callback_query_id=event.callback_id)
+        router.sessions.clear(event.platform, event.user_id, event.chat_id)
         context.user_data.pop(SESSION_KEY, None)
-        if action == "home":
-            import telegram_personal_ux
-            await telegram_personal_ux._show_home(message, _uid(update))
-        else:
-            await message.reply_text("WeatherNext 3: выбор отменён.", reply_markup=ReplyKeyboardRemove())
+        await _show_home(update.effective_message, int(event.user_id))
         raise ApplicationHandlerStop
-    if action == "place":
-        try:
-            point = _unpack_point(state.get("candidates", [])[int(value)])
-        except (ValueError, IndexError, KeyError):
-            await message.reply_text("Вариант точки устарел. Запустите /wn3 заново.")
-            raise ApplicationHandlerStop
-        if state.pop("direct", False):
-            await _run(message, context, point, state["params"])
-        else:
-            await _show_card(message, context, point, state["params"])
-        raise ApplicationHandlerStop
-    if action == "point":
-        await _ask_point(message, context, state["params"])
-        raise ApplicationHandlerStop
-    if not state.get("point"):
-        await message.reply_text("Точка WeatherNext 3 потеряна. Запустите /wn3 заново.")
-        raise ApplicationHandlerStop
-    point = _unpack_point(state["point"])
-    p = normalize_wn3_params(state["params"])
-    if action == "kind":
-        p["kind"] = value
-    elif action in {"hours", "days", "to", "step", "radius"}:
-        p[action] = int(value)
-    elif action == "lead":
-        p["from"] = p["to"] = int(value)
-        p["mode"] = "single"
-    elif action == "mode":
-        p["mode"] = value
-        if value == "single":
-            p["from"] = p["to"] = min(max(1, int(p["hours"])), 48)
-        elif p["to"] <= p["from"]:
-            p["from"], p["to"] = 1, 48
-    elif action == "run":
-        await _run(message, context, point, p)
-        raise ApplicationHandlerStop
-    else:
-        await message.reply_text("Кнопка WeatherNext 3 устарела. Запустите /wn3.")
-        raise ApplicationHandlerStop
-    await _show_card(message, context, point, p)
+    state = router.sessions.get(event.platform, event.user_id, event.chat_id)
+    if event.event_type in {'TEXT', 'LOCATION'} and not context.user_data.get(SESSION_KEY):
+        return
+    if event.event_type in {'TEXT', 'LOCATION'} and state is None:
+        return
+    # Read the existing Telegram active point once; cloud and meteorological logic stay common.
+    if event.command in {'wn3', 'weathernext3'} or event.callback_payload == encode_callback('product', 'open', 'weathernext3') or router.locations.active('telegram', event.user_id) is None:
+        from telegram_user_state import get_active_location
+        point = get_active_location(int(event.user_id))
+        if point is not None:
+            router.locations.remember('telegram', event.user_id, point, activate=True)
+    context.user_data[SESSION_KEY] = {'active': True}
+    await router.handle(event, TelegramGateway(context.bot))
     raise ApplicationHandlerStop
 
 
-async def wn3_location(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    state = _state(context)
-    if state is None or state.get("step") != "await_point" or update.effective_message is None or update.effective_message.location is None:
+async def _command_guard(update, context):
+    event = _normalized(update)
+    if event is None:
         return
-    loc = update.effective_message.location
-    point = GeoPoint(float(loc.latitude), float(loc.longitude), f"геолокация {loc.latitude:.4f}, {loc.longitude:.4f}", "telegram")
-    await _show_card(update.effective_message, context, point, state["params"])
-    raise ApplicationHandlerStop
-
-
-async def wn3_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    state = _state(context)
-    message = update.effective_message
-    if state is None or state.get("step") != "await_point" or message is None or not message.text:
-        return
-    if message.text.strip() == "✖ Отмена":
+    router = get_router()
+    active = context.user_data.get(SESSION_KEY) or router._job_key(event) in router.wn3_jobs
+    if event.command in {'cancel', 'status'} and active:
+        await router.handle(event, TelegramGateway(context.bot))
+        if event.command == 'cancel':
+            context.user_data.pop(SESSION_KEY, None)
+        raise ApplicationHandlerStop
+    if event.command not in {'wn3', 'weathernext3'}:
+        router.sessions.clear('telegram', event.user_id, event.chat_id)
         context.user_data.pop(SESSION_KEY, None)
-        await message.reply_text("WeatherNext 3: выбор отменён.", reply_markup=ReplyKeyboardRemove())
-        raise ApplicationHandlerStop
-    await _resolve_point(message, context, message.text.strip(), state["params"])
-    raise ApplicationHandlerStop
 
 
+async def _navigation_guard(update, context):
+    if update.callback_query and update.callback_query.data != 'home:wn3':
+        event = _normalized(update)
+        if event:
+            get_router().sessions.clear('telegram', event.user_id, event.chat_id)
+            context.user_data.pop(SESSION_KEY, None)
+
+
+def _card_keyboard(params):
+    # Compatibility rendering for already-issued legacy Telegram WN3 callbacks.
+    markup = telegram_markup(common_keyboard(params))
+    rows = []
+    for row in markup.inline_keyboard:
+        buttons = []
+        for button in row:
+            data = decode_callback(button.callback_data)
+            payload = ':'.join(filter(lambda value: value is not None, ('wn3', data.action, data.value))) if data.scope == 'wn3' else button.callback_data
+            buttons.append(InlineKeyboardButton(button.text, callback_data=payload))
+        rows.append(buttons)
+    return InlineKeyboardMarkup(rows)
+
+
+def gateway_for_application(application):
+    return TelegramGateway(application.bot) if application is not None else None
 def _insert_wn3_button(keyboard: InlineKeyboardMarkup) -> InlineKeyboardMarkup:
     rows = [list(row) for row in keyboard.inline_keyboard]
     if any(button.callback_data == "home:wn3" for row in rows for button in row):
@@ -404,10 +224,31 @@ def install() -> None:
     telegram_personal_ux.home_keyboard = patched_personal_keyboard
     telegram_personal_ux.home_text = patched_personal_text
 
+    def add_manager_link(original, label, scope, action, value=None):
+        def wrapped(*args, **kwargs):
+            keyboard = original(*args, **kwargs)
+            rows = [list(row) for row in keyboard.inline_keyboard]
+            rows.append([InlineKeyboardButton(label, callback_data=encode_callback(scope, action, value))])
+            return InlineKeyboardMarkup(rows)
+        return wrapped
+    telegram_personal_ux._settings_keyboard = add_manager_link(telegram_personal_ux._settings_keyboard,
+        '🛰 Сценарии WeatherNext 3', 'settings', 'recipes', 0)
+    import telegram_schedules
+    telegram_schedules._manager_keyboard = add_manager_link(telegram_schedules._manager_keyboard,
+        '🛰 Расписания WeatherNext 3', 'schedule', 'open')
 
-def register(application) -> None:
-    # Negative group makes WN3 callbacks win before generic home/product handlers.
-    application.add_handler(CommandHandler("wn3", wn3_command), group=-10)
-    application.add_handler(CallbackQueryHandler(wn3_callback, pattern=r"^(?:home:wn3|wn3:.*)$"), group=-10)
-    application.add_handler(MessageHandler(filters.LOCATION, wn3_location), group=-10)
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, wn3_text), group=-10)
+
+
+def register(application):
+    application.add_handler(CallbackQueryHandler(_navigation_guard, pattern=r'^(home:|recipe:)'), group=-13)
+    application.add_handler(CommandHandler(['wn3', 'weathernext3'], wn3_update), group=-12)
+    application.add_handler(CallbackQueryHandler(wn3_update, pattern=r'^(home:wn3|wn3:|w3\||v1\|(wn3|recipe|schedule|settings)\|)'), group=-12)
+    application.add_handler(MessageHandler(filters.LOCATION | (filters.TEXT & ~filters.COMMAND), wn3_update), group=-12)
+    application.add_handler(MessageHandler(filters.COMMAND, _command_guard), group=-11)
+    old_shutdown = application.post_shutdown
+    async def shutdown(app):
+        if _ROUTER is not None:
+            await _ROUTER.shutdown_wn3()
+        if old_shutdown:
+            await old_shutdown(app)
+    application.post_shutdown = shutdown

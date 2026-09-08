@@ -201,3 +201,9 @@ sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
 ```
 
 Все GFS-продукты должны быть помечены как модель, не наблюдение/радиозонд.
+
+## WeatherNext 3
+
+`/wn3` и кнопка главного меню используют тот же сценарий и service, что Telegram/MAX. Доступны point, meteogram, cloudgram, precip_compare, десять картографических слоёв, profile/aero/windgram через GCS, PNG/CSV и MP4/GIF. Сценарии, расписания, отмена и пагинация до +360 — общие. Подключение Google, команды и ограничения RC: [docs/WEATHERNEXT3.md](docs/WEATHERNEXT3.md). VK transport не менялся. Доставку в рабочее сообщество необходимо проверить отдельно.
+
+Для GCS-профиля, аэродиаграммы и ветровой матрицы WN3 требуется Python 3.11+. Python 3.10 поддерживает GFS и поверхностную WN3 через BigQuery; неподдерживаемые зависимости Zarr на нём не устанавливаются.

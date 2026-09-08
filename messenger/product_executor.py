@@ -16,7 +16,7 @@ from .profile_service import build_profile_product
 from .route_service import build_route_product_result
 from .windgram_service import build_windgram_product_result
 
-SUPPORTED_PRODUCTS = ("profile", "aero", "windgram", "cloudgram", "map", "meteogram", "route")
+SUPPORTED_PRODUCTS = ("profile", "aero", "windgram", "cloudgram", "map", "meteogram", "route", "weathernext3")
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +57,7 @@ def _clean_params(value: dict[str, Any]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, item in value.items():
         key = str(key)
-        if key in transient:
+        if key in transient and not (key == "step" and isinstance(item, (int, float))):
             continue
         if isinstance(item, Mapping):
             result[key] = _clean_params(dict(item))
@@ -105,6 +105,9 @@ def build_snapshot_result(
         )
 
     point = _point(snapshot.point)
+    if product == "weathernext3":
+        from .weathernext3_service import build_weathernext3_product_result
+        return build_weathernext3_product_result(point, progress_callback=progress_callback, **params)
     if product == "profile":
         return build_profile_product(point, int(params.get("lead", 24)), None, progress_callback=progress_callback)
     if product == "aero":

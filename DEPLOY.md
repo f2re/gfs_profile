@@ -283,3 +283,20 @@ sudo bash install_messenger_runtime.sh --enable
 ```
 
 Обычная установка/deploy не требуют отдельного запуска этого helper.
+
+
+## Обновление WeatherNext 3 RC
+
+Рабочая ветка — `telegram-bot`, `/opt/gfs_profile` — отдельная установленная копия. Релиз в GitHub не означает deploy сервера.
+
+```bash
+git checkout telegram-bot
+git pull --ff-only
+bash deploy_telegram_bot.sh
+```
+
+Для полного набора WN3 используйте Python 3.11+; requirements устанавливают GCS/Zarr только на поддерживаемом Python. На Python 3.10 сохраняются GFS и поверхностная WN3 через BigQuery, но верхняя атмосфера требует обновления интерпретатора. Deploy обновляет общий runtime Telegram/MAX/VK; сохраняет `.env`, `.install-state`, `.venv`, `.cache_gfs`. Credential JSON размещайте вне checkout, например `/etc/gfs_profile/google-adc.json`; задайте `GOOGLE_APPLICATION_CREDENTIALS` в установленном `.env`, обеспечьте чтение только пользователю службы. Google project/dataset/billing не угадываются и не создаются автоматически.
+
+Подробная настройка: [WeatherNext 3](docs/WEATHERNEXT3.md). Для WN3-расписаний Telegram оставьте `MESSENGER_RUNTIME_ENABLED=1`. `python weathernext3_check.py` без `--live` не обращается к Google; `--live` и `--live --upper` — отдельные, потенциально платные проверки от имени пользователя службы. `/health` разделяет наличие конфигурации и фактическую проверку облака.
+
+RC не подтверждает ADC/allowlist, production webhook, delivery или состояние автообновления конкретного сервера. При отказе Google GFS продолжает работать; WN3 не заменяется данными другой модели.

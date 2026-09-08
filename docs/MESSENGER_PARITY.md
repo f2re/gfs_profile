@@ -40,7 +40,9 @@ platform-native renderer/gateway
 | `/wn3` native/IMERG/experimental precipitation maps | ✅ | ✅ | ✅ |
 | `/wn3` single/series/animation | ✅ | ✅ | ✅ |
 | saved recipes / repeat / pin для 7 исходных продуктов | ✅ | ✅ | ✅ |
-| WN3 saved recipes / schedules | ⏳ | ⏳ | ⏳ |
+| WN3 saved recipes / schedules | ✅ | ✅ | ✅ |
+| WN3 profile/aero/windgram (GCS) | ✅ | ✅ | ✅ |
+| WN3 CSV, T2 spread, wind100, solar | ✅ | ✅ | ✅ |
 | `/settings` | ✅ | ✅ | ✅ |
 | active/recent point | ✅ | ✅ | ✅ |
 | `/schedule` для 7 исходных продуктов | ✅ | ✅ | ✅ |
@@ -50,7 +52,7 @@ platform-native renderer/gateway
 | отдельный WN3 BigQuery limit | ✅ | ✅ | ✅ |
 | production install/deploy | ✅ | ✅ | ✅ |
 
-`⏳` означает одинаково задокументированное ограничение всех платформ, а не Telegram-only/MAX-only реализацию.
+Отметки описывают реализацию и контрактные проверки. Google live-доступ и production-доставка подтверждаются отдельно. В Telegram прежние GFS-расписания и WN3-расписания используют разные совместимые хранилища.
 
 ## Общие продукты
 
@@ -66,7 +68,7 @@ platform-native renderer/gateway
 
 `/wn3` использует один `weathernext3_provider.py` и `messenger/weathernext3_service.py` для всех платформ. BigQuery surface statistics дают point forecast, ансамблевую метеограмму, total/low/mid/high cloud maps и три precipitation heads. Карты используют тот же локальный Natural Earth basemap и MP4/GIF media contract, но не GFS-специфичные meteorological layers.
 
-BigQuery не содержит WN3 pressure-level fields; поэтому `/profile`/`/aero` не маркируются как WN3 и остаются GFS до отдельного GCS/Zarr provider.
+BigQuery не содержит верхнюю атмосферу; `/wn3 kind=profile|aero|windgram` получает её из GCS/Zarr. Обычные `/profile`/`/aero` остаются GFS.
 
 ## Shared capacity
 
@@ -83,3 +85,10 @@ MAX_CONCURRENT_SCHEDULED=1
 ## Definition of Done платформенной функции
 
 Функция считается паритетной, если использует один common service/use-case, одинаковые defaults/параметры/result metadata, честно показывает model/source/run, имеет native controls/media и cross-platform contract tests. Ошибка одной платформы не должна влиять на соседние.
+
+
+## WN3 RC: расширение 8 сентября 2026
+
+Общий сценарий Telegram/MAX/VK: owner-bound кнопки после перезапуска, пагинация +1…+360, статус/отмена, защита от двойного запуска, сценарии/повтор/расписания. BigQuery: точка, метеограмма PNG/DOCX/PDF, облачность по времени, три варианта осадков, карты/MP4/GIF/CSV, T2, p90−p10, ветер 100 м и радиация. GCS: profile/aero/windgram на 13 уровнях, средний профиль или member=0..63.
+
+Точные команды, подключение и ограничения: [WEATHERNEXT3.md](WEATHERNEXT3.md). Google live-доступ и production-доставка не проверены этим RC. Маршрут WN3 и вероятности событий не заявляются реализованными.

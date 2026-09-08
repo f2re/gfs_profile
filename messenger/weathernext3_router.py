@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import os
-from threading import Lock
+from threading import Lock, Event
+from dataclasses import replace
+from .weathernext3_cards import CardStore
 from typing import Any, Callable
 
 from geocode import GeoPoint
+from weathernext3_provider import WeatherNext3Error
 
 from .callback_codec import CallbackCodecError, decode_callback, encode_callback
 from .contracts import MessengerGateway, NormalizedEvent, ProgressEvent, UiButton, UiKeyboard
@@ -27,10 +30,14 @@ from .weathernext3_service import (
 )
 
 KIND_BUTTONS = (
-    ("point", "🌡 Прогноз"), ("meteogram", "📊 Метеограмма"),
-    ("clouds", "☁ Облачность"), ("cloud_layers", "☁ Слои"),
-    ("precip_native", "🌧 Native"), ("precip_imerg", "🛰 IMERG"),
-    ("precip_experimental", "🧪 Experimental"), ("combo", "🗺 Облака+осадки"),
+    ('point', '🌡 Прогноз'), ('meteogram', '📊 Метеограмма'),
+    ('cloudgram', '☁ Облака по времени'), ('precip_compare', '🌧 Сравнить осадки'),
+    ('profile', '📈 Профиль'), ('aero', '🧾 Аэродиаграмма'), ('windgram', '🟦 Срок × уровень'),
+    ('clouds', '🗺 Общая облачность'), ('cloud_layers', '🗺 Ярусы облаков'),
+    ('precip_native', '🌧 Основные осадки'), ('precip_imerg', '🛰 Осадки IMERG'),
+    ('precip_experimental', '🧪 Осадки эксперимент'), ('combo', '🗺 Облака+осадки'),
+    ('temperature', '🌡 Карта T2'), ('temperature_spread', '↔ Разброс T2'),
+    ('wind100', '💨 Ветер 100 м'), ('solar', '☀ Солнечная радиация'),
 )
 
 
@@ -41,9 +48,9 @@ def _point_from_location(item: Any) -> GeoPoint:
 def _card_text(point: Any, params: dict[str, Any]) -> str:
     p = normalize_wn3_params(params)
     kind = p["kind"]
-    if kind == "point":
+    if kind in {"point", "profile", "aero"}:
         detail = f"Срок: +{p['hours']} ч"
-    elif kind == "meteogram":
+    elif kind in {"meteogram", "cloudgram", "precip_compare"}:
         detail = f"Период: {p['days']} суток · p10/p25/p50/p75/p90"
     else:
         mode = {"animation": "анимация", "single": "одна карта", "series": "серия PNG"}[p["mode"]]
@@ -55,41 +62,66 @@ def _card_text(point: Any, params: dict[str, Any]) -> str:
         "🛰 WeatherNext 3\n"
         f"📍 {getattr(point, 'label', 'точка')} · {float(point.lat):.4f}, {float(point.lon):.4f}\n"
         f"Продукт: {wn3_kind_title(kind)}\n{detail}\n\n"
-        "64-членный ансамбль. T/Td: station head 0.05°; surface/maps: 0.1°."
+        f"Статистика: {p['stat']} · член: {p['member']} · модельный прогноз"
     )
 
 
-def _card_keyboard(params: dict[str, Any]) -> UiKeyboard:
+def _card_keyboard(params: dict[str, Any], page: int = 0) -> UiKeyboard:
     p = normalize_wn3_params(params)
-    rows: list[list[UiButton]] = [
-        [UiButton("▶ Построить", "callback", encode_callback("wn3", "run"))],
-    ]
-    for index in range(0, len(KIND_BUTTONS), 2):
-        row = []
-        for key, label in KIND_BUTTONS[index:index + 2]:
-            row.append(UiButton(("✓ " if key == p["kind"] else "") + label, "callback", encode_callback("wn3", "kind", key)))
-        rows.append(row)
-
-    if p["kind"] == "point":
-        rows.append([UiButton(("✓ " if p["hours"] == value else "") + f"+{value}ч", "callback", encode_callback("wn3", "hours", value)) for value in (6, 12, 24, 48)])
-    elif p["kind"] == "meteogram":
-        rows.append([UiButton(("✓ " if p["days"] == value else "") + f"{value} сут", "callback", encode_callback("wn3", "days", value)) for value in (3, 5, 10, 15)])
+    rows = [[UiButton('▶ Построить', 'callback', encode_callback('wn3', 'run'))]]
+    page = max(0, min(2, int(page)))
+    choices = KIND_BUTTONS[page*8:(page+1)*8]
+    for i in range(0, len(choices), 2):
+        rows.append([UiButton(('✓ ' if key == p['kind'] else '') + label, 'callback', encode_callback('wn3', 'kind', key)) for key, label in choices[i:i+2]])
+    rows.append([UiButton(f'Продукция {page+1}/3 →', 'callback', encode_callback('wn3', 'products', (page+1)%3))])
+    if p['kind'] in {'point', 'profile', 'aero'} or (p['kind'] in MAP_KINDS and p['mode'] == 'single'):
+        action = 'hours' if p['kind'] in {'point', 'profile', 'aero'} else 'lead'
+        for values in ((1, 3, 6), (12, 24, 48)):
+            rows.append([UiButton(f'+{h} ч', 'callback', encode_callback('wn3', action, h)) for h in values])
+        rows.append([UiButton('Все сроки +1…+360', 'callback', encode_callback('wn3', 'page', 0))])
+    elif p['kind'] in {'meteogram', 'cloudgram', 'precip_compare'}:
+        rows.append([UiButton(f'{h} сут от init', 'callback', encode_callback('wn3', 'days', h)) for h in (1, 3, 5, 10, 15)])
     else:
-        if p["mode"] == "single":
-            rows.append([UiButton(("✓ " if p["from"] == value else "") + f"+{value}ч", "callback", encode_callback("wn3", "lead", value)) for value in (6, 12, 24, 48)])
-        else:
-            rows.append([UiButton(("✓ " if p["to"] == value else "") + f"до +{value}", "callback", encode_callback("wn3", "to", value)) for value in (24, 48, 72, 120)])
-            rows.append([UiButton(("✓ " if p["step"] == value else "") + f"шаг {value}", "callback", encode_callback("wn3", "step", value)) for value in (1, 3, 6, 12)])
-        rows.append([UiButton(("✓ " if int(p["radius"]) == value else "") + f"{value} км", "callback", encode_callback("wn3", "radius", value)) for value in (100, 150, 250, 400)])
-        rows.append([
-            UiButton(("✓ " if p["mode"] == "animation" else "") + "Анимация", "callback", encode_callback("wn3", "mode", "animation")),
-            UiButton(("✓ " if p["mode"] == "single" else "") + "Одна карта", "callback", encode_callback("wn3", "mode", "single")),
-            UiButton(("✓ " if p["mode"] == "series" else "") + "PNG", "callback", encode_callback("wn3", "mode", "series")),
-        ])
-    rows.append([
-        UiButton("📍 Другая точка", "callback", encode_callback("wn3", "point")),
-        UiButton("🏠 Главное меню", "callback", encode_callback("wn3", "home")),
-    ])
+        rows.append([UiButton(f'до +{h}', 'callback', encode_callback('wn3', 'to', h)) for h in (24, 48, 120, 360)])
+        rows.append([UiButton(f'шаг {h}', 'callback', encode_callback('wn3', 'step', h)) for h in (1, 3, 6, 12)])
+    rows.append([UiButton('⚙ Параметры', 'callback', encode_callback('wn3', 'options')),
+                 UiButton('📍 Точка', 'callback', encode_callback('wn3', 'point'))])
+    rows.append([UiButton('📋 Сценарии', 'callback', encode_callback('settings', 'recipes', 0)),
+                 UiButton('🕒 Расписания', 'callback', encode_callback('schedule', 'open'))])
+    rows.append([UiButton('Статус', 'callback', encode_callback('wn3', 'status')),
+                 UiButton('✖ Отмена', 'callback', encode_callback('wn3', 'cancel'))])
+    return UiKeyboard.from_rows(rows)
+
+
+def _options_keyboard(params):
+    p = normalize_wn3_params(params)
+    rows = []
+    def options(action, values):
+        rows.append([UiButton(str(label), 'callback', encode_callback('wn3', action, value if value != '' else None)) for value, label in values])
+    if p['kind'] in MAP_KINDS:
+        options('mode', [('animation', 'Анимация'), ('single', 'Одна карта'), ('series', 'Серия PNG')])
+        if p['kind'] != 'temperature_spread':
+            options('stat', [(v, v) for v in ('mean', 'p10', 'p50', 'p90')])
+        options('radius', [(v, f'{v} км') for v in (100, 150, 250, 400)])
+    if p['kind'] in {'profile', 'aero', 'windgram'}:
+        options('member', [('mean', 'Средний профиль'), ('0', 'Член 0')])
+    if p['kind'] == 'windgram':
+        options('param', [('wind', 'Ветер'), ('temp', 'Температура'), ('rh', 'RH')])
+        options('top', [(500, 'до 500 гПа'), (100, 'до 100 гПа'), (50, 'до 50 гПа')])
+    if p['kind'] == 'meteogram':
+        options('format', [(v, v.upper()) for v in ('png', 'pdf', 'docx')])
+    options('card', [('', '← Назад')])
+    return UiKeyboard.from_rows(rows)
+
+
+def _lead_keyboard(params, page):
+    page = max(0, min(14, int(page)))
+    action = 'hours' if params['kind'] in {'point', 'profile', 'aero'} else 'lead'
+    values = list(range(page*24+1, min(361, page*24+25)))
+    rows = [[UiButton(f'+{hour}', 'callback', encode_callback('wn3', action, hour)) for hour in values[i:i+4]] for i in range(0, len(values), 4)]
+    rows.append([UiButton('←', 'callback', encode_callback('wn3', 'page', max(0, page-1))),
+                 UiButton(f'{page+1}/15 →', 'callback', encode_callback('wn3', 'page', min(14, page+1)))])
+    rows.append([UiButton('Назад', 'callback', encode_callback('wn3', 'card'))])
     return UiKeyboard.from_rows(rows)
 
 
@@ -123,7 +155,17 @@ class WeatherNext3MessengerRouter(ScheduleMessengerRouter):
         super().__init__(dependencies, **kwargs)
         self.wn3_builder = wn3_builder
         self.wn3_parser = wn3_parser
+        self.wn3_cards = CardStore(self.recipes.path)
+        self.wn3_jobs = {}
         self.wn3_semaphore = asyncio.Semaphore(max(1, int(os.getenv("MAX_CONCURRENT_WEATHERNEXT3", "2"))))
+
+    async def handle(self, event, gateway):
+        try:
+            await super().handle(event, gateway)
+        except ValueError as exc:
+            await gateway.send_text(event.chat_id, f'Некорректные параметры: {str(exc)[:500]}')
+        except WeatherNext3Error as exc:
+            await gateway.send_text(event.chat_id, str(exc)[:700])
 
     @classmethod
     def default(cls, **kwargs: Any) -> "WeatherNext3MessengerRouter":
@@ -150,7 +192,7 @@ class WeatherNext3MessengerRouter(ScheduleMessengerRouter):
             event.chat_id,
             "🌦 Модельные прогнозы · GFS 0.25 + WeatherNext 3"
             f"{point}\n"
-            "GFS: вертикальные/маршрутные продукты. WeatherNext 3: ансамблевая поверхность, облачность и осадки.\n"
+            "GFS и WeatherNext 3: профили, метеограммы, карты. WN3: облака, осадки и статистики ансамбля.\n"
             "Обе системы — модели, не наблюдения.",
             keyboard=UiKeyboard.from_rows(rows),
         )
@@ -159,8 +201,18 @@ class WeatherNext3MessengerRouter(ScheduleMessengerRouter):
         command = (event.command or "").lower().lstrip("/")
         text = (event.text or "").strip()
         state = self.sessions.get(event.platform, event.user_id, event.chat_id)
+        if (command == 'cancel' or text in {'✖ Отмена', 'Отмена', '/cancel'}) and (self._job_key(event) in self.wn3_jobs or (state is not None and state.product == 'weathernext3')):
+            await self.cancel_wn3(event, gateway)
+            self.sessions.clear(event.platform, event.user_id, event.chat_id)
+            return
+        if command == 'status' and (self._job_key(event) in self.wn3_jobs or (state is not None and state.product == 'weathernext3')):
+            await self._wn3_status(event, gateway)
+            return
         if not command and text and state is not None and state.product == "weathernext3" and state.step == "await_point":
-            await self._resolve_wn3_point(event, gateway, text, state.params)
+            parsed = self.wn3_parser(text)
+            defaults = ' '.join(f'{k}={v}' for k, v in normalize_wn3_params(state.params).items())
+            merged = self.wn3_parser(defaults + ' ' + text)
+            await self._resolve_wn3_point(event, gateway, parsed.location_query, {**merged.params, '_direct': parsed.direct_run})
             return
         if command in {"wn3", "weathernext3"}:
             args = _command_args(text)
@@ -192,6 +244,19 @@ class WeatherNext3MessengerRouter(ScheduleMessengerRouter):
         await self._show_wn3_card(event, gateway, point, state.params)
 
     async def _callback(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
+        payload = event.callback_payload or ''
+        if payload.startswith('w3|'):
+            try:
+                parts = payload.split('|')
+                if len(parts) not in {3, 4} or len(payload.encode()) > 64:
+                    raise ValueError('Некорректная кнопка WN3')
+                point, params = self.wn3_cards.get(event, parts[1])
+                self.sessions.set(event.platform, event.user_id, event.chat_id, FlowState(product='weathernext3', step='params', point=point, params=params))
+                event = replace(event, callback_payload=encode_callback('wn3', parts[2], parts[3] if len(parts) == 4 and parts[3] else None))
+            except (ValueError, KeyError) as exc:
+                await gateway.answer_callback(event)
+                await gateway.send_text(event.chat_id, str(exc))
+                return
         try:
             data = decode_callback(event.callback_payload or "")
         except CallbackCodecError:
@@ -205,11 +270,33 @@ class WeatherNext3MessengerRouter(ScheduleMessengerRouter):
             else:
                 await self._ask_wn3_point(event, gateway, dict(DEFAULT_WN3_PARAMS))
             return
+        if data.scope == 'recipe':
+            try:
+                recipe = self.recipes.get(event.platform, event.user_id, int(data.value or ''))
+            except ValueError:
+                recipe = None
+            if recipe is not None and recipe.product == 'weathernext3':
+                await gateway.answer_callback(event)
+                if data.action == 'toggle':
+                    self.recipes.toggle_pinned(event.platform, event.user_id, recipe.recipe_id)
+                point = GeoPoint(**recipe.point)
+                if data.action == 'run':
+                    await self._run_wn3(event, gateway, point, recipe.params)
+                else:
+                    await self._show_wn3_card(event, gateway, point, recipe.params)
+                return
         if data.scope != "wn3":
             await super()._callback(event, gateway)
             return
 
         await gateway.answer_callback(event)
+        if data.action == 'cancel':
+            await self.cancel_wn3(event, gateway)
+            self.sessions.clear(event.platform, event.user_id, event.chat_id)
+            return
+        if data.action == 'status':
+            await self._wn3_status(event, gateway)
+            return
         if data.action == "home":
             await self._start(event, gateway)
             return
@@ -236,10 +323,22 @@ class WeatherNext3MessengerRouter(ScheduleMessengerRouter):
             return
 
         p = normalize_wn3_params(state.params)
+        if data.action in {'card', 'options', 'page', 'products'}:
+            keyboard = _options_keyboard(p) if data.action == 'options' else _lead_keyboard(p, int(data.value or 0)) if data.action == 'page' else _card_keyboard(p, int(data.value or 0) if data.action == 'products' else 0)
+            token = self.wn3_cards.save(event, state.point, p)
+            await gateway.send_text(event.chat_id, _card_text(state.point, p), keyboard=self.wn3_cards.keyboard(token, keyboard))
+            return
         if data.action == "kind":
             p["kind"] = str(data.value)
-        elif data.action in {"hours", "days", "to", "step", "radius"}:
+            p["format"], p["member"], p["stat"] = "png", "mean", "mean"
+            p["format"] = "png"
+            p["stat"] = "mean"
+            p["member"] = "mean"
+            p["param"] = "wind"
+        elif data.action in {"hours", "days", "to", "step", "radius", "top"}:
             p[data.action] = int(data.value or 0)
+        elif data.action in {"stat", "member", "param", "format"}:
+            p[data.action] = str(data.value)
         elif data.action == "lead":
             lead = int(data.value or 24)
             p["mode"] = "single"
@@ -288,7 +387,7 @@ class WeatherNext3MessengerRouter(ScheduleMessengerRouter):
         if len(candidates) > 1:
             state = FlowState(product="weathernext3", step="choose_place", candidates=list(candidates[:5]), params=dict(params))
             self.sessions.set(event.platform, event.user_id, event.chat_id, state)
-            rows = [[UiButton(_short_label(point), "callback", encode_callback("wn3", "place", index))] for index, point in enumerate(state.candidates)]
+            rows = [[UiButton(_short_label(point), "callback", self.wn3_cards.payload(self.wn3_cards.save(event, point, normalize_wn3_params(params)), "run" if params.get("_direct") else "card"))] for point in state.candidates]
             rows.append([UiButton("🏠 Главное меню", "callback", encode_callback("wn3", "home"))])
             await gateway.send_text(event.chat_id, "Найдено несколько точек. Выберите нужную:", keyboard=UiKeyboard.from_rows(rows))
             return
@@ -301,60 +400,145 @@ class WeatherNext3MessengerRouter(ScheduleMessengerRouter):
     async def _show_wn3_card(self, event: NormalizedEvent, gateway: MessengerGateway, point: Any, params: dict[str, Any]) -> None:
         state = FlowState(product="weathernext3", step="params", point=point, params=normalize_wn3_params(params))
         self.sessions.set(event.platform, event.user_id, event.chat_id, state)
-        await gateway.send_text(event.chat_id, _card_text(point, state.params), keyboard=_card_keyboard(state.params))
+        token = self.wn3_cards.save(event, point, state.params)
+        await gateway.send_text(event.chat_id, _card_text(point, state.params), keyboard=self.wn3_cards.keyboard(token, _card_keyboard(state.params)))
 
-    async def _run_wn3(self, event: NormalizedEvent, gateway: MessengerGateway, point: Any, params: dict[str, Any]) -> None:
+    @staticmethod
+    def _job_key(event):
+        return event.platform, event.user_id, event.chat_id
+
+    async def _wn3_status(self, event, gateway):
+        from weathernext3_status import status_text
+        job = self.wn3_jobs.get(self._job_key(event))
+        await gateway.send_text(event.chat_id, status_text() + ('\nЗапрос отменён, завершается сетевой этап.' if job and job['cancel'].is_set() else '\nЗапрос выполняется.' if job else '\nАктивного запроса нет.'))
+
+    async def cancel_wn3(self, event, gateway):
+        job = self.wn3_jobs.get(self._job_key(event))
+        if job is not None:
+            job['cancel'].set()
+            job['stop'].set()
+            if 'status' not in job:
+                await gateway.send_text(event.chat_id, 'Отмена WN3 принята.')
+                return
+            await gateway.edit_text(event.chat_id, job['status'].message_id, 'WeatherNext 3: отменено. Новые файлы отправлены не будут; начатый сетевой запрос может завершиться по тайм-ауту.')
+        else:
+            await gateway.send_text(event.chat_id, 'WeatherNext 3: выбор сброшен.')
+
+    async def wn3_wait_idle(self):
+        tasks = [job['task'] for job in list(self.wn3_jobs.values()) if 'task' in job]
+        if tasks:
+            await asyncio.gather(*tasks)
+
+    async def shutdown_wn3(self):
+        for job in self.wn3_jobs.values():
+            job['cancel'].set()
+            job['stop'].set()
+        await self.wn3_wait_idle()
+
+    async def _run_wn3(self, event, gateway, point, params):
+        key = self._job_key(event)
+        if key in self.wn3_jobs:
+            await gateway.send_text(event.chat_id, 'Запрос WN3 уже выполняется. /status или /cancel; повторный запуск не создан.')
+            return
         p = normalize_wn3_params(params)
-        self.sessions.set(event.platform, event.user_id, event.chat_id, FlowState(product="weathernext3", step="params", point=point, params=p))
-        status = await gateway.send_text(event.chat_id, _progress_text(point, p, ProgressEvent("check", "")))
-        snapshot = {"event": ProgressEvent("check", "")}
-        lock = Lock()
-        stop = False
-        last_text = ""
-
-        def progress(value: ProgressEvent) -> None:
-            with lock:
-                snapshot["event"] = value
-
-        async def reporter() -> None:
-            nonlocal last_text
-            while not stop:
-                with lock:
-                    value = snapshot["event"]
-                text = _progress_text(point, p, value)
-                if text != last_text:
-                    try:
-                        await gateway.edit_text(event.chat_id, status.message_id, text)
-                        last_text = text
-                    except Exception:
-                        pass
-                await asyncio.sleep(self.progress_interval_seconds)
-
-        task = asyncio.create_task(reporter())
-        result = None
+        self.sessions.set(event.platform, event.user_id, event.chat_id, FlowState(product='weathernext3', step='params', point=point, params=p))
+        # Reserve before the first await to make simultaneous callbacks idempotent.
+        job = {'cancel': Event(), 'stop': asyncio.Event()}
+        self.wn3_jobs[key] = job
         try:
-            async with self.wn3_semaphore:
-                result = await asyncio.to_thread(self.wn3_builder, point, p["kind"], progress_callback=progress, **{k: v for k, v in p.items() if k != "kind"})
-            stop = True
-            await task
-            await gateway.edit_text(event.chat_id, status.message_id, result.summary)
-            for attachment in result.attachments:
-                if attachment.kind == "image":
-                    await gateway.send_image(event.chat_id, attachment.path, caption=attachment.caption)
-                elif attachment.kind == "animation":
-                    await gateway.send_animation(event.chat_id, attachment.path, caption=attachment.caption)
-                else:
-                    await gateway.send_file(event.chat_id, attachment.path, caption=attachment.caption, filename=attachment.filename)
-            if result.repeat_command:
-                await gateway.send_text(event.chat_id, f"📋 Повторить:\n{result.repeat_command}")
+            token = self.wn3_cards.save(event, point, p)
+            keyboard = UiKeyboard.from_rows([[UiButton('✖ Отмена', 'callback', self.wn3_cards.payload(token, 'cancel'))]])
+            job['status'] = await gateway.send_text(event.chat_id, '⏳ WeatherNext 3 · ожидаю свободный слот', keyboard=keyboard)
+        except BaseException:
+            self.wn3_jobs.pop(key, None)
+            raise
+        if job['cancel'].is_set():
+            await gateway.edit_text(event.chat_id, job['status'].message_id, 'WeatherNext 3: отменено.')
+            self.wn3_jobs.pop(key, None)
+            return
+        async def execute():
+            result = None
+            snapshot = {'event': ProgressEvent('check', 'Проверяю источник')}
+            lock = Lock()
+            def progress(value):
+                if job['cancel'].is_set():
+                    raise RuntimeError('Запрос WN3 отменён')
+                with lock:
+                    snapshot['event'] = value
+            async def report():
+                previous = ''
+                while not job['stop'].is_set():
+                    with lock:
+                        text = _progress_text(point, p, snapshot['event'])
+                    if text != previous:
+                        try:
+                            await gateway.edit_text(event.chat_id, job['status'].message_id, text, keyboard=keyboard)
+                            previous = text
+                        except Exception:
+                            pass
+                    try:
+                        await asyncio.wait_for(job['stop'].wait(), timeout=max(1.0, self.progress_interval_seconds))
+                    except asyncio.TimeoutError:
+                        pass
+            reporter = None
             try:
+                async with self.wn3_semaphore:
+                    if job['cancel'].is_set():
+                        return
+                    reporter = asyncio.create_task(report())
+                    # Do not cancel the worker task and release capacity while its thread is alive.
+                    def blocking():
+                        from weathernext3_cancel import cancellation
+                        with cancellation(job['cancel']):
+                            return self.wn3_builder(point, p['kind'], progress_callback=progress,
+                                                    **{k: v for k, v in p.items() if k != 'kind'})
+                    worker = asyncio.create_task(asyncio.to_thread(blocking))
+                    try:
+                        result = await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        job['cancel'].set()
+                        try:
+                            result = await worker
+                        except Exception:
+                            pass
+                        raise
+                job['stop'].set()
+                if reporter:
+                    await reporter
+                if job['cancel'].is_set():
+                    return
+                await gateway.edit_text(event.chat_id, job['status'].message_id, result.summary)
+                for attachment in result.attachments:
+                    if job['cancel'].is_set():
+                        return
+                    if attachment.kind == 'image':
+                        await gateway.send_image(event.chat_id, attachment.path, caption=attachment.caption)
+                    elif attachment.kind == 'animation':
+                        await gateway.send_animation(event.chat_id, attachment.path, caption=attachment.caption)
+                    else:
+                        await gateway.send_file(event.chat_id, attachment.path, caption=attachment.caption, filename=attachment.filename)
+                if job['cancel'].is_set():
+                    return
                 self.locations.remember(event.platform, event.user_id, point, activate=True)
-            except Exception:
-                pass
-        except Exception as exc:
-            stop = True
-            await task
-            await gateway.edit_text(event.chat_id, status.message_id, f"Ошибка WeatherNext 3: {exc}")
-        finally:
-            if result is not None:
-                cleanup_product_result(result)
+                if getattr(gateway, 'remember_point', None):
+                    gateway.remember_point(event.user_id, point)
+                recipe = self.recipes.record_success(event.platform, event.user_id, 'weathernext3', p, point)
+                await gateway.send_text(event.chat_id, 'WeatherNext 3: сценарий сохранён. При повторе будет выбран новый опубликованный цикл.', keyboard=UiKeyboard.from_rows([
+                    [UiButton('Повторить', 'callback', encode_callback('recipe', 'run', recipe.recipe_id)),
+                     UiButton('Закрепить/открепить', 'callback', encode_callback('recipe', 'toggle', recipe.recipe_id))],
+                    [UiButton('По расписанию', 'callback', encode_callback('schedule', 'recipe', recipe.recipe_id))]]))
+            except Exception as exc:
+                job['stop'].set()
+                if reporter:
+                    await reporter
+                if not job['cancel'].is_set():
+                    await gateway.edit_text(event.chat_id, job['status'].message_id, f'Ошибка WeatherNext 3: {str(exc)[:700]}')
+            finally:
+                job['stop'].set()
+                if reporter:
+                    await reporter
+                if result is not None:
+                    cleanup_product_result(result)
+                if self.wn3_jobs.get(key) is job:
+                    self.wn3_jobs.pop(key, None)
+        job['task'] = asyncio.create_task(execute(), name=f'wn3-{event.platform}-{event.user_id}')

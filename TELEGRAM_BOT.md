@@ -46,7 +46,7 @@ Telegram handlers отвечают за native controls/status/media. GFS calcul
 
 Главное меню содержит кнопку `🛰 WeatherNext 3`. Если сохранена active point, раздел открывается сразу для неё; иначе бот запрашивает город, координаты или native Telegram location.
 
-При входе раздел открывает краткий point forecast на +24 ч. Для карт default:
+При входе раздел открывает карточку параметров point на +24 ч, без платного запроса до нажатия «Построить». Для карт default:
 
 ```text
 WeatherNext 3 · combo
@@ -59,7 +59,7 @@ animation MP4
 Кнопки раздела:
 
 ```text
-🌡 Прогноз 48 ч
+🌡 Прогноз +N ч
 📊 Метеограмма
 ☁️ Облачность
 ☁️ Слои
@@ -82,9 +82,9 @@ animation MP4
 
 Во время BigQuery/render операции редактируется одно status message. Итог показывает фактический WN3 `Run ...Z`, valid UTC, requested point/grid и маркировку «модельный прогноз».
 
-T/Td в point/meteogram используют station head 0.05° при наличии, остальные surface fields — 0.1°. Карты строятся из mean 64-member ensemble statistics. Метеограмма дополнительно использует p10/p25/p50/p75/p90.
+T/Td в point/meteogram используют station head 0.05° при наличии, остальные surface fields — 0.1°. Карты показывают выбранную статистику; число реально доступных членов BigQuery не сообщает. Метеограмма дополнительно использует p10/p25/p50/p75/p90.
 
-BigQuery не содержит 3D pressure-level fields WN3; `/profile` и `/aero` остаются GFS-продуктами до подключения GCS provider.
+Вертикальная WN3 подключена через GCS: `/wn3 Москва kind=profile +24`, `kind=aero`, `kind=windgram`. Обычные `/profile` и `/aero` остаются GFS.
 
 ## Персональное состояние
 
@@ -198,7 +198,7 @@ Successful result создаёт recipe `point + params`; `run/cycle` исклю
 
 `/settings` позволяет выбирать active point, повторять/закреплять/удалять recipes и очищать персональные данные.
 
-WeatherNext 3 в этой версии использует active point и transient WN3 params; отдельный saved recipe/schedule для `/wn3` пока не создаётся.
+WN3 сохраняет owner-bound карточки, сценарии и расписания в общем SQLite. В native настройках/расписаниях есть переходы в WN3.
 
 ## Расписания
 
@@ -208,7 +208,7 @@ Telegram сохраняет native scheduler и storage:
 TELEGRAM_SCHEDULE_FILE=.cache_gfs/telegram_schedules.json
 ```
 
-Доступны семь исходных common продуктов, включая `/route`. WeatherNext 3 пока интерактивный продукт.
+Доступны семь исходных продуктов и WN3; автоматическая WN3-отправка требует общего production runtime.
 
 Route добавлен adapter-ом `telegram_schedule_route_compat.py`: native route wizard формирует immutable schedule spec, а automatic execution вызывает common route runner. Метеорологическая логика не копируется.
 
@@ -254,7 +254,7 @@ MAX_CONCURRENT_SCHEDULED=1
 WEATHERNEXT3_BIGQUERY_PROJECT=<project-with-linked-dataset>
 WEATHERNEXT3_BIGQUERY_DATASET=<linked-dataset>
 WEATHERNEXT3_BIGQUERY_BILLING_PROJECT=
-WEATHERNEXT3_BQ_MAX_BYTES_BILLED=0
+WEATHERNEXT3_BQ_MAX_BYTES_BILLED=1000000000
 WEATHERNEXT3_CACHE_TTL=1800
 GOOGLE_APPLICATION_CREDENTIALS=/path/outside/repo/credentials.json
 ```
@@ -276,3 +276,12 @@ MAX/VK регистрация: [`docs/MESSENGER_REGISTRATION.md`](docs/MESSENGER
 ## Важно
 
 Все данные модельные. GFS — не наблюдение и не радиозонд. WeatherNext 3 — экспериментальная AI-модель Google, не наблюдение/радар/спутниковый снимок и не официальный warning source. Icing/CAT/cloud/thunder/hazard layers — модельная диагностика и не заменяют официальные METAR/TAF/SIGMET/GAMET/NOTAM и эксплуатационное решение.
+
+
+## WN3 RC: расширение 8 сентября 2026
+
+Общий сценарий Telegram/MAX/VK: owner-bound кнопки после перезапуска, пагинация +1…+360, статус/отмена, защита от двойного запуска, сценарии/повтор/расписания. BigQuery: точка, метеограмма PNG/DOCX/PDF, облачность по времени, три варианта осадков, карты/MP4/GIF/CSV, T2, p90−p10, ветер 100 м и радиация. GCS: profile/aero/windgram на 13 уровнях, средний профиль или member=0..63.
+
+Точные команды, подключение и ограничения: [WEATHERNEXT3.md](docs/WEATHERNEXT3.md). Google live-доступ и production-доставка не проверены этим RC. Маршрут WN3 и вероятности событий не заявляются реализованными.
+
+Для GCS-профиля, аэродиаграммы и ветровой матрицы WN3 требуется Python 3.11+. Python 3.10 поддерживает GFS и поверхностную WN3 через BigQuery; неподдерживаемые зависимости Zarr на нём не устанавливаются.

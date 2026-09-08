@@ -61,7 +61,7 @@ def _point(value: Mapping[str, Any] | Any | None) -> dict[str, Any] | None:
 
 def _clean(value: Any) -> Any:
     if isinstance(value, Mapping):
-        return {str(k): _clean(v) for k, v in value.items() if str(k) not in _TRANSIENT}
+        return {str(k): _clean(v) for k, v in value.items() if str(k) not in _TRANSIENT or (str(k) == "step" and isinstance(v, (int, float)))}
     if isinstance(value, (list, tuple)):
         return [_clean(v) for v in value]
     if value is None or isinstance(value, (str, int, float, bool)):
@@ -75,7 +75,7 @@ def _sig_value(value: Any) -> Any:
     if isinstance(value, Mapping):
         if "lat" in value and "lon" in value:
             return {"lat": round(float(value["lat"]), 4), "lon": round(float(value["lon"]), 4)}
-        return {str(k): _sig_value(v) for k, v in value.items() if str(k) not in _TRANSIENT}
+        return {str(k): _sig_value(v) for k, v in value.items() if str(k) not in _TRANSIENT or (str(k) == "step" and isinstance(v, (int, float)))}
     if isinstance(value, (list, tuple)):
         return [_sig_value(v) for v in value]
     return _clean(value)
