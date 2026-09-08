@@ -1,0 +1,37 @@
+name: WN3 release
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [telegram-bot]
+    paths:
+      - '.github/workflows/wn3-release.yml'
+      - 'release/WN3_VERSION'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wn3-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Package tracked source only
+        run: |
+          mkdir -p dist
+          git archive --format=zip --output=dist/source.zip HEAD
+          git rev-parse HEAD > dist/SOURCE_COMMIT
+          sha256sum dist/source.zip > dist/SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wn3-source-${{ github.sha }}
+          path: dist/
+          retention-days: 3
+          if-no-files-found: error
