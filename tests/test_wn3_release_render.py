@@ -41,7 +41,7 @@ class ReleaseRenderTests(unittest.TestCase):
                 finally: cleanup_product_result(result)
     def test_surface_timeseries_and_meteogram_reports(self):
         provider=WeatherNext3Provider(project='test-project',dataset='linked',executor=FakeExecutor(),cache_dir=self.root)
-        for kind,fmt in (('cloudgram','png'),('precip_compare','png'),('meteogram','png'),('meteogram','pdf'),('meteogram','docx')):
+        for kind,fmt in (('cloudgram','png'),('precip_compare','png'),('meteogram','png'),('meteogram','pdf'),('meteogram','docx'),('ensemble','png'),('ensemble','pdf'),('ensemble','docx')):
             with self.subTest(kind=kind,fmt=fmt):
                 result=build_weathernext3_product_result(POINT,kind,days=1,format=fmt,provider=provider)
                 try:

@@ -22,7 +22,7 @@ from weathernext3_map import KIND_TITLES, write_weathernext3_animation, write_we
 from weathernext3_provider import MAP_KINDS, WeatherNext3Error, WeatherNext3Provider, provider_from_env
 
 UPPER_KINDS = ("profile", "aero", "windgram")
-WN3_KINDS = ("point", "meteogram", "cloudgram", "precip_compare", *UPPER_KINDS, *MAP_KINDS)
+WN3_KINDS = ("point", "meteogram", "ensemble", "cloudgram", "precip_compare", *UPPER_KINDS, *MAP_KINDS)
 MAP_MODES = ("animation", "single", "series")
 DEFAULT_WN3_PARAMS: dict[str, Any] = {
     "kind": "point",
@@ -43,6 +43,7 @@ DEFAULT_WN3_PARAMS: dict[str, Any] = {
 
 _KIND_ALIASES = {
     "forecast": "point", "прогноз": "point", "точка": "point",
+    "ens": "ensemble", "ансамбль": "ensemble", "разброс": "ensemble",
     "meteo": "meteogram", "meteogram": "meteogram", "метеограмма": "meteogram",
     "cloud": "clouds", "clouds": "clouds", "облака": "clouds", "облачность": "clouds",
     "layers": "cloud_layers", "cloud_layers": "cloud_layers", "слои": "cloud_layers",
@@ -138,8 +139,8 @@ def normalize_wn3_params(value: Mapping[str, Any] | None = None) -> dict[str, An
         raise WeatherNext3Error('top: опубликованный изобарический уровень WN3')
     if result['format'] not in {'png', 'pdf', 'docx'}:
         raise WeatherNext3Error('format: png, pdf, docx (PDF/DOCX — только метеограмма)')
-    if result['kind'] != 'meteogram' and result['format'] != 'png':
-        raise WeatherNext3Error('PDF/DOCX поддерживаются только для kind=meteogram')
+    if result['kind'] not in {'meteogram', 'ensemble'} and result['format'] != 'png':
+        raise WeatherNext3Error('PDF/DOCX поддерживаются для kind=meteogram или kind=ensemble')
     if result['basemap'] not in {'basic', 'places', 'roads'}:
         raise WeatherNext3Error('basemap: basic, places, roads')
     if not 1 <= result['step'] <= 360 or not 1 <= result['from'] <= result['to'] <= 360:
@@ -225,7 +226,8 @@ def parse_weathernext3_input(raw: str) -> ParsedWeatherNext3Input:
 def wn3_kind_title(kind: str) -> str:
     return {
         "point": "Прогноз по точке",
-        "meteogram": "Ансамблевая метеограмма",
+        "meteogram": "Метеограмма · средний прогноз",
+        "ensemble": "Ансамблевая метеограмма · разброс",
         "cloudgram": "Облачность по времени",
         "precip_compare": "Сравнение вариантов осадков",
         "profile": "Вертикальный профиль",
@@ -321,13 +323,14 @@ def build_weathernext3_product_result(
         result = upper_product(point, kind, params, provider=upper_provider, progress_callback=progress_callback)
         result.repeat_command = repeat
         return result
-    if kind == 'meteogram':
+    if kind in {'meteogram', 'ensemble'}:
         from weathernext3_meteogram import fetch_weathernext3_meteogram
         def progress(text):
             if progress_callback:
                 progress_callback(ProgressEvent('fetch', text))
-        series = fetch_weathernext3_meteogram(point.label, point.lat, point.lon, params['days'], progress, provider=provider)
-        result = build_meteogram_product_result(point, 'weathernext3', params['days'], params['format'],
+        series = fetch_weathernext3_meteogram(point.label, point.lat, point.lon, params['days'], progress, provider=provider,
+            view='mean' if kind == 'meteogram' else 'ensemble')
+        result = build_meteogram_product_result(point, series.source.source_id, params['days'], params['format'],
                     progress_callback=progress_callback, series=series)
         try:
             export = [{'model': 'WeatherNext 3', 'run_utc': series.init_time_utc.isoformat(), 'valid_utc': valid,
@@ -340,6 +343,7 @@ def build_weathernext3_product_result(
             raise
         result.product = 'weathernext3'
         result.metadata['kind'] = kind
+        result.metadata['statistical_view'] = 'mean' if kind == 'meteogram' else 'ensemble'
         result.repeat_command = repeat
         return result
     provider = provider or provider_from_env()

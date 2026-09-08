@@ -79,10 +79,10 @@ def meteogram_repeat_command(point: Any, params: dict[str, Any]) -> str:
 
 def _member_text(series: Any) -> tuple[str, str]:
     source = series.source
-    if getattr(series, "ensemble_statistics_only", False):
-        return "Ансамбль: опубликованные статистики (номинально 64 члена)", "Число реально доступных членов не передано"
     if not source.ensemble:
         return "", ""
+    if getattr(series, "ensemble_statistics_only", False):
+        return "Ансамбль: опубликованные статистики (номинально 64 члена)", "Число реально доступных членов не передано"
     observed = int(series.member_count or 0)
     expected = int(series.expected_member_count or observed)
     main = f"Ансамбль: {observed}/{expected} членов"
@@ -147,7 +147,7 @@ def build_meteogram_product_result(
     attachment_paths: list[Path] = []
     try:
         fetch = fetch_meteogram
-        if source.source_id == "weathernext3" and series is None:
+        if source.source_id in {"weathernext3", "weathernext3_mean"} and series is None:
             from .runtime_resources import get_runtime_resources
             fetch = get_runtime_resources().wrap_blocking_weathernext3(fetch)
         series = series if series is not None else fetch(

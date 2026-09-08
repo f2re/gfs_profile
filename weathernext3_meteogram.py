@@ -71,8 +71,10 @@ def _stat_map(rows: list[dict[str, Any]], prefix: str, *, scale: float = 1.0, of
     return result
 
 
-def fetch_weathernext3_meteogram(point_label: str, lat: float, lon: float, days: int, progress: Progress = None, *, provider: WeatherNext3Provider | None = None) -> MeteogramSeries:
-    source = source_for_id("weathernext3")
+def fetch_weathernext3_meteogram(point_label: str, lat: float, lon: float, days: int, progress: Progress = None, *, provider: WeatherNext3Provider | None = None, view: str = "ensemble") -> MeteogramSeries:
+    if view not in {"mean", "ensemble"}:
+        raise ValueError("Вид метеограммы WN3: mean или ensemble")
+    source = source_for_id("weathernext3_mean" if view == "mean" else "weathernext3")
     days = int(days)
     if days < 1 or days > source.horizon_days:
         raise ValueError(f"Для {source.label} доступно 1–{source.horizon_days} суток")
@@ -122,6 +124,9 @@ def fetch_weathernext3_meteogram(point_label: str, lat: float, lon: float, days:
         "Порывы и weather code отсутствуют; RH из средних T/Td — диагностическая оценка, не среднее RH",
         "Период от init; число доступных членов и вероятности событий BigQuery не передаёт",
     ]
+    if view == "mean":
+        stats = {}
+        warnings.insert(0, "Показано среднее ансамбля без полос разброса; это не отдельный детерминированный запуск")
     return MeteogramSeries(
         source=source,
         point_label=str(point_label), requested_lat=float(lat), requested_lon=float(lon),

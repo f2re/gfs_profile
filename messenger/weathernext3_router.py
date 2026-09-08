@@ -31,6 +31,7 @@ from .weathernext3_service import (
 
 KIND_BUTTONS = (
     ('point', '🌡 Прогноз'), ('meteogram', '📊 Метеограмма'),
+    ('ensemble', '📉 Ансамбль / разброс'),
     ('cloudgram', '☁ Облака по времени'), ('precip_compare', '🌧 Сравнить осадки'),
     ('profile', '📈 Профиль'), ('aero', '🧾 Аэродиаграмма'), ('windgram', '🟦 Срок × уровень'),
     ('clouds', '🗺 Общая облачность'), ('cloud_layers', '🗺 Ярусы облаков'),
@@ -50,8 +51,10 @@ def _card_text(point: Any, params: dict[str, Any]) -> str:
     kind = p["kind"]
     if kind in {"point", "profile", "aero"}:
         detail = f"Срок: +{p['hours']} ч"
-    elif kind in {"meteogram", "cloudgram", "precip_compare"}:
-        detail = f"Период: {p['days']} суток · p10/p25/p50/p75/p90"
+    elif kind in {"meteogram", "ensemble", "cloudgram", "precip_compare"}:
+        view = "среднее без полос разброса" if kind == "meteogram" else (
+            "среднее и p10/p25/p50/p75/p90" if kind == "ensemble" else "средние значения")
+        detail = f"Период: {p['days']} суток · {view}"
     else:
         mode = {"animation": "анимация", "single": "одна карта", "series": "серия PNG"}[p["mode"]]
         detail = (
@@ -79,7 +82,7 @@ def _card_keyboard(params: dict[str, Any], page: int = 0) -> UiKeyboard:
         for values in ((1, 3, 6), (12, 24, 48)):
             rows.append([UiButton(f'+{h} ч', 'callback', encode_callback('wn3', action, h)) for h in values])
         rows.append([UiButton('Все сроки +1…+360', 'callback', encode_callback('wn3', 'page', 0))])
-    elif p['kind'] in {'meteogram', 'cloudgram', 'precip_compare'}:
+    elif p['kind'] in {'meteogram', 'ensemble', 'cloudgram', 'precip_compare'}:
         rows.append([UiButton(f'{h} сут от init', 'callback', encode_callback('wn3', 'days', h)) for h in (1, 3, 5, 10, 15)])
     else:
         rows.append([UiButton(f'до +{h}', 'callback', encode_callback('wn3', 'to', h)) for h in (24, 48, 120, 360)])
@@ -108,7 +111,7 @@ def _options_keyboard(params):
     if p['kind'] == 'windgram':
         options('param', [('wind', 'Ветер'), ('temp', 'Температура'), ('rh', 'RH')])
         options('top', [(500, 'до 500 гПа'), (100, 'до 100 гПа'), (50, 'до 50 гПа')])
-    if p['kind'] == 'meteogram':
+    if p['kind'] in {'meteogram', 'ensemble'}:
         options('format', [(v, v.upper()) for v in ('png', 'pdf', 'docx')])
     options('card', [('', '← Назад')])
     return UiKeyboard.from_rows(rows)

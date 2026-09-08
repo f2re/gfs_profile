@@ -56,6 +56,16 @@ class ReleaseFlowTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.calls[-1][2]['hours'],24)
                 recipe=self.router.recipes.latest_for_product(platform,'42','weathernext3')
                 self.assertEqual(recipe.params['step'],3);self.assertNotIn('run',recipe.params)
+    async def test_mean_and_ensemble_commands_work_on_all_platforms(self):
+        for platform in ('telegram', 'max', 'vk'):
+            for kind in ('meteogram', 'ensemble'):
+                with self.subTest(platform=platform, kind=kind):
+                    gateway=Gateway(platform)
+                    await self.router.handle(self.event(platform, f'/wn3 Москва kind={kind} days=3'), gateway)
+                    await self.router.wn3_wait_idle()
+                    self.assertEqual(self.calls[-1][1], kind)
+                    self.assertEqual(self.calls[-1][2]['days'], 3)
+
     async def test_native_geo_and_durable_callback_survive_restart(self):
         gateway=Gateway('max')
         await self.router.handle(self.event(),gateway)

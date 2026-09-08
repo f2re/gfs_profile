@@ -53,6 +53,12 @@ SOURCES = (
     MeteogramSource("icon_eps", "ICON-EPS", "DWD ICON Global EPS", "DWD через Open-Meteo", "https://ensemble-api.open-meteo.com/v1/ensemble", "icon_global_eps", 7, True, 40),
     MeteogramSource("geps", "GEPS · ECCC", "ECCC Global Ensemble Prediction System", "ECCC через Open-Meteo", "https://ensemble-api.open-meteo.com/v1/ensemble", "gem_global_ensemble", 16, True, 21),
     MeteogramSource(
+        "weathernext3_mean", "WeatherNext 3 · средний прогноз",
+        "Google WeatherNext 3 · среднее ансамбля", "Google BigQuery Analytics Hub",
+        "bigquery://weathernext3", "weathernext_3_0_0", 15,
+        ensemble=False, resolution="0.05° station head / 0.1° surface",
+    ),
+    MeteogramSource(
         "weathernext3",
         "WeatherNext 3 · Google",
         "Google WeatherNext 3",
@@ -71,6 +77,7 @@ ALIASES = {
     "aifs": "ecmwf_aifs", "icon": "icon_global", "gem": "gem_gdps",
     "ens": "ecmwf_ens", "ecmwf_ensemble": "ecmwf_ens", "gefs025": "gefs",
     "aifs_ensemble": "aifs_ens", "icon-eps": "icon_eps", "gem_ensemble": "geps",
+    "wn3_mean": "weathernext3_mean", "wn3_ensemble": "weathernext3",
     "wn3": "weathernext3", "weather_next3": "weathernext3", "weathernext": "weathernext3",
     "weather_next_3": "weathernext3",
 }
