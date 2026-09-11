@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from feature_flags import require_weathernext3
+
 """Adapt WeatherNext 3 BigQuery ensemble statistics to the existing meteogram model."""
 
 import math
@@ -72,6 +74,7 @@ def _stat_map(rows: list[dict[str, Any]], prefix: str, *, scale: float = 1.0, of
 
 
 def fetch_weathernext3_meteogram(point_label: str, lat: float, lon: float, days: int, progress: Progress = None, *, provider: WeatherNext3Provider | None = None, view: str = "ensemble") -> MeteogramSeries:
+    require_weathernext3()
     if view not in {"mean", "ensemble"}:
         raise ValueError("Вид метеограммы WN3: mean или ensemble")
     source = source_for_id("weathernext3_mean" if view == "mean" else "weathernext3")

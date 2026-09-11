@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from feature_flags import require_weathernext3
+
 """WeatherNext 3 surface-statistics provider backed by Google BigQuery."""
 
 import hashlib
@@ -117,6 +119,7 @@ class GoogleBigQueryExecutor:
 
     @classmethod
     def from_env(cls, *, default_project: str) -> "GoogleBigQueryExecutor":
+        require_weathernext3()
         raw_limit = _env("WEATHERNEXT3_BQ_MAX_BYTES_BILLED", "WN3_BQ_MAX_BYTES_BILLED", default="1000000000")
         try:
             maximum = int(raw_limit or "0")
@@ -130,6 +133,7 @@ class GoogleBigQueryExecutor:
         )
 
     def _google_client(self):
+        require_weathernext3()
         if self._client is not None:
             return self._client
         try:
@@ -157,6 +161,7 @@ class GoogleBigQueryExecutor:
         return bigquery.ScalarQueryParameter(name, "STRING", str(value))
 
     def query(self, sql: str, parameters: Mapping[str, Any]) -> list[dict[str, Any]]:
+        require_weathernext3()
         try:
             from google.cloud import bigquery
         except ImportError as exc:
@@ -193,6 +198,7 @@ class WeatherNext3Provider:
 
     @classmethod
     def from_env(cls, *, executor: QueryExecutor | None = None) -> "WeatherNext3Provider":
+        require_weathernext3()
         project = _env("WEATHERNEXT3_BIGQUERY_PROJECT", "WN3_BIGQUERY_PROJECT")
         dataset = _env("WEATHERNEXT3_BIGQUERY_DATASET", "WN3_BIGQUERY_DATASET")
         if not project or not dataset:
@@ -215,6 +221,7 @@ class WeatherNext3Provider:
         return self.cache_dir / f"{namespace}_{hashlib.sha256(packed).hexdigest()[:28]}.json"
 
     def _query_cached(self, namespace: str, sql: str, parameters: Mapping[str, Any], *, ttl_seconds: int | None = None, validator=None) -> list[dict[str, Any]]:
+        require_weathernext3()
         from weathernext3_cancel import check_cancelled
         check_cancelled()
         path = self._cache_path(namespace, {"schema": 2, "sql": cache_key(sql), "params": parameters})
@@ -238,6 +245,7 @@ class WeatherNext3Provider:
             raise WeatherNext3Error(str(exc)) from exc
 
     def latest_run(self, lat: float, lon: float, required_hour: int = 48, *, required_hours: Sequence[int] | None = None) -> WeatherNext3Run:
+        require_weathernext3()
         validate_coordinates(lat, lon)
         required_hour = int(required_hour)
         if not 1 <= required_hour <= 360:
@@ -308,6 +316,7 @@ class WeatherNext3Provider:
         return fields
 
     def point_series(self, point_label: str, lat: float, lon: float, lead_to: int, *, run: WeatherNext3Run | None = None) -> WeatherNext3PointSeries:
+        require_weathernext3()
         validate_coordinates(lat, lon)
         lead_to = int(lead_to)
         if not 1 <= lead_to <= 360:
@@ -391,6 +400,7 @@ class WeatherNext3Provider:
         raise WeatherNext3Error(f"Неизвестный слой WeatherNext 3: {kind}")
 
     def map_frames(self, point_label: str, lat: float, lon: float, leads: Sequence[int], *, radius_km: float = 150.0, kind: str = "combo", run: WeatherNext3Run | None = None, statistic: str = "mean") -> list[WeatherNext3MapFrame]:
+        require_weathernext3()
         validate_coordinates(lat, lon)
         if statistic not in _STAT_SUFFIXES:
             raise WeatherNext3Error("stat: mean, p10, p25, p50, p75, p90")

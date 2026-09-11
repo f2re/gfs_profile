@@ -110,7 +110,7 @@ def _card(recipe: UserRecipe) -> tuple[str, InlineKeyboardMarkup]:
     return f"{'★ ' if recipe.pinned else ''}{_summary(recipe)}\n{point}\nУспешных запусков: {recipe.success_count}\n\nПовтор использует актуальный опубликованный цикл модели.", InlineKeyboardMarkup(rows)
 
 
-def _get_pref(user_id: int, product: str, *, include_selection: bool, db_path=None):
+def _get_pref(user_id: int, product: str, *, include_selection: bool = True, db_path=None):
     pinned = _store(db_path).default_for_product(_PLATFORM, user_id, product)
     return _pref(pinned) if pinned else personal._SAVED_RECIPES_ORIGINAL_GET_PRODUCT_PREFERENCE(user_id, product, include_selection=include_selection, db_path=db_path)
 

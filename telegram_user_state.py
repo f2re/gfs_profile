@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from feature_flags import product_available, require_product
+
 """Persistent Telegram user locations and product preferences.
 
 The bot remains a single-process long-polling application.  This module uses a
@@ -465,6 +467,7 @@ def normalise_product_params(
     params: Mapping[str, Any] | None,
 ) -> dict[str, Any]:
     product = "aero" if str(product).lower() == "skewt" else str(product or "").lower()
+    require_product(product, params)
     if product not in _ALLOWED_KEYS:
         return {}
     raw = dict(params or {})
@@ -579,6 +582,8 @@ def _preference_from_row(row: sqlite3.Row, kind: str) -> ProductPreference | Non
     if not row[params_column] or not row[timestamp_column]:
         return None
     product = str(row["product"])
+    if not product_available(product, _json_dict(row[params_column])):
+        return None
     return ProductPreference(
         user_id=int(row["user_id"]),
         product=product,
@@ -754,17 +759,17 @@ def get_last_success_preference(
             """,
             (user_id,),
         ).fetchone()
-        if row is None:
-            row = conn.execute(
-                """
-                SELECT * FROM product_state
-                WHERE user_id=? AND last_success_at IS NOT NULL
-                ORDER BY last_success_at DESC
-                LIMIT 1
-                """,
-                (user_id,),
-            ).fetchone()
-    return _preference_from_row(row, "success") if row is not None else None
+        preferred = _preference_from_row(row, "success") if row is not None else None
+        if preferred is not None:
+            return preferred
+        rows = conn.execute(
+            "SELECT * FROM product_state WHERE user_id=? AND last_success_at IS NOT NULL "
+            "ORDER BY last_success_at DESC", (user_id,))
+        for row in rows:
+            preferred = _preference_from_row(row, "success")
+            if preferred is not None:
+                return preferred
+    return None
 
 
 def get_quick_preferences(
@@ -790,11 +795,10 @@ def get_quick_preferences(
             ORDER BY CASE WHEN product=? THEN 0 ELSE 1 END,
                      success_count DESC,
                      last_success_at DESC
-            LIMIT ?
             """,
-            (user_id, last_product, max(1, min(int(limit), 5))),
+            (user_id, last_product),
         ).fetchall()
-    return [preference for row in rows if (preference := _preference_from_row(row, "success"))]
+    return [preference for row in rows if (preference := _preference_from_row(row, "success"))][:max(1, min(int(limit), 5))]
 
 
 def list_product_preferences(

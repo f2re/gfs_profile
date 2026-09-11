@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from feature_flags import require_product, weathernext3_enabled
+
 """Execute immutable product snapshots through the common meteorological services."""
 
 from dataclasses import dataclass
@@ -16,7 +18,8 @@ from .profile_service import build_profile_product
 from .route_service import build_route_product_result
 from .windgram_service import build_windgram_product_result
 
-SUPPORTED_PRODUCTS = ("profile", "aero", "windgram", "cloudgram", "map", "meteogram", "route", "weathernext3")
+_ALL_PRODUCTS = ("profile", "aero", "windgram", "cloudgram", "map", "meteogram", "route", "weathernext3")
+SUPPORTED_PRODUCTS = tuple(p for p in _ALL_PRODUCTS if p != 'weathernext3' or weathernext3_enabled())
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,7 +36,8 @@ class ProductSnapshot:
         params: Mapping[str, Any] | None,
     ) -> "ProductSnapshot":
         product = str(product).lower().strip()
-        if product not in SUPPORTED_PRODUCTS:
+        require_product(product, params)
+        if product not in _ALL_PRODUCTS:
             raise ValueError(f"Неизвестный продукт: {product}")
         return cls(product, _pack_point(point), _clean_params(dict(params or {})))
 
@@ -85,6 +89,7 @@ def build_snapshot_result(
 ) -> CommonProductResult:
     """Blocking common executor. It never uses a stored run/cycle."""
 
+    require_product(snapshot.product, snapshot.params)
     product = snapshot.product
     params = snapshot.params
     if product == "route":

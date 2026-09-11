@@ -1,6 +1,8 @@
 """Opt-in authenticated web/API entry into the same WN3 use case."""
 from __future__ import annotations
 
+from feature_flags import weathernext3_enabled
+
 import asyncio
 import hmac
 import json
@@ -31,6 +33,8 @@ class Wn3Request(BaseModel):
 
 @router.post('/product')
 async def product(body: Wn3Request, x_api_key: str = Header(default='')):
+    if not weathernext3_enabled():
+        raise HTTPException(404, 'Not found')
     key = os.getenv('WEATHERNEXT3_API_KEY', '')
     if not key:
         raise HTTPException(503, 'WN3 API не включён: задайте WEATHERNEXT3_API_KEY')

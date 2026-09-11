@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from feature_flags import product_available, require_product
+
 """Persistent platform-neutral schedules for common messenger products."""
 
 import hashlib
@@ -236,6 +238,8 @@ class MessengerScheduleStore:
             return None
         point = json.loads(row["point_json"]) if row["point_json"] else None
         params = json.loads(row["params_json"])
+        if not product_available(str(row["product"]), params):
+            return None
         return MessengerSchedule(
             int(row["id"]), str(row["platform"]), str(row["user_id"]), str(row["chat_id"]), str(row["product"]),
             dict(point) if isinstance(point, dict) else None, dict(params), str(row["timezone"]), str(row["local_time"]),
@@ -259,6 +263,7 @@ class MessengerScheduleStore:
         *,
         now_utc: datetime | None = None,
     ) -> MessengerSchedule:
+        require_product(snapshot.product, snapshot.params)
         platform, user_id, chat_id = str(platform).lower(), str(user_id), str(chat_id)
         timezone_name = validate_timezone(timezone_name)
         local_time = normalize_time(local_time)
@@ -270,10 +275,10 @@ class MessengerScheduleStore:
         conn = self._connect()
         try:
             with conn:
-                count = int(conn.execute(
-                    "SELECT COUNT(*) n FROM messenger_schedules WHERE platform=? AND user_id=? AND enabled=1",
+                count = sum(self._row(row) is not None for row in conn.execute(
+                    "SELECT * FROM messenger_schedules WHERE platform=? AND user_id=? AND enabled=1",
                     (platform, user_id),
-                ).fetchone()["n"])
+                ))
                 if count >= MAX_SCHEDULES_PER_USER:
                     raise ScheduleLimitError(f"Можно создать не более {MAX_SCHEDULES_PER_USER} расписаний")
                 try:

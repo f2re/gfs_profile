@@ -13,7 +13,7 @@ class TelegramCommandTests(unittest.TestCase):
             names,
             [
                 "start", "help", "profile", "route", "aero", "windgram",
-                "cloudgram", "meteogram", "map", "wn3", "schedule", "settings",
+                "cloudgram", "meteogram", "map", "schedule", "settings",
                 "cycle", "status", "cancel",
             ],
         )
@@ -22,6 +22,8 @@ class TelegramCommandTests(unittest.TestCase):
 
     def test_admin_is_not_exposed_in_public_copy(self) -> None:
         public_copy = "\n".join((_human_home_text(), _human_help_text(), *BOT_COMMAND_LINES))
+        self.assertNotIn("/wn3", public_copy)
+        self.assertNotIn("WeatherNext", public_copy)
         self.assertNotIn("/admin", public_copy)
         self.assertNotIn("Администрирование", public_copy)
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from feature_flags import product_available, require_product
+
 """Persistent per-user scheduler for Telegram weather products.
 
 The scheduler deliberately stays inside the existing single-process long-polling
@@ -144,13 +146,14 @@ class ScheduleStore:
 
     def list_for_user(self, user_id: int) -> list[ProductSchedule]:
         with self._lock:
-            result = [item for item in self._load_unlocked() if item.user_id == int(user_id)]
+            result = [item for item in self._load_unlocked()
+                      if item.user_id == int(user_id) and product_available(item.product, item.params)]
         return sorted(result, key=lambda item: item.next_run_datetime_utc)
 
     def get(self, schedule_id: str) -> ProductSchedule | None:
         with self._lock:
             for item in self._load_unlocked():
-                if item.schedule_id == schedule_id:
+                if item.schedule_id == schedule_id and product_available(item.product, item.params):
                     return item
         return None
 
@@ -168,6 +171,7 @@ class ScheduleStore:
         every_days: int,
         now_utc: datetime | None = None,
     ) -> ProductSchedule:
+        require_product(product, params)
         user_id = int(user_id)
         every_days = _validate_interval(every_days)
         local_time = _normalise_time(local_time)
@@ -176,7 +180,7 @@ class ScheduleStore:
         next_run = next_run_utc(timezone_name, local_time, every_days, now_utc=now_utc)
         with self._lock:
             schedules = self._load_unlocked()
-            owned = [item for item in schedules if item.user_id == user_id]
+            owned = [item for item in schedules if item.user_id == user_id and product_available(item.product, item.params)]
             if len(owned) >= MAX_SCHEDULES_PER_USER:
                 raise ScheduleLimitError(
                     f"Можно создать не более {MAX_SCHEDULES_PER_USER} расписаний. Удалите одно из существующих."
@@ -272,6 +276,8 @@ class ScheduleStore:
             schedules = self._load_unlocked()
             changed = False
             for item in schedules:
+                if not product_available(item.product, item.params):
+                    continue
                 scheduled = item.next_run_datetime_utc
                 if scheduled > now:
                     continue
@@ -850,6 +856,7 @@ class ScheduledMessage:
 
 
 async def execute_schedule(application, namespace: dict[str, Any], item: ProductSchedule) -> bool:
+    require_product(item.product, item.params)
     point = _unpack_point(item.point)
     params = item.params
     message = ScheduledMessage(application.bot, item)

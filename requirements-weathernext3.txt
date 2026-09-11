@@ -1,3 +1,6 @@
+# Optional WeatherNext only; never included by base requirements.txt.
+# Install explicitly before setting WEATHERNEXT3_ENABLED=1.
+google-cloud-bigquery>=3.25,<4
 # GCS upper-air access requires Python 3.11+ (Zarr 3 metadata requirement).
 # Python 3.10 retains GFS and WN3 BigQuery without installing unsupported Zarr.
 zarr>=3.1.3,<3.2; python_version >= "3.11"

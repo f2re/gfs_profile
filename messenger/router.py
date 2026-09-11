@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from feature_flags import DISABLED_SOURCE_MESSAGE, disabled_input, product_available
+
 import asyncio
 import os
 from dataclasses import dataclass
@@ -72,6 +74,16 @@ class MessengerRouter:
     async def handle(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
         if event.platform != gateway.platform:
             raise ValueError(f"Event platform {event.platform!r} does not match gateway {gateway.platform!r}")
+        state = self.sessions.get(event.platform, event.user_id, event.chat_id)
+        stale = state is not None and not product_available(state.product, state.params)
+        blocked = disabled_input(event.text or ("/" + event.command if event.command else ""), event.callback_payload or "")
+        if stale:
+            self.sessions.clear(event.platform, event.user_id, event.chat_id)
+        if blocked or (stale and not event.command):
+            if event.event_type.upper() == 'CALLBACK':
+                await gateway.answer_callback(event)
+            await gateway.send_text(event.chat_id, DISABLED_SOURCE_MESSAGE)
+            return
         kind = event.event_type.upper()
         if kind == "START":
             await self._start(event, gateway)

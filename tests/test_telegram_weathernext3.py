@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from wn3_test_support import enable_for_module as setUpModule
+
 import unittest
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup

@@ -16,7 +16,5 @@ metpy>=1.7,<2
 scipy>=1.13
 pint>=0.23
 python-docx>=1.1,<2
-google-cloud-bigquery>=3.25,<4
 
-# WN3 Zarr is lazy-imported; installing it never authenticates or downloads model data.
--r requirements-weathernext3.txt
+# WeatherNext is disabled by default. Its optional requirements are installed explicitly.

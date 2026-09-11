@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from feature_flags import product_available, require_product
+
 """Single-process scheduler for MAX/VK common product snapshots.
 
 The scheduler never calls platform-specific product runners. It executes the
@@ -32,6 +34,7 @@ class ScheduleExecutor:
         return self.resources.meteogram_semaphore if product == "meteogram" else self.resources.gfs_semaphore
 
     async def execute(self, item: MessengerSchedule, gateway: MessengerGateway) -> bool:
+        require_product(item.product, item.params)
         result = None
         try:
             async with self._gate(item.product):
@@ -94,6 +97,8 @@ class MessengerScheduler:
         gateways = self.gateways()
         completed = 0
         for item in due:
+            if not product_available(item.product, item.params):
+                continue
             gateway = gateways.get(item.platform)
             if gateway is None:
                 self.store.mark_result(item.schedule_id, success=False, error=f"platform {item.platform} unavailable")

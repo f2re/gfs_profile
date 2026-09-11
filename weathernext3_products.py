@@ -1,6 +1,8 @@
 """WN3 product adapters; reuse existing profile, Skew-T and windgram rendering."""
 from __future__ import annotations
 
+from feature_flags import require_weathernext3
+
 import tempfile
 from pathlib import Path
 
@@ -22,6 +24,7 @@ def csv_attachment(rows, name: str) -> ProductAttachment:
 
 
 def upper_product(point, kind, params, *, provider=None, progress_callback=None):
+    require_weathernext3()
     from weathernext3_zarr import WeatherNext3ZarrProvider, LEVELS
     from messenger.weathernext3_service import _map_leads
     from formatters import format_profile_summary

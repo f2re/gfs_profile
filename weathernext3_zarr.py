@@ -6,6 +6,8 @@ variables, the point and exact hours BEFORE loading any forecast values.
 """
 from __future__ import annotations
 
+from feature_flags import require_weathernext3
+
 import math
 import os
 import re
@@ -110,6 +112,7 @@ class WeatherNext3ZarrProvider:
 
     @classmethod
     def from_env(cls):
+        require_weathernext3()
         ensure_upper_runtime()
         return cls(billing_project=os.getenv('WEATHERNEXT3_GCS_BILLING_PROJECT', ''),
                    max_subset_bytes=int(os.getenv('WEATHERNEXT3_ZARR_MAX_SUBSET_BYTES', '33554432')),
@@ -118,6 +121,7 @@ class WeatherNext3ZarrProvider:
                    cache_dir=Path(os.getenv('GFS_CACHE_DIR', '.cache_gfs')) / 'weathernext3' / 'zarr')
 
     def runs(self) -> list[ZarrRun]:
+        require_weathernext3()
         check_cancelled()
         if self.cache_dir is None or self._candidates is not None:
             return self._list_runs()
@@ -134,6 +138,7 @@ class WeatherNext3ZarrProvider:
         return [ZarrRun(_utc(row['init']), row['uri']) for row in rows]
 
     def _list_runs(self) -> list[ZarrRun]:
+        require_weathernext3()
         if self._candidates is not None:
             return sorted(self._candidates(), key=lambda run: (run.init, run.revision, run.uri), reverse=True)
         ensure_upper_runtime()
@@ -172,6 +177,7 @@ class WeatherNext3ZarrProvider:
             raise WeatherNext3Error(f'Каталог WN3 GCS недоступен ({type(exc).__name__}); проверьте ADC/allowlist/billing') from exc
 
     def open(self, uri: str):
+        require_weathernext3()
         if self._opener:
             return self._opener(uri)
         ensure_upper_runtime()
@@ -188,6 +194,7 @@ class WeatherNext3ZarrProvider:
             raise WeatherNext3Error('Для GCS/Zarr используйте Python 3.11+ и requirements-weathernext3.txt') from exc
 
     def profiles(self, lat: float, lon: float, leads: Sequence[int], *, member: str = 'mean', progress=None) -> list[ProfileResult]:
+        require_weathernext3()
         validate_coordinates(lat, lon)
         leads = sorted(set(int(h) for h in leads))
         if not leads or min(leads) < 1 or max(leads) > 360 or len(leads) > 32:

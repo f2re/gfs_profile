@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from feature_flags import weathernext3_enabled
+
 from pathlib import Path
 
 _ENTRYPOINT_MODULE_NAME = __name__
@@ -78,8 +80,9 @@ telegram_schedule_route_compat.install()
 import telegram_personal_ux  # noqa: E402
 telegram_personal_ux.install(globals())
 
-import telegram_weathernext3  # noqa: E402
-telegram_weathernext3.install()
+if weathernext3_enabled():
+    import telegram_weathernext3  # noqa: E402
+    telegram_weathernext3.install()
 
 import telegram_saved_recipes  # noqa: E402
 telegram_saved_recipes.install(globals())
@@ -107,13 +110,19 @@ def build_application():
     telegram_saved_recipes.register(application, globals())
     telegram_personal_ux.register(application, globals())
     telegram_concise_ux.register(application, globals())
-    telegram_weathernext3.register(application)
+    if weathernext3_enabled():
+        telegram_weathernext3.register(application)
+    else:
+        from telegram_feature_guard import register
+        register(application)
     register_meteogram_handlers(application)
     telegram_schedule_ux.register_input_guards(application, globals())
     register_schedule_handlers(application, globals())
     telegram_schedule_route_compat.register(application)
     register_route_handlers(application, gfs_semaphore=GFS_SEMAPHORE, geocode_semaphore=GEOCODE_SEMAPHORE)
     aero_single_mode.configure_application(application)
+    from telegram_commands import install_command_registration
+    install_command_registration(application)
     return application
 
 

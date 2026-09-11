@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from feature_flags import product_available, require_product
+
 """Persistent messenger-neutral successful product scenarios."""
 
 import hashlib
@@ -130,6 +132,8 @@ class UserRecipeStore:
         if row is None:
             return None
         params = json.loads(row["params_json"])
+        if not product_available(str(row["product"]), params):
+            return None
         point = json.loads(row["point_json"]) if row["point_json"] else None
         return UserRecipe(int(row["id"]), str(row["platform"]), str(row["user_id"]), str(row["product"]),
                           dict(params), dict(point) if isinstance(point, dict) else None, str(row["signature"]),
@@ -138,7 +142,13 @@ class UserRecipeStore:
 
     def _one(self, sql: str, args: tuple[Any, ...]) -> UserRecipe | None:
         self.init(); conn = self._connect()
-        try: return self._row(conn.execute(sql, args).fetchone())
+        try:
+            # A disabled most-recent recipe must not hide an older usable one.
+            for row in conn.execute(sql.removesuffix(" LIMIT 1"), args):
+                item = self._row(row)
+                if item is not None:
+                    return item
+            return None
         finally: conn.close()
 
     def record_success(self, platform: str, user_id: str | int, product: str,
@@ -146,6 +156,7 @@ class UserRecipeStore:
         platform, user_id, product = str(platform).lower().strip(), str(user_id).strip(), str(product).lower().strip()
         if not platform or not user_id or not product:
             raise ValueError("platform, user_id and product are required")
+        require_product(product, params)
         clean_params = _clean(dict(params or {})); clean_params = clean_params if isinstance(clean_params, dict) else {}
         clean_point = _point(point); signature = _signature(product, clean_params, clean_point); now = _now()
         self.init(); conn = self._connect()
@@ -156,9 +167,12 @@ class UserRecipeStore:
                 params_json=excluded.params_json,point_json=excluded.point_json,success_count=messenger_user_recipes.success_count+1,last_success_at=excluded.last_success_at""",
                 (platform,user_id,product,signature,json.dumps(clean_params,ensure_ascii=False,sort_keys=True),
                  json.dumps(clean_point,ensure_ascii=False,sort_keys=True) if clean_point else None,now,now))
-                conn.execute("""DELETE FROM messenger_user_recipes WHERE id IN(
-                SELECT id FROM messenger_user_recipes WHERE platform=? AND user_id=? AND pinned=0
-                ORDER BY last_success_at DESC LIMIT -1 OFFSET ?)""", (platform,user_id,MAX_RECIPES_PER_USER))
+                # Temporarily hidden recipes do not consume slots and are not pruned.
+                available = [row["id"] for row in conn.execute(
+                    "SELECT * FROM messenger_user_recipes WHERE platform=? AND user_id=? AND pinned=0 "
+                    "ORDER BY last_success_at DESC,id DESC", (platform, user_id)) if self._row(row) is not None]
+                conn.executemany("DELETE FROM messenger_user_recipes WHERE id=?",
+                                 ((key,) for key in available[MAX_RECIPES_PER_USER:]))
                 row = conn.execute("SELECT * FROM messenger_user_recipes WHERE platform=? AND user_id=? AND signature=?", (platform,user_id,signature)).fetchone()
         finally: conn.close()
         recipe = self._row(row)
@@ -192,9 +206,9 @@ class UserRecipeStore:
         self.init(); conn = self._connect()
         try:
             rows = conn.execute("SELECT * FROM messenger_user_recipes WHERE platform=? AND user_id=? ORDER BY pinned DESC,pinned_at DESC,last_success_at DESC,success_count DESC,id DESC LIMIT ?",
-                                (str(platform).lower(), str(user_id), max(1,min(int(limit),100)))).fetchall()
+                                (str(platform).lower(), str(user_id), 100)).fetchall()
         finally: conn.close()
-        return [item for row in rows if (item := self._row(row))]
+        return [item for row in rows if (item := self._row(row))][:max(1, min(int(limit), 100))]
 
     def quick(self, platform: str, user_id: str | int, *, limit: int = 2) -> list[UserRecipe]:
         limit = max(1,min(int(limit),5)); items = self.list(platform,user_id,limit=MAX_RECIPES_PER_USER+MAX_PINNED_RECIPES)
@@ -218,7 +232,7 @@ class UserRecipeStore:
         try:
             with conn:
                 if pinned and not current.pinned:
-                    n = conn.execute("SELECT COUNT(*) n FROM messenger_user_recipes WHERE platform=? AND user_id=? AND pinned=1",(platform,user_id)).fetchone()["n"]
+                    n = sum(self._row(row) is not None for row in conn.execute("SELECT * FROM messenger_user_recipes WHERE platform=? AND user_id=? AND pinned=1",(platform,user_id)))
                     if int(n) >= MAX_PINNED_RECIPES: raise RecipeLimitError(f"Можно закрепить не более {MAX_PINNED_RECIPES} сценариев")
                 conn.execute("UPDATE messenger_user_recipes SET pinned=?,pinned_at=? WHERE id=?",(1 if pinned else 0,_now() if pinned else None,int(recipe_id)))
                 row = conn.execute("SELECT * FROM messenger_user_recipes WHERE id=?",(int(recipe_id),)).fetchone()

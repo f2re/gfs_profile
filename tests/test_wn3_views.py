@@ -1,5 +1,7 @@
 """WN3 mean is a view of ensemble statistics, not a new deterministic model."""
 import unittest
+
+from wn3_test_support import enable_for_module as setUpModule
 from pathlib import Path
 from unittest.mock import patch
 
@@ -83,6 +85,9 @@ class ViewTests(unittest.TestCase):
         path=Path(__file__).resolve().parents[1]/'requirements-weathernext3.txt'
         requirements=[Requirement(line) for line in path.read_text().splitlines() if line.strip() and not line.startswith('#')]
         for requirement in requirements:
+            if requirement.name == "google-cloud-bigquery":
+                self.assertIsNone(requirement.marker)
+                continue
             self.assertIsNotNone(requirement.marker)
             self.assertFalse(requirement.marker.evaluate({'python_version':'3.10'}))
             self.assertTrue(requirement.marker.evaluate({'python_version':'3.11'}))

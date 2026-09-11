@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from feature_flags import weathernext3_enabled
+
 """Common WeatherNext 3 flow for MAX/VK and future messenger adapters."""
 
 import asyncio
@@ -176,6 +178,8 @@ class WeatherNext3MessengerRouter(ScheduleMessengerRouter):
         return cls(RouterDependencies(geocode=search_location_candidates), **kwargs)
 
     async def _start(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
+        if not weathernext3_enabled():
+            return await super()._start(event, gateway)
         self.sessions.clear(event.platform, event.user_id, event.chat_id)
         self._sync_locations_from_recipes(event)
         active = self.locations.active(event.platform, event.user_id)

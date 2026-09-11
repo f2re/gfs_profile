@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from feature_flags import weathernext3_enabled
+
 """Expose one aerological product and remove historical diagram aliases."""
 
 from typing import Any
@@ -9,7 +11,8 @@ from telegram.ext import CommandHandler
 
 def _human_home_text() -> str:
     return (
-        "🌦 GFS + WeatherNext 3\n\n"
+        ("🌦 GFS + WeatherNext 3\n\n" if weathernext3_enabled() else "🌦 GFS 0.25\n\n")
+        +
         "📈 /profile — профиль\n"
         "✈️ /route — маршрут\n"
         "🧾 /aero — аэродиаграмма\n"
@@ -17,7 +20,8 @@ def _human_home_text() -> str:
         "☁️ /cloudgram — облака и осадки\n"
         "📊 /meteogram — метеограмма/ансамбль\n"
         "🗺️ /map — карты GFS\n"
-        "🛰 /wn3 — WeatherNext 3\n"
+        + ("🛰 /wn3 — WeatherNext 3\n" if weathernext3_enabled() else "")
+        +
         "🕒 /schedule — автоотправка\n"
         "🕒 /cycle — цикл GFS · ⚙️ /status — данные · ✖ /cancel — сброс\n\n"
         "Выберите продукт."
@@ -37,8 +41,9 @@ def _human_help_text() -> str:
         "<code>/cloudgram Москва to=72 mode=simple</code>\n"
         "<code>/meteogram Москва ensemble=gefs days=5 format=pdf</code>\n"
         "<code>/map Москва from=0 to=24 step=3 mode=gif</code>\n"
-        "<code>/wn3 Москва +24</code>\n"
-        "<code>/wn3 Москва kind=clouds to=48 step=3</code>\n"
+        + ("<code>/wn3 Москва +24</code>\n"
+           "<code>/wn3 Москва kind=clouds to=48 step=3</code>\n" if weathernext3_enabled() else "")
+        +
         "<code>/schedule</code> — менеджер автоматических отправок"
     )
 

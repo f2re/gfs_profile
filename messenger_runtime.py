@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from feature_flags import weathernext3_enabled
+
 """Production single-process Telegram + MAX + VK + web/API runtime."""
 
 import logging
@@ -11,7 +13,7 @@ from fastapi.responses import JSONResponse
 from telegram import Update
 
 import app as legacy_web_module
-from messenger.weathernext3_router import WeatherNext3MessengerRouter
+from messenger.schedule_router import ScheduleMessengerRouter
 from messenger.scheduler import MessengerScheduler, ScheduleExecutor
 from messenger.platform_config import PlatformStatus, platform_statuses
 from messenger.runtime_resources import RuntimeResources, get_runtime_resources
@@ -19,29 +21,41 @@ from messenger.webhooks import MessengerWebhookService
 
 LOG = logging.getLogger(__name__)
 RESOURCES = get_runtime_resources()
-ROUTER = RESOURCES.configure_router(WeatherNext3MessengerRouter.default())
+if weathernext3_enabled():
+    from messenger.weathernext3_router import WeatherNext3MessengerRouter
+    ROUTER = RESOURCES.configure_router(WeatherNext3MessengerRouter.default())
+else:
+    ROUTER = RESOURCES.configure_router(ScheduleMessengerRouter.default())
 SERVICE = MessengerWebhookService.from_env(router=ROUTER)
 SCHEDULER = MessengerScheduler(
     store=ROUTER.schedule_store,
     executor=ScheduleExecutor(RESOURCES),
-    gateways=lambda: {"max": SERVICE.max_gateway, "vk": SERVICE.vk_gateway, "telegram": __import__("telegram_weathernext3").gateway_for_application(getattr(app.state, "telegram_application", None))},
+    gateways=lambda: {"max": SERVICE.max_gateway, "vk": SERVICE.vk_gateway, "telegram": _wn3_telegram_gateway()},
 )
 ROUTER.schedule_executor = SCHEDULER.executor
+
+
+def _wn3_telegram_gateway():
+    if not weathernext3_enabled():
+        return None  # Legacy Telegram GFS schedules have their own existing executor.
+    from telegram_weathernext3 import gateway_for_application
+    return gateway_for_application(getattr(app.state, "telegram_application", None))
 
 
 def configure_process_resources(resources: RuntimeResources = RESOURCES) -> None:
     import telegram_bot
     import telegram_meteogram
-    import telegram_weathernext3
     telegram_bot.GFS_SEMAPHORE = resources.gfs_semaphore
     telegram_bot.GEOCODE_SEMAPHORE = resources.geocode_semaphore
     telegram_bot.MAX_CONCURRENT_GFS = resources.gfs_limit
     telegram_bot.MAX_CONCURRENT_GEOCODE = resources.geocode_limit
     telegram_meteogram.METEOGRAM_SEMAPHORE = resources.meteogram_semaphore
     telegram_meteogram.MAX_CONCURRENT_METEOGRAM = resources.meteogram_limit
-    telegram_weathernext3.WN3_SEMAPHORE = resources.weathernext3_semaphore
-    telegram_weathernext3.WN3_MAX_CONCURRENT = resources.weathernext3_limit
-    telegram_weathernext3.set_router(ROUTER)
+    if weathernext3_enabled():
+        import telegram_weathernext3
+        telegram_weathernext3.WN3_SEMAPHORE = resources.weathernext3_semaphore
+        telegram_weathernext3.WN3_MAX_CONCURRENT = resources.weathernext3_limit
+        telegram_weathernext3.set_router(ROUTER)
     telegram_meteogram.search_location_candidates = resources.wrap_blocking_geocode(telegram_meteogram.search_location_candidates)
     legacy_web_module.build_profile = resources.wrap_blocking_gfs(legacy_web_module.build_profile)
 
@@ -114,7 +128,8 @@ async def lifespan(app: FastAPI):
         app.state.runtime_ready = False
         await SCHEDULER.shutdown()
         await SERVICE.tasks.shutdown()
-        await ROUTER.shutdown_wn3()
+        if weathernext3_enabled():
+            await ROUTER.shutdown_wn3()
         try: await _stop_telegram(telegram_application)
         except Exception: LOG.exception("Telegram shutdown failed; runtime shutdown continues")
 
@@ -132,17 +147,21 @@ def _current_platform_runtime() -> dict[str, dict[str, object]]:
 async def health() -> dict[str, object]:
     states = _current_platform_runtime()
     requested_degraded = any(bool(item.get("requested")) and item.get("state") != "ready" for item in states.values())
-    return {
+    result = {
         "status": "degraded" if requested_degraded else "ok",
         "runtime": "multi-messenger",
         "platforms": {name: item.get("state") == "ready" for name, item in states.items()},
         "platform_status": states,
-        "products": ["profile", "aero", "windgram", "cloudgram", "map", "meteogram", "route", "weathernext3"],
+        "products": ["profile", "aero", "windgram", "cloudgram", "map", "meteogram", "route"],
         "features": ["saved_recipes", "settings", "schedules"],
         "scheduler": {"last_error": SCHEDULER.last_error},
         "resources": RESOURCES.snapshot(),
-        "weathernext3": __import__("weathernext3_status").status(),
     }
+    if weathernext3_enabled():
+        from weathernext3_status import status
+        result['products'].append('weathernext3')
+        result['weathernext3'] = status()
+    return result
 
 
 @app.get("/ready")
@@ -152,7 +171,8 @@ async def ready():
     return await health()
 
 
-from messenger.weathernext3_api import router as wn3_api_router
-app.include_router(wn3_api_router)
+if weathernext3_enabled():
+    from messenger.weathernext3_api import router as wn3_api_router
+    app.include_router(wn3_api_router)
 app.include_router(SERVICE.api_router())
 app.mount("/", legacy_web_app)

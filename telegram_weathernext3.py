@@ -1,6 +1,8 @@
 """Thin Telegram transport for the same WN3 router used by MAX and VK."""
 from __future__ import annotations
 
+from feature_flags import weathernext3_enabled
+
 from functools import partial
 from types import SimpleNamespace
 
@@ -186,6 +188,8 @@ def _card_keyboard(params):
 def gateway_for_application(application):
     return TelegramGateway(application.bot) if application is not None else None
 def _insert_wn3_button(keyboard: InlineKeyboardMarkup) -> InlineKeyboardMarkup:
+    if not weathernext3_enabled():
+        return keyboard
     rows = [list(row) for row in keyboard.inline_keyboard]
     if any(button.callback_data == "home:wn3" for row in rows for button in row):
         return keyboard
@@ -196,6 +200,8 @@ def _insert_wn3_button(keyboard: InlineKeyboardMarkup) -> InlineKeyboardMarkup:
 
 def install() -> None:
     global _INSTALLED
+    if not weathernext3_enabled():
+        return
     if _INSTALLED:
         return
     _INSTALLED = True
@@ -240,6 +246,8 @@ def install() -> None:
 
 
 def register(application):
+    if not weathernext3_enabled():
+        return
     application.add_handler(CallbackQueryHandler(_navigation_guard, pattern=r'^(home:|recipe:)'), group=-13)
     application.add_handler(CommandHandler(['wn3', 'weathernext3'], wn3_update), group=-12)
     application.add_handler(CallbackQueryHandler(wn3_update, pattern=r'^(home:wn3|wn3:|w3\||v1\|(wn3|recipe|schedule|settings)\|)'), group=-12)

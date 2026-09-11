@@ -19,7 +19,7 @@ class RuntimeResourcesTests(unittest.IsolatedAsyncioTestCase):
         router2 = resources.configure_router(MessengerRouter(deps2))
         self.assertIs(router1.gfs_semaphore, router2.gfs_semaphore)
         self.assertIs(router1.runtime_resources, resources)
-        self.assertEqual(resources.snapshot(), {"gfs": 1, "geocode": 2, "meteogram": 2, "weathernext3": 2})
+        self.assertEqual(resources.snapshot(), {"gfs": 1, "geocode": 2, "meteogram": 2})
 
         lock = threading.Lock()
         active = 0

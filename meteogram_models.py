@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from feature_flags import DISABLED_SOURCE_MESSAGE, is_weathernext3, weathernext3_enabled
+
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -25,7 +27,7 @@ class MeteogramSource:
     resolution: str | None = None
 
 
-SOURCES = (
+_ALL_SOURCES = (
     # The Telegram meteogram needs a complete, continuous surface series.
     # Open-Meteo's /v1/gfs route defaults to gfs_seamless; using the legacy
     # gfs025 selector has produced incomplete current responses in operation.
@@ -71,7 +73,8 @@ SOURCES = (
         "0.05° station head / 0.1° surface",
     ),
 )
-SOURCE_BY_ID = {source.source_id: source for source in SOURCES}
+SOURCES = tuple(s for s in _ALL_SOURCES if not is_weathernext3(s.source_id) or weathernext3_enabled())
+SOURCE_BY_ID = {source.source_id: source for source in _ALL_SOURCES}
 ALIASES = {
     "noaa": "gfs", "gfs025": "gfs", "ecmwf": "ecmwf_ifs", "ifs": "ecmwf_ifs",
     "aifs": "ecmwf_aifs", "icon": "icon_global", "gem": "gem_gdps",
@@ -112,6 +115,8 @@ class MeteogramSeries:
 def source_for_id(value: str) -> MeteogramSource:
     key = str(value or "gfs").strip().lower().replace("-", "_")
     key = ALIASES.get(key, key)
+    if is_weathernext3(key) and not weathernext3_enabled():
+        raise MeteogramError(DISABLED_SOURCE_MESSAGE)
     try:
         return SOURCE_BY_ID[key]
     except KeyError as exc:
@@ -119,7 +124,8 @@ def source_for_id(value: str) -> MeteogramSource:
 
 
 def sources_by_kind(ensemble: bool) -> tuple[MeteogramSource, ...]:
-    return tuple(source for source in SOURCES if source.ensemble is ensemble)
+    return tuple(source for source in _ALL_SOURCES if source.ensemble is ensemble
+                 and (not is_weathernext3(source.source_id) or weathernext3_enabled()))
 
 
 def available_periods(source: MeteogramSource) -> tuple[int, ...]:

@@ -1,5 +1,7 @@
 """WN3 configuration/preflight. Cloud requests are opt-in (--live) and billable."""
 from __future__ import annotations
+
+from feature_flags import DISABLED_SOURCE_MESSAGE, weathernext3_enabled
 import argparse
 import json
 from weathernext3_status import status
@@ -16,6 +18,9 @@ def main(argv=None) -> int:
     if not args.live:
         print(json.dumps(status(), ensure_ascii=False, indent=2))
         return 0
+    if not weathernext3_enabled():
+        print(json.dumps({'cloud_access_verified': False, 'error': DISABLED_SOURCE_MESSAGE}, ensure_ascii=False))
+        return 2
     from geocode import GeoPoint
     from messenger.weathernext3_service import build_weathernext3_product_result
     from messenger.profile_service import cleanup_product_result

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from feature_flags import require_product
+
 """Messenger-neutral meteogram fetch/render/report service."""
 
 import re
@@ -132,6 +134,9 @@ def build_meteogram_product_result(
     progress_callback: Callable[[ProgressEvent], None] | None = None,
     series: Any | None = None,
 ) -> CommonProductResult:
+    require_product("meteogram", {"source": source_id})
+    if series is not None:
+        require_product("meteogram", {"source": series.source.source_id})
     params = normalize_meteogram_params({"source": source_id, "days": days, "format": output_format})
     source = source_for_id(params["source"])
     if progress_callback:

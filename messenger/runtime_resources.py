@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from feature_flags import require_weathernext3, weathernext3_enabled
+
 """Process-wide runtime limits shared by Telegram, MAX, VK and web/API."""
 
 import asyncio
@@ -87,7 +89,8 @@ class RuntimeResources:
             gfs=int(os.getenv("MAX_CONCURRENT_GFS", "2")),
             geocode=int(os.getenv("MAX_CONCURRENT_GEOCODE", "2")),
             meteogram=int(os.getenv("MAX_CONCURRENT_METEOGRAM", "2")),
-            weathernext3=int(os.getenv("MAX_CONCURRENT_WEATHERNEXT3", os.getenv("WEATHERNEXT3_MAX_CONCURRENT", "2"))),
+            weathernext3=(int(os.getenv("MAX_CONCURRENT_WEATHERNEXT3", os.getenv("WEATHERNEXT3_MAX_CONCURRENT", "2")))
+                          if weathernext3_enabled() else 1),
         )
 
     def snapshot(self) -> dict[str, int]:
@@ -95,7 +98,7 @@ class RuntimeResources:
             "gfs": self.gfs_limit,
             "geocode": self.geocode_limit,
             "meteogram": self.meteogram_limit,
-            "weathernext3": self.weathernext3_limit,
+            **({"weathernext3": self.weathernext3_limit} if weathernext3_enabled() else {}),
         }
 
     def _wrap_blocking(self, func: Callable[..., T], gate: threading.BoundedSemaphore, kind: str) -> Callable[..., T]:
@@ -123,6 +126,7 @@ class RuntimeResources:
         return self._wrap_blocking(func, self._meteogram_gate, "meteogram")
 
     def wrap_blocking_weathernext3(self, func: Callable[..., T]) -> Callable[..., T]:
+        require_weathernext3()
         return self._wrap_blocking(func, self._weathernext3_gate, "weathernext3")
 
     def configure_router(self, router: Any) -> Any:

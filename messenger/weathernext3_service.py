@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from feature_flags import require_weathernext3
+
 """Messenger-neutral WeatherNext 3 surface products.
 
 BigQuery is used only for the surface/statistical products actually published
@@ -307,6 +309,7 @@ def build_weathernext3_product_result(
     upper_provider: Any | None = None,
     **extra: Any,
 ) -> CommonProductResult:
+    require_weathernext3()
     if "from" in extra:
         from_ = int(extra["from"])
     params = normalize_wn3_params({
