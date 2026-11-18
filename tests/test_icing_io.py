@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 import tempfile
 import threading
 import unittest
@@ -13,7 +14,7 @@ import numpy as np
 import xarray as xr
 
 from gfs_core import GfsProfileError, GfsRun
-from icing_config import (ICING_LEVELS_HPA, IcingRequest, icing_repeat_command,
+from icing_config import (DEFAULT_ICING_BBOX, ICING_LEVELS_HPA, IcingRequest, icing_repeat_command,
                           parse_icing_input, validate_icing_request)
 from icing_io import (IcingCancelled, _download, _verify_manifest, icing_subset_url,
                       load_icing_input, missing_index_fields, raw_cache_key,
@@ -56,6 +57,22 @@ class IcingConfigTests(unittest.TestCase):
         with patch.dict("os.environ", {"ICING_BBOX": "0,90,35,75"}):
             self.assertEqual(parse_icing_input("").bbox, (0, 90, 35, 75))
             self.assertEqual(parse_icing_input("bbox=10,20,40,50").bbox, (10, 20, 40, 50))
+
+    def test_focused_default_covers_requested_landmarks(self):
+        with patch.dict("os.environ", {"ICING_BBOX": ""}):
+            request = parse_icing_input("")
+        self.assertEqual(request.bbox, (12, 85, 40.5, 70.5))
+        west, east, south, north = request.bbox
+        for lat, lon in ((52.52, 13.405), (55.03, 82.92), (68.97, 33.08), (41.29, 36.33)):
+            with self.subTest(lat=lat, lon=lon):
+                self.assertTrue(south <= lat <= north and west <= lon <= east)
+
+    def test_old_environment_template_adopts_new_default_without_changing_explicit_request(self):
+        for old in ("-15,100,34,80", " -15.0, 100.0, 34.00, 80 "):
+            with self.subTest(old=old), patch.dict("os.environ", {"ICING_BBOX": old}):
+                self.assertEqual(parse_icing_input("").bbox, DEFAULT_ICING_BBOX)
+                self.assertEqual(parse_icing_input("bbox=-15,100,34,80").bbox, (-15, 100, 34, 80))
+                self.assertEqual(os.environ["ICING_BBOX"], old)
 
     def test_invalid_inputs_are_rejected_before_work(self):
         for command in ("+121", "+24.5", "level=875", "contours=25", "contours=100dam", "product=intensity",

@@ -14,6 +14,7 @@ from icing_config import IcingRequest
 from messenger.callback_codec import encode_callback
 from messenger.contracts import CommonProductResult, Location, UiButton, UiKeyboard
 from messenger.icing_router import IcingMessengerRouter, icing_card_keyboard, icing_owner, icing_payload
+from messenger.icing_labels import BUTTON_LABELS as LABELS
 from messenger.router import RouterDependencies
 from messenger.state import FlowState
 from messenger.user_recipes import UserRecipeStore
@@ -78,10 +79,10 @@ class TelegramIcingTests(unittest.IsolatedAsyncioTestCase):
         self.bot.answer_callback_query.assert_awaited_once()
         kwargs = self.bot.edit_message_text.call_args.kwargs
         labels = [b.text for row in kwargs["reply_markup"].inline_keyboard for b in row]
-        self.assertIn("Вода на уровне", labels)
-        self.assertIn("Толщина слоёв", labels)
-        self.assertIn("Сравнение методов", labels)
-        self.assertIn("Как читать карту", labels)
+        self.assertIn(LABELS["water_level"], labels)
+        self.assertIn(LABELS["thickness"], labels)
+        self.assertIn(LABELS["comparison"], labels)
+        self.assertIn(LABELS["help"], labels)
         self.assertIn("17.11.2026 06:00 UTC", kwargs["text"])
         self.assertEqual(self.built, [])
 
@@ -154,7 +155,7 @@ class TelegramIcingTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(markup.one_time_keyboard)
         self.assertTrue(markup.keyboard[0][0].request_location)
         self.assertEqual([button.text for row in markup.keyboard for button in row],
-                         ["Геолокация", "Назад к карте", "Убрать пункт", "Отмена выбора пункта"])
+                         ["Геолокация", LABELS["back_card"], LABELS["remove_point"], LABELS["cancel_point"]])
         self.assertTrue(self.context.user_data[tg.LOCATION_KEYBOARD_KEY])
 
         # A new gateway instance shares the keyboard flag, just as the next update does.
@@ -192,7 +193,7 @@ class TelegramIcingTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(selected.point, (55.75, 37.62))
             self.assertNotIn(tg.LOCATION_KEYBOARD_KEY, self.context.user_data)
             keyboard = self.bot.send_message.call_args.kwargs["reply_markup"]
-            run = next(button.callback_data for row in keyboard.inline_keyboard for button in row if button.text == "Построить")
+            run = next(button.callback_data for row in keyboard.inline_keyboard for button in row if button.text == LABELS["build"])
             with self.assertRaises(ApplicationHandlerStop):
                 await tg.icing_update(update(payload=run), self.context)
             await self.router.icing_wait_idle()
@@ -202,7 +203,7 @@ class TelegramIcingTests(unittest.IsolatedAsyncioTestCase):
         request = IcingRequest(run=GfsRun("20261117", "06"), point=(59.94, 30.31))
         payload = icing_payload("p", request, owner=icing_owner(tg._normalized(update())))
         with patch.object(tg, "_ROUTER", self.router), patch.object(tg, "get_router", return_value=self.router):
-            for label in ("Назад к карте", "Отмена выбора пункта"):
+            for label in ("Назад к карте", "Отмена выбора пункта", LABELS["back_card"], LABELS["cancel_point"]):
                 with self.subTest(label=label):
                     with self.assertRaises(ApplicationHandlerStop):
                         await tg.icing_update(update(payload=payload), self.context)
@@ -211,6 +212,26 @@ class TelegramIcingTests(unittest.IsolatedAsyncioTestCase):
                     state = self.router.sessions.get("telegram", "42", "7")
                     self.assertEqual(state.step, "params")
                     self.assertEqual(state.params["request"], request)
+                    self.assertNotIn(tg.LOCATION_KEYBOARD_KEY, self.context.user_data)
+
+    async def test_native_remove_point_accepts_current_and_previous_button_labels(self):
+        request = IcingRequest(product="slwp", lead=48, run=GfsRun("20261117", "06"), point=(59.94, 30.31))
+        payload = icing_payload("p", request, owner=icing_owner(tg._normalized(update())))
+        with patch.object(tg, "_ROUTER", self.router), patch.object(tg, "get_router", return_value=self.router):
+            for label in ("Убрать пункт", LABELS["remove_point"]):
+                with self.subTest(label=label):
+                    with self.assertRaises(ApplicationHandlerStop):
+                        await tg.icing_update(update(payload=payload), self.context)
+                    markup = self.bot.send_message.call_args.kwargs["reply_markup"]
+                    self.assertIn(LABELS["remove_point"], [b.text for row in markup.keyboard for b in row])
+                    with self.assertRaises(ApplicationHandlerStop):
+                        await tg.icing_update(update(label), self.context)
+                    state = self.router.sessions.get("telegram", "42", "7")
+                    selected = state.params["request"]
+                    self.assertEqual((selected.product, selected.lead, selected.run),
+                                     (request.product, request.lead, request.run))
+                    self.assertIsNone(selected.point)
+                    self.assertEqual(state.step, "params")
                     self.assertNotIn(tg.LOCATION_KEYBOARD_KEY, self.context.user_data)
 
     async def test_native_point_menu_opens_complete_home_and_removes_reply_keyboard(self):
@@ -244,7 +265,7 @@ class TelegramIcingTests(unittest.IsolatedAsyncioTestCase):
         event = tg._normalized(update())
         await self.router._icing_menu(event, tg.TelegramIcingGateway(self.bot), IcingRequest())
         keyboard = self.bot.send_message.call_args.kwargs["reply_markup"]
-        cancel = next(button.callback_data for row in keyboard.inline_keyboard for button in row if button.text == "Отмена")
+        cancel = next(button.callback_data for row in keyboard.inline_keyboard for button in row if button.text == LABELS["cancel"])
         with patch.object(tg, "get_router", return_value=self.router):
             with self.assertRaises(ApplicationHandlerStop):
                 await tg.icing_update(update(payload=cancel), self.context)

@@ -24,7 +24,8 @@ ICING_PRODUCTS = {
     "slwp": "Запас переохлаждённой воды в столбе",
     "agreement": "Годске и переохлаждённая вода",
 }
-DEFAULT_ICING_BBOX = (-15.0, 100.0, 34.0, 80.0)
+DEFAULT_ICING_BBOX = (12.0, 85.0, 40.5, 70.5)
+LEGACY_DEFAULT_ICING_BBOX = (-15.0, 100.0, 34.0, 80.0)
 ICING_MAX_GRID_POINTS = 150_000
 
 
@@ -49,7 +50,10 @@ def validate_icing_bbox(value) -> tuple[float, float, float, float]:
 
 def default_icing_bbox() -> tuple[float, float, float, float]:
     raw = os.getenv("ICING_BBOX", "").strip()
-    return validate_icing_bbox(raw.split(",") if raw else DEFAULT_ICING_BBOX)
+    bbox = validate_icing_bbox(raw.split(",") if raw else DEFAULT_ICING_BBOX)
+    # Installed .env files retain the previous template. Adopt the new standard
+    # region without rewriting secrets; explicit request/callback bbox is intact.
+    return DEFAULT_ICING_BBOX if bbox == LEGACY_DEFAULT_ICING_BBOX else bbox
 
 
 @dataclass(frozen=True)

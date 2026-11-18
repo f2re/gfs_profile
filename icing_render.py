@@ -308,7 +308,13 @@ def render_icing_png(
                 basemap_note = "Natural Earth · слой морей не установлен"
             else:
                 basemap_note = "Подложка не установлена"
-            fig.text(0.022, bottom(0.13), f"{SOURCE_LABEL} · NOMADS", fontsize=9.1, color="#526b79")
+            source_note = f"{SOURCE_LABEL} · NOMADS"
+            if point is not None:
+                latitude_text = f"{point[0]:.4f}".replace(".", ",")
+                longitude_text = f"{abs(point[1]):.4f}".replace(".", ",")
+                longitude_side = "в.д." if point[1] >= 0 else "з.д."
+                source_note += f" · Пункт: {latitude_text}° с.ш., {longitude_text}° {longitude_side}"
+            fig.text(0.022, bottom(0.13), source_note, fontsize=9.1, color="#526b79")
             fig.text(0.978, bottom(0.13), basemap_note, fontsize=9.1, color="#526b79", ha="right")
             point_metadata = f"; selected point {point[0]:.4f},{point[1]:.4f}" if point is not None else ""
             fig.savefig(target, format="png", dpi=170, metadata={"Title": title, "Description": f"GFS {run_dt.isoformat()} +{int(lead)}h; valid {valid_dt.isoformat()}; {DISPLAY_UNITS[product]}; GFS data; model{point_metadata}"})

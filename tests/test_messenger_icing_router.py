@@ -18,6 +18,7 @@ from messenger.icing_router import (
     IcingMessengerRouter, icing_owner, icing_payload, icing_request_from_payload,
     icing_card_keyboard, icing_card_text, icing_lead_keyboard, icing_menu_keyboard,
 )
+from messenger.icing_labels import BUTTON_LABELS as LABELS
 from messenger.router import RouterDependencies
 from messenger.user_recipes import UserRecipeStore
 
@@ -57,6 +58,17 @@ def event(platform="max", text="/icing", payload=None, user="42", chat="1", loca
 
 def last_keyboard(gateway):
     return next(call[2] for call in reversed(gateway.calls) if hasattr(call[2], "rows"))
+
+
+def icing_button(gateway, action, **fields):
+    for row in last_keyboard(gateway).rows:
+        for button in row:
+            if not (button.payload or "").startswith("v1|icing|"):
+                continue
+            decoded_action, request = icing_request_from_payload(button.payload)
+            if decoded_action == action and all(getattr(request, key) == value for key, value in fields.items()):
+                return button
+    raise AssertionError(f"Icing action {action} with {fields} not found")
 
 
 class IcingRouterTests(unittest.IsolatedAsyncioTestCase):
@@ -228,7 +240,7 @@ class IcingRouterTests(unittest.IsolatedAsyncioTestCase):
             gateway = Gateway(platform)
             request = IcingRequest(product="slw_max", run=GfsRun("20261117", "06"))
             await router._icing_card(event(platform), gateway, request)
-            help_button = next(b for row in last_keyboard(gateway).rows for b in row if b.text == "Как читать карту")
+            help_button = next(b for row in last_keyboard(gateway).rows for b in row if b.text == LABELS["help"])
             await router.handle(event(platform, payload=help_button.payload), gateway)
             text = gateway.calls[-1][1]
             self.assertIn("NOAA", text)
@@ -239,7 +251,7 @@ class IcingRouterTests(unittest.IsolatedAsyncioTestCase):
             await router.handle(event(platform, payload=payload), gateway)
             labels = [b.text for row in last_keyboard(gateway).rows for b in row]
             self.assertIn("10 дам", labels)
-            self.assertIn("50 дам", labels)
+            self.assertIn("✓ 50 дам", labels)
             self.assertNotIn("гп.м", " ".join(labels))
 
     async def test_stateless_custom_request_survives_router_restart(self):
@@ -262,7 +274,7 @@ class IcingRouterTests(unittest.IsolatedAsyncioTestCase):
         await router.handle(event(text="/icing product=slwp +24"), gateway)
         await router.icing_wait_idle()
         keyboard = last_keyboard(gateway)
-        png_button = next(b for row in keyboard.rows for b in row if b.text == "PNG целиком")
+        png_button = next(b for row in keyboard.rows for b in row if b.text == LABELS["png"])
         action, request = icing_request_from_payload(png_button.payload)
         self.assertEqual(action, "i")
         self.assertEqual(request.run, GfsRun("20261117", "06"))
@@ -311,7 +323,7 @@ class IcingRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("19.11.2026 09:00 UTC", gateway.calls[-1][1])
         self.assertIn("недоступны", gateway.calls[-1][1])
         build = last_keyboard(gateway).rows[0][0]
-        self.assertEqual(build.text, "Построить")
+        self.assertEqual(build.text, LABELS["build"])
         _, actual = icing_request_from_payload(build.payload)
         self.assertEqual(actual.run, older)
 
@@ -417,16 +429,23 @@ class IcingRouterTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(all(not path.exists() for path in self.created))
 
     async def test_status_and_cancellation_before_slot_do_not_start_builder(self):
-        router, gateway = self.new_router(), Gateway()
-        await router.gfs_semaphore.acquire()
-        try:
-            await router.handle(event(text="/icing +24"), gateway)
-            await router.handle(event(text="/status"), gateway)
-            self.assertIn("выполняется", gateway.calls[-1][1])
-            await router.handle(event(text="/cancel"), gateway)
-        finally:
-            router.gfs_semaphore.release()
-        await router.icing_wait_idle()
+        router = self.new_router()
+        for platform in ("telegram", "max", "vk"):
+            gateway = Gateway(platform)
+            await router.gfs_semaphore.acquire()
+            try:
+                await router.handle(event(platform, text="/icing +24"), gateway)
+                status, cancel = icing_button(gateway, "s"), icing_button(gateway, "x")
+                self.assertEqual((status.text, cancel.text), (LABELS["status"], LABELS["cancel"]))
+                await router.handle(event(platform, payload=status.payload), gateway)
+                self.assertIn("выполняется", gateway.calls[-1][1])
+                await router.handle(event(platform, payload=cancel.payload), gateway)
+                self.assertIsNone(router.sessions.get(platform, "42", "1"))
+                self.assertTrue(any(b.payload == encode_callback("flow", "home")
+                                    for row in last_keyboard(gateway).rows for b in row))
+            finally:
+                router.gfs_semaphore.release()
+            await router.icing_wait_idle()
         self.assertEqual(self.built, [])
 
     async def test_errors_are_explained_without_stuck_job(self):
@@ -459,6 +478,88 @@ class IcingRouterTests(unittest.IsolatedAsyncioTestCase):
         router, gateway = self.new_router(cls=MapMessengerRouter), Gateway()
         await router.handle(event(payload=encode_callback("product", "open", "icing")), gateway)
         self.assertIn("Выберите карту", gateway.calls[-1][1])
+
+    async def test_full_icing_navigation_keeps_dates_point_and_home_on_three_platforms(self):
+        from messenger.schedule_router import ScheduleMessengerRouter
+        choices = [GeoPoint(55.7558, 37.6173, "Москва, Россия"), GeoPoint(56.1, 38.2, "Москва, другой пункт")]
+        router = self.new_router(cls=ScheduleMessengerRouter, geocoder=lambda *_: choices)
+        pages = (len(canonical_leads()) + 11) // 12
+        for platform in ("telegram", "max", "vk"):
+            gateway = Gateway(platform)
+            owner = icing_owner(event(platform))
+
+            async def click(action, **fields):
+                button = icing_button(gateway, action, **fields)
+                before = len(gateway.calls)
+                await router.handle(event(platform, payload=button.payload), gateway)
+                self.assertEqual(gateway.calls[before][0], "answer")
+                return button
+
+            def assert_controls():
+                keyboard = last_keyboard(gateway)
+                self.assertTrue(any(b.payload == encode_callback("flow", "home") for row in keyboard.rows for b in row))
+                for row in keyboard.rows:
+                    self.assertLessEqual(len(row), 3)
+                    if len(row) == 3:
+                        self.assertTrue(all("гПа" in b.text or "дам" in b.text for b in row))
+                    for button in row:
+                        if (button.payload or "").startswith("v1|icing|"):
+                            self.assertLessEqual(len(button.payload.encode()), 64)
+                            icing_request_from_payload(button.payload, owner=owner)
+
+            await router.handle(event(platform), gateway)
+            self.assertIn("17.11.2026 06:00 UTC", gateway.calls[-1][1])
+            self.assertIn("18.11.2026 06:00 UTC", gateway.calls[-1][1])
+            assert_controls()
+            await click("a")
+            self.assertIn("NOAA", gateway.calls[-1][1])
+            await click("h")
+            await click("g")
+            await click("c", product="godske_max")
+            await click("m")
+            self.assertIn("дам", gateway.calls[-1][1])
+            await click("c")
+            await click("o")
+            self.assertTrue(icing_button(gateway, "c", contour_step=500).text.startswith("✓ "))
+            await click("c", contour_step=100)
+            await click("p")
+            self.assertTrue(any(b.action == "request_location" for row in last_keyboard(gateway).rows for b in row))
+            await router.handle(event(platform, text="Москва"), gateway)
+            await click("q", point=(55.7558, 37.6173))
+            self.assertIn("Москва, Россия", gateway.calls[-1][1])
+            await click("p")
+            await router.handle(event(platform, text="", location=Location(59.9386, 30.3141)), gateway)
+            selected = router.sessions.get(platform, "42", "1").params["request"]
+            self.assertEqual((selected.product, selected.point, selected.contour_step),
+                             ("godske_max", (59.9386, 30.3141), 100))
+            await click("l0")
+            self.assertTrue(icing_button(gateway, "t", lead=24).text.startswith("✓ +24"))
+            await click("l1")
+            for page in range(2, pages + 1):
+                await click(f"l{page}")
+            assert_controls()
+            await click("t", lead=384)
+            self.assertIn("03.12.2026 06:00 UTC", gateway.calls[-1][1])
+            self.assertEqual(router.sessions.get(platform, "42", "1").params["request"], replace(selected, lead=384))
+            await click("r")
+            await router.icing_wait_idle()
+            self.assertEqual(self.built[-1], replace(selected, lead=384))
+            assert_controls()
+            before = len(gateway.calls)
+            await click("i")
+            await router.icing_wait_idle()
+            delivered = gateway.calls[before:]
+            self.assertTrue(any(call[0] == "file" and call[1].endswith(".png") for call in delivered))
+            self.assertFalse(any(call[0] == "file" and call[1].endswith(".csv") for call in delivered))
+            await click("c")
+            await click("p")
+            await router.handle(event(platform, text=LABELS["back_card"]), gateway)
+            self.assertEqual(router.sessions.get(platform, "42", "1").params["request"].point, selected.point)
+            await click("p")
+            await router.handle(event(platform, text=LABELS["home"]), gateway)
+            self.assertIsNone(router.sessions.get(platform, "42", "1"))
+            self.assertIn(encode_callback("product", "open", "icing"),
+                          [b.payload for row in last_keyboard(gateway).rows for b in row])
 
     async def test_ambiguous_marker_choice_preserves_parameters_on_all_platforms(self):
         choices = [GeoPoint(55.7558, 37.6173, "Москва, Россия"),
@@ -517,7 +618,7 @@ class IcingRouterTests(unittest.IsolatedAsyncioTestCase):
             await router.icing_wait_idle()
             self.assertEqual(self.built[-1], selected)
             await router.handle(event(platform, payload=icing_payload("p", selected, owner=owner)), gateway)
-            remove = next(b for row in last_keyboard(gateway).rows for b in row if b.text == "Убрать пункт")
+            remove = next(b for row in last_keyboard(gateway).rows for b in row if b.text == LABELS["remove_point"])
             await router.handle(event(platform, payload=remove.payload), gateway)
             self.assertEqual(router.sessions.get(platform, "42", "1").params["request"], original)
             self.assertIn("Пункт убран", gateway.calls[-1][1])
@@ -637,7 +738,7 @@ class IcingCallbackTests(unittest.TestCase):
             keyboard = icing_lead_keyboard(IcingRequest(), page)
             for row in keyboard.rows:
                 for button in row:
-                    if button.text.startswith("+"):
+                    if (button.payload or "").startswith("v1|icing|t|"):
                         found.add(icing_request_from_payload(button.payload)[1].lead)
         self.assertEqual(found, expected)
         self.assertIn(384, found)
@@ -687,7 +788,7 @@ class IcingCallbackTests(unittest.TestCase):
         request = IcingRequest(run=GfsRun("20261231", "18"))
         keyboard = icing_lead_keyboard(request)
         labels = [b.text for row in keyboard.rows for b in row]
-        self.assertIn("+24 · 01.01 18:00", labels)
+        self.assertIn("✓ +24 · 01.01 18:00", labels)
         self.assertTrue(all(len(row) <= 2 for row in keyboard.rows))
         self.assertIn("01.01.2027 18:00 UTC", icing_card_text(request))
 

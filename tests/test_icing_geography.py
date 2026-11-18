@@ -11,7 +11,7 @@ from matplotlib.path import Path
 from matplotlib.patches import PathPatch, Patch
 
 from icing_geography import (
-    WATER_COLOR, _water_patch, _label_extent, city_candidates, draw_cities, draw_selected_point,
+    WATER_COLOR, SELECTED_COLOR, _water_patch, city_candidates, draw_cities, draw_selected_point,
 )
 from icing_render import _boundary, _projector
 
@@ -40,7 +40,7 @@ class IcingGeographyTests(unittest.TestCase):
         self.assertTrue({"Краснодар", "Воронеж", "Санкт-Петербург", "Пермь", "Нижний Новгород"}.issubset(names))
 
     def test_city_labels_do_not_overlap_or_extend_outside_map(self):
-        bbox = (-15, 100, 34, 80)
+        bbox = (12, 85, 40.5, 70.5)
         project = _projector(bbox)
         outline = _boundary(bbox, project)
         figure = Figure(figsize=(12.8, 8), dpi=170)
@@ -58,13 +58,17 @@ class IcingGeographyTests(unittest.TestCase):
         bounds = [label.get_window_extent(renderer) for label in labels]
         for i, box in enumerate(bounds):
             self.assertFalse(any(box.overlaps(other) for other in bounds[i + 1:]))
-        self.assertTrue({"Москва", "Санкт-Петербург", "Краснодар", "Воронеж", "Пермь"}.issubset({label.get_text() for label in labels}))
+        self.assertTrue({"Москва", "Санкт-Петербург", "Краснодар", "Воронеж", "Пермь", "Берлин", "Мурманск", "Новосибирск"}.issubset({label.get_text() for label in labels}))
+        map_outline = clip.get_path().transformed(clip.get_transform())
+        for box in bounds:
+            self.assertTrue(map_outline.contains_points(box.corners()).all())
 
-    def test_selected_point_keeps_exact_coordinates_and_priority_over_labels(self):
-        bbox = (-15, 100, 34, 80)
+    def test_selected_point_is_small_marker_only_at_exact_coordinates(self):
+        bbox = (12, 85, 40.5, 70.5)
         project = _projector(bbox)
         outline = _boundary(bbox, project)
-        for point in ((55.75, 37.62), (34, -15), (80, 100)):
+        marker_pixel_counts = []
+        for point in ((55.75, 37.62), (40.5, 12), (70.5, 85), (70.5, 12), (40.5, 85)):
             with self.subTest(point=point):
                 figure = Figure(figsize=(12.8, 8), dpi=170)
                 FigureCanvasAgg(figure)
@@ -77,22 +81,27 @@ class IcingGeographyTests(unittest.TestCase):
                 axis.legend(handles=[Patch(facecolor="gray", label="Нет данных")], loc="lower left")
                 x, y = project(point[1], point[0])
                 contour = axis.text(x, y, "150", gid="icing_contour")
-                selected = draw_selected_point(axis, point, bbox, project, clip)
+                original_texts = list(axis.texts)
+                markers = draw_selected_point(axis, point, bbox, project, clip)
+                self.assertEqual(list(axis.texts), original_texts)
                 cities = draw_cities(axis, bbox, project, clip)
                 figure.canvas.draw()
                 renderer = figure.canvas.get_renderer()
-                selected_box = _label_extent(selected, renderer)
-                self.assertIn("Выбранный пункт", selected.get_text())
-                self.assertFalse(selected_box.overlaps(axis.get_legend().get_window_extent(renderer)))
-                self.assertFalse(clip.get_path().transformed(clip.get_transform()).intersects_bbox(selected_box, filled=False))
-                self.assertFalse(any(selected_box.overlaps(city.get_window_extent(renderer)) for city in cities))
                 self.assertFalse(contour.get_visible())
-                markers = [line for line in axis.lines if line.get_gid() == "icing_selected_point_marker"]
                 self.assertEqual(len(markers), 2)
                 for marker in markers:
                     np.testing.assert_allclose(marker.get_xdata(), [x])
                     np.testing.assert_allclose(marker.get_ydata(), [y])
+                    self.assertLessEqual(marker.get_markersize(), 11)
+                    marker_box = marker.get_window_extent(renderer)
+                    self.assertFalse(marker_box.overlaps(axis.get_legend().get_window_extent(renderer)))
+                    self.assertFalse(any(marker_box.overlaps(city.get_window_extent(renderer)) for city in cities))
+                self.assertFalse(any(text.get_gid() == "icing_selected_point_label" for text in axis.texts))
+                pixels = np.asarray(figure.canvas.buffer_rgba())[:, :, :3]
+                marker_rgb = np.round(np.asarray(to_rgb(SELECTED_COLOR)) * 255).astype(np.uint8)
+                marker_pixel_counts.append(int(np.all(pixels == marker_rgb, axis=-1).sum()))
                 figure.clear()
+        self.assertGreater(min(marker_pixel_counts), 0.85 * max(marker_pixel_counts))
 
 
 if __name__ == "__main__":

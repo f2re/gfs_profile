@@ -67,14 +67,50 @@ class IcingRenderTests(unittest.TestCase):
             render_icing_png(fields, np.array([[0.125]]), np.array([[0.125]]), "godske_sum", run=GfsRun("20261117", "06"), lead=0, bbox=(0, 0.25, 0, 0.25), output_path=target)
             self.assertGreater(target.stat().st_size, 10000)
 
+    def test_selected_marker_stays_visible_over_empty_field_message(self):
+        from matplotlib.colors import to_rgb
+        from icing_geography import SELECTED_COLOR
+        fields = compute_icing_fields(
+            [850], np.array([[[np.nan]]]), np.array([[[np.nan]]]),
+            np.array([[[1500.0]]]), np.array([[[np.nan]]]),
+            np.array([[100000.0]]), np.array([[0.0]]),
+        )
+        with tempfile.TemporaryDirectory() as directory, patch("icing_render._basemap", return_value=False):
+            target = Path(directory) / "empty_with_point.png"
+            render_icing_png(fields, np.array([[0.125]]), np.array([[0.125]]), "godske_sum",
+                             run=GfsRun("20261117", "06"), lead=0, bbox=(0, 0.25, 0, 0.25),
+                             point=(0.125, 0.125), output_path=target)
+            with Image.open(target) as image:
+                pixels = np.asarray(image.convert("RGB"))
+                marker_rgb = np.round(np.asarray(to_rgb(SELECTED_COLOR)) * 255).astype(np.uint8)
+                self.assertGreater(int(np.all(pixels == marker_rgb, axis=-1).sum()), 30)
+
     def test_rejects_coordinate_mismatch(self):
         fields, lat, lon = small_fields()
         with self.assertRaises(ValueError):
             render_icing_png(fields, lat[:1], lon, "slwp", run=GfsRun("20261117", "06"), lead=0, bbox=(34, 40, 54, 57), output_path="unused.png")
 
     def test_selected_point_is_rendered_and_preserved_in_png_metadata(self):
+        from matplotlib.figure import Figure
         fields, lat, lon = small_fields()
-        with tempfile.TemporaryDirectory() as directory, patch("icing_render._basemap", return_value=False):
+        original = Figure.savefig
+
+        def capture_point_layout(figure, *args, **kwargs):
+            figure.canvas.draw()
+            renderer = figure.canvas.get_renderer()
+            axis = figure.axes[0]
+            self.assertFalse(any("Выбранный пункт" in text.get_text() for text in axis.texts))
+            coordinate_notes = [text for text in figure.texts if "Пункт:" in text.get_text()]
+            self.assertEqual(len(coordinate_notes), 1)
+            self.assertIn("55,7500° с.ш., 37,6200° в.д.", coordinate_notes[0].get_text())
+            note_box = coordinate_notes[0].get_window_extent(renderer)
+            self.assertLess(note_box.y1, axis.get_window_extent(renderer).y0)
+            other_footer = [text for text in figure.texts if text is not coordinate_notes[0]
+                            and text.get_position()[1] == coordinate_notes[0].get_position()[1]]
+            self.assertFalse(any(note_box.overlaps(text.get_window_extent(renderer)) for text in other_footer))
+            return original(figure, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory, patch("icing_render._basemap", return_value=False), patch.object(Figure, "savefig", new=capture_point_layout):
             target = Path(directory) / "selected.png"
             render_icing_png(fields, lat, lon, "slw_max", run=GfsRun("20261117", "06"), lead=24,
                              bbox=(34, 40, 54, 57), output_path=target, point=(55.75, 37.62))
@@ -118,7 +154,7 @@ class IcingRenderTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory, patch("icing_render._basemap", return_value=False), patch.object(Figure, "savefig", new=capture_layout):
             render_icing_png(fields, lat, lon, "slw_max", run=GfsRun("20261117", "06"), lead=24,
-                             bbox=(-15, 100, 34, 80), output_path=Path(directory) / "layout.png")
+                             bbox=(12, 85, 40.5, 70.5), output_path=Path(directory) / "layout.png")
         self.assertGreaterEqual(positions[0][2] * positions[0][3], .75)
 
     def test_one_warm_level_does_not_make_missing_water_column_look_clear(self):

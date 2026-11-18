@@ -12,6 +12,7 @@ from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler, CommandHa
 
 from messenger.callback_codec import CallbackCodecError, decode_callback, encode_callback
 from messenger.contracts import Location, NormalizedEvent, PlatformMessage
+from messenger.icing_labels import BUTTON_LABELS as LABELS, POINT_REPLY_LABELS, point_reply_action
 from messenger.runtime_resources import get_runtime_resources
 from telegram_file_send import reply_png_file
 from telegram_ui import native_callback_payload
@@ -49,16 +50,18 @@ def telegram_markup(keyboard):
                     native_row.append(KeyboardButton(button.text))
                 elif button.action == "callback":
                     try:
-                        action = decode_callback(button.payload).action
+                        callback = decode_callback(button.payload)
                     except CallbackCodecError:
                         continue
-                    label = ("Меню" if native_callback_payload(button.payload) == "prefs:home"
-                             else {"c": "Назад к карте", "d": "Убрать пункт"}.get(action))
+                    if native_callback_payload(button.payload) == "prefs:home":
+                        label = LABELS["home"]
+                    else:
+                        label = POINT_REPLY_LABELS.get(callback.action) if callback.scope == "icing" else None
                     if label:
                         native_row.append(KeyboardButton(label))
             if native_row:
                 rows.append(native_row)
-        rows.append([KeyboardButton("Отмена выбора пункта")])
+        rows.append([KeyboardButton(LABELS["cancel_point"])])
         return ReplyKeyboardMarkup(rows, resize_keyboard=True, one_time_keyboard=True,
                                    selective=True, is_persistent=False,
                                    input_field_placeholder="Город или широта, долгота")
@@ -176,7 +179,7 @@ async def icing_update(update, context):
     context.user_data[SESSION_KEY] = True
     router = router or get_router()
     gateway = TelegramIcingGateway(context.bot, context.user_data)
-    if event.event_type == "TEXT" and (event.text or "").strip() == "Меню" and _awaiting_point(router, event):
+    if event.event_type == "TEXT" and point_reply_action(event.text) == "home" and _awaiting_point(router, event):
         # A reply keyboard has no callback payload; reuse the complete native home.
         import telegram_bot
         router.sessions.clear(event.platform, event.user_id, event.chat_id)
