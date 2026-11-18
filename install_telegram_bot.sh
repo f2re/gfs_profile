@@ -159,6 +159,14 @@ ask_secret() {
 run_with_env() {
   run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" bash -c 'set -e; set -a; source "$1"; set +a; cd "$2"; shift 2; exec "$@"' _ "$ENV_FILE" "$INSTALL_DIR" "$@"
 }
+git_rev() {
+  local revision
+  # Root/systemd may read a user-owned checkout; scope trust to this command
+  # and this exact checkout without changing global safe.directory settings.
+  revision="$(git -c safe.directory="$REPO_ROOT" -C "$REPO_ROOT" rev-parse --verify 'HEAD^{commit}' 2>/dev/null)" || return 1
+  [[ "$revision" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || return 1
+  printf '%s' "$revision"
+}
 
 print_status() {
   section "Состояние"
@@ -184,6 +192,7 @@ require_repo_files() {
   for file in messenger_launcher.py messenger_runtime.py messenger_config_check.py messenger_readiness.py register_messenger_commands.py register_messenger_webhooks.py telegram_bot.py requirements.txt runtime_check.py geocoder_preflight.py prepare_basemap_cache.py register_telegram_commands.py .env.telegram.example; do
     [[ -f "$REPO_ROOT/$file" ]] || fail "Не найден $file в $REPO_ROOT"
   done
+  git_rev >/dev/null || fail "Не удалось подтвердить commit исходного checkout: $REPO_ROOT"
 }
 install_system_packages() {
   [[ "$SKIP_APT" -eq 0 ]] || { warn "apt пропущен"; return 0; }
@@ -356,7 +365,7 @@ register_webhooks() {
 }
 write_state() {
   local candidate_rev confirmed_rev pending_rev deploy_status tmp
-  candidate_rev="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf unknown)"
+  candidate_rev="$(git_rev)" || fail "Не удалось подтвердить commit; состояние установки не записано"
   confirmed_rev="$candidate_rev"; pending_rev=""; deploy_status="complete"
   if (( NO_START || SKIP_COMMANDS || SKIP_WEBHOOKS )); then
     deploy_status="partial"; pending_rev="$candidate_rev"

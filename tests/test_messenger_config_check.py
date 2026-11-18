@@ -8,6 +8,26 @@ from messenger_config_check import ConfigError, validate_environment
 
 
 class MessengerConfigCheckTests(unittest.TestCase):
+    def test_legacy_bot_token_auto_enables_telegram_runtime(self) -> None:
+        with patch.dict(os.environ, {"BOT_TOKEN": "legacy-token"}, clear=True):
+            state = validate_environment(strict_platforms={"telegram"})
+        self.assertTrue(state["telegram"])
+        self.assertTrue(state["platform_status"]["telegram"]["requested"])
+        self.assertEqual(state["platform_status"]["telegram"]["state"], "ready")
+
+    def test_legacy_bot_token_satisfies_explicit_telegram_enable(self) -> None:
+        with patch.dict(os.environ, {"BOT_TOKEN": "legacy-token", "TELEGRAM_ENABLED": "1"}, clear=True):
+            state = validate_environment(strict_platforms={"telegram"})
+        self.assertTrue(state["telegram"])
+        self.assertEqual(state["platform_status"]["telegram"]["state"], "ready")
+
+    def test_explicit_telegram_disable_wins_over_legacy_bot_token(self) -> None:
+        with patch.dict(os.environ, {"BOT_TOKEN": "legacy-token", "TELEGRAM_ENABLED": "0"}, clear=True):
+            state = validate_environment(strict_platforms={"telegram"})
+        self.assertFalse(state["telegram"])
+        self.assertFalse(state["platform_status"]["telegram"]["requested"])
+        self.assertEqual(state["platform_status"]["telegram"]["state"], "off")
+
     def test_telegram_only_common_runtime_is_valid(self) -> None:
         env = {
             "TELEGRAM_BOT_TOKEN": "tg-token",

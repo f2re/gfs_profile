@@ -160,7 +160,14 @@ run_with_env() {
     exec "$@"
   ' _ "$ENV_FILE" "$INSTALL_DIR" "$@"
 }
-git_rev() { git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf unknown; }
+git_rev() {
+  local revision
+  # The root systemd updater has no SUDO_UID while the checkout is normally
+  # owned by the installing user. Trust only this explicitly executed checkout.
+  revision="$(git -c safe.directory="$REPO_ROOT" -C "$REPO_ROOT" rev-parse --verify 'HEAD^{commit}' 2>/dev/null)" || return 1
+  [[ "$revision" =~ ^([0-9a-f]{40}|[0-9a-f]{64})$ ]] || return 1
+  printf '%s' "$revision"
+}
 admin_db_path() {
   local raw
   raw="$(read_env_value TELEGRAM_ADMIN_DB)"; raw="${raw:-$DEFAULT_ADMIN_DB_RELATIVE}"
@@ -196,8 +203,13 @@ cleanup() {
 trap cleanup EXIT
 
 print_status() {
+  local revision
   section "Состояние deploy"
-  [[ -d "$REPO_ROOT/.git" ]] && success "Источник: $REPO_ROOT @ $(git_rev)" || warn "Источник не похож на git checkout"
+  if revision="$(git_rev)"; then
+    success "Источник: $REPO_ROOT @ $revision"
+  else
+    warn "Источник: $REPO_ROOT; commit не удалось подтвердить"
+  fi
   [[ -d "$INSTALL_DIR" ]] && success "Каталог: $INSTALL_DIR" || warn "Каталог отсутствует"
   if [[ -f "$ENV_FILE" ]]; then
     success ".env: $ENV_FILE"
@@ -226,6 +238,7 @@ require_ready_install() {
   [[ -d "$INSTALL_DIR" ]] || fail "Нет $INSTALL_DIR. Сначала выполните install_telegram_bot.sh"
   [[ -f "$ENV_FILE" ]] || fail "Нет $ENV_FILE"
   id "$SERVICE_USER" >/dev/null 2>&1 || fail "Нет пользователя $SERVICE_USER"
+  git_rev >/dev/null || fail "Не удалось подтвердить commit исходного checkout: $REPO_ROOT"
 }
 ensure_geocoder_config() {
   local providers key
@@ -422,7 +435,8 @@ write_state() {
   installed_at="$(grep '^installed_at=' "$STATE_FILE" 2>/dev/null | cut -d= -f2- || true)"
   previous_rev="$(sed -n 's/^source_rev=//p' "$STATE_FILE" 2>/dev/null | tail -n 1 || true)"
   last_deployed_at="$(sed -n 's/^last_deployed_at=//p' "$STATE_FILE" 2>/dev/null | tail -n 1 || true)"
-  candidate_rev="$(git_rev)"; deploy_status="complete"; pending_rev=""
+  candidate_rev="$(git_rev)" || fail "Не удалось подтвердить commit; состояние deploy не записано"
+  deploy_status="complete"; pending_rev=""
   if (( NO_RESTART || SKIP_PIP || SKIP_TESTS || SKIP_COMMANDS || SKIP_WEBHOOKS )); then
     deploy_status="partial"; pending_rev="$candidate_rev"
   else

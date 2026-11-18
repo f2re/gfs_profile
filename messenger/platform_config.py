@@ -47,14 +47,14 @@ class PlatformStatus:
         }
 
 
-def _requested(name: str, token_var: str) -> tuple[bool, str | None]:
+def _requested(name: str, token_var: str, *token_aliases: str) -> tuple[bool, str | None]:
     raw = os.getenv(f"{name.upper()}_ENABLED", "auto").strip().lower()
     if raw in TRUE_VALUES:
         return True, None
     if raw in FALSE_VALUES:
         return False, None
     if raw in AUTO_VALUES:
-        return bool(os.getenv(token_var, "").strip()), None
+        return any(os.getenv(key, "").strip() for key in (token_var, *token_aliases)), None
     return True, f"{name.upper()}_ENABLED должен быть 1/0/auto"
 
 
@@ -78,12 +78,14 @@ def _https(value: str, name: str, *, max_port_443: bool = False) -> str | None:
 
 
 def telegram_status() -> PlatformStatus:
-    requested, flag_error = _requested("telegram", "TELEGRAM_BOT_TOKEN")
+    requested, flag_error = _requested("telegram", "TELEGRAM_BOT_TOKEN", "BOT_TOKEN")
     if not requested:
         return PlatformStatus.off("telegram")
     if flag_error:
         return PlatformStatus.degraded("telegram", flag_error)
-    if not os.getenv("TELEGRAM_BOT_TOKEN", "").strip():
+    # Keep the legacy alias and priority used by telegram_bot_core.build_application.
+    token = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN") or ""
+    if not token.strip():
         return PlatformStatus.degraded("telegram", "TELEGRAM_BOT_TOKEN не задан")
     return PlatformStatus.active("telegram")
 
