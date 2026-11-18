@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+from forecast_menu import menu_run
+from forecast_time import forecast_lead_label, forecast_range_lines
 
 from telegram_ui import button_rows
 
@@ -20,6 +22,27 @@ MAP_STEPS = (1, 3, 6)
 MAP_MENU_MAX_FRAMES = 18
 MAP_MODES = (("single", "Одна карта"), ("series", "Серия PNG"), ("gif", "GIF"))
 MAP_BASEMAPS = (("places", "Полная"), ("basic", "Базовая"))
+
+
+def wizard_forecast_leads(state: dict[str, object]) -> tuple[int, int]:
+    product = str(state.get("product", ""))
+    if product == "aero" or (product == "map" and state.get("mode", "single") == "single"):
+        lead = int(state.get("lead", 24))
+        return lead, lead
+    default_to = {"cloudgram": 72, "windgram": 120, "map": 24}.get(product, 24)
+    return int(state.get("from", 0)), int(state.get("to", default_to))
+
+
+def wizard_forecast_text(state: dict[str, object]) -> str:
+    run = menu_run(state)
+    if run is not None:
+        return forecast_range_lines(run, *wizard_forecast_leads(state))
+    return str(state.get("_forecast_error", ""))
+
+
+def _dated_lead(state: dict[str, object], lead: int) -> str:
+    run = menu_run(state)
+    return forecast_lead_label(run, lead) if run is not None else f"+{lead}ч"
 
 
 def start_aero_wizard_state(default_lead: int, diagram_type: str = "skewt") -> dict[str, object]:
@@ -172,7 +195,7 @@ def _command_block(state: dict[str, object]) -> str:
     return f"\n\nКоманда:\n{command}" if command else ""
 
 
-def params_text(state: dict[str, object]) -> str:
+def _params_text(state: dict[str, object]) -> str:
     product = str(state.get("product", ""))
     if product == "aero":
         return (
@@ -225,13 +248,20 @@ def params_text(state: dict[str, object]) -> str:
     return "Параметры продукта"
 
 
+def params_text(state: dict[str, object]) -> str:
+    body = _params_text(state)
+    timing = wizard_forecast_text(state)
+    return f"{body}\n{timing}" if timing else body
+
+
 def params_keyboard(state: dict[str, object]) -> InlineKeyboardMarkup:
     product = str(state.get("product", ""))
     rows: list[list[InlineKeyboardButton]] = []
     if product == "aero":
         current_lead = int(state.get("lead", 24))
-        rows.append([InlineKeyboardButton(("✓ " if current_lead == lead else "") + f"+{lead}ч", callback_data=f"wiz:aero:lead:{lead}") for lead in AERO_LEADS[:3]])
-        rows.append([InlineKeyboardButton(("✓ " if current_lead == lead else "") + f"+{lead}ч", callback_data=f"wiz:aero:lead:{lead}") for lead in AERO_LEADS[3:]])
+        width = 2 if menu_run(state) is not None else 3
+        for index in range(0, len(AERO_LEADS), width):
+            rows.append([InlineKeyboardButton(("✓ " if current_lead == lead else "") + _dated_lead(state, lead), callback_data=f"wiz:aero:lead:{lead}") for lead in AERO_LEADS[index:index + width]])
     elif product == "windgram":
         current_param = str(state.get("param", "wind"))
         rows.append([InlineKeyboardButton(("✓ " if current_param == key else "") + label, callback_data=f"wiz:wind:param:{key}") for key, label in WINDGRAM_PARAMS])
@@ -251,7 +281,8 @@ def params_keyboard(state: dict[str, object]) -> InlineKeyboardMarkup:
         rows.append([InlineKeyboardButton(("✓ " if current_mode == key else "") + label, callback_data=f"wiz:map:mode:{key}") for key, label in MAP_MODES])
         if current_mode == "single":
             current_lead = int(state.get("lead", 24))
-            rows.append([InlineKeyboardButton(("✓ " if current_lead == lead else "") + f"+{lead}ч", callback_data=f"wiz:map:lead:{lead}") for lead in MAP_LEADS])
+            for index in range(0, len(MAP_LEADS), 2):
+                rows.append([InlineKeyboardButton(("✓ " if current_lead == lead else "") + _dated_lead(state, lead), callback_data=f"wiz:map:lead:{lead}") for lead in MAP_LEADS[index:index + 2]])
         else:
             current_from = int(state.get("from", 0))
             rows.append([InlineKeyboardButton(("✓ " if current_from == value else "") + f"от +{value}", callback_data=f"wiz:map:from:{value}") for value in MAP_FROM_HOURS])

@@ -14,15 +14,15 @@ ICING_LEVELS_HPA = (1000, 975, 950, 925, 900, 850, 800, 750, 700, 650,
                     600, 550, 500, 450, 400, 350, 300)
 ICING_PRODUCTS = {
     "slw_level": "Переохлаждённая вода на уровне",
-    "godske_sum": "Суммарная мощность по Годске",
+    "godske_sum": "Суммарная мощность слоёв по Годске",
     "godske_max": "Мощность наибольшего слоя по Годске",
     "godske_base": "Нижняя граница первого слоя по Годске",
     "godske_top": "Верхняя граница первого слоя по Годске",
     "godske_count": "Число слоёв по Годске",
-    "slw_max": "Максимальная переохлаждённая водность",
-    "slw_height": "Высота максимальной водности",
-    "slwp": "Запас переохлаждённой облачной воды",
-    "agreement": "Сопоставление Годске и модельной воды",
+    "slw_max": "Переохлаждённая вода: максимум по высоте",
+    "slw_height": "Высота максимума переохлаждённой воды",
+    "slwp": "Запас переохлаждённой воды в столбе",
+    "agreement": "Годске и переохлаждённая вода",
 }
 DEFAULT_ICING_BBOX = (-15.0, 100.0, 34.0, 80.0)
 ICING_MAX_GRID_POINTS = 150_000
@@ -60,6 +60,7 @@ class IcingRequest:
     contour_step: int = 500
     bbox: tuple[float, float, float, float] = field(default_factory=default_icing_bbox)
     run: GfsRun | None = None
+    point: tuple[float, float] | None = None
 
 
 def _integer(value, label: str) -> int:
@@ -83,7 +84,7 @@ def validate_icing_request(request: IcingRequest) -> IcingRequest:
         raise GfsProfileError("Уровень должен входить в набор GFS 1000…300 гПа")
     contour = _integer(request.contour_step, "Шаг изолиний")
     if contour not in (100, 500):
-        raise GfsProfileError("Шаг изолиний: 100 или 500 гп.м")
+        raise GfsProfileError("Шаг изолиний: 10 или 50 дам")
     bbox = validate_icing_bbox(request.bbox)
     run = request.run
     if run is not None:
@@ -95,7 +96,23 @@ def validate_icing_request(request: IcingRequest) -> IcingRequest:
             run.run_datetime_utc
         except (ValueError, TypeError) as exc:
             raise GfsProfileError("Цикл задаётся как run=ГГГГММДД/00, /06, /12 или /18") from exc
-    return IcingRequest(request.product, lead, level, contour, bbox, run)
+    point = None
+    if request.point is not None:
+        try:
+            if len(request.point) != 2:
+                raise ValueError
+            lat, lon = (round(float(value), 4) for value in request.point)
+            if not all(math.isfinite(value) for value in (lat, lon)):
+                raise ValueError
+            if not (-90 <= lat <= 90 and -180 <= lon <= 180):
+                raise ValueError
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise GfsProfileError("Пункт задаётся координатами: point=широта,долгота") from exc
+        west, east, south, north = bbox
+        if not (south <= lat <= north and west <= lon <= east):
+            raise GfsProfileError("Пункт находится вне выбранного района карты. Выберите пункт внутри района или измените bbox.")
+        point = (lat, lon)
+    return IcingRequest(request.product, lead, level, contour, bbox, run, point)
 
 
 def parse_icing_input(text: str) -> IcingRequest:
@@ -117,15 +134,27 @@ def parse_icing_input(text: str) -> IcingRequest:
         elif token in ICING_PRODUCTS:
             key, value = "product", token
         else:
-            raise GfsProfileError("Пример: /icing product=godske_sum +24 contours=100")
+            raise GfsProfileError("Пример: /icing product=godske_sum +24 contours=10dam")
         if key in values:
             raise GfsProfileError(f"Параметр {key} задан дважды")
-        if key in ("lead", "level_hpa", "contour_step"):
+        if key == "contour_step":
+            # Keep old commands/callbacks (100/500 metres) reproducible while
+            # expressing new user-facing commands in decametres.
+            match = re.fullmatch(r"(\d+)(dam|дам)?", value.lower())
+            if not match:
+                raise GfsProfileError("Шаг изолиний: contours=10dam или contours=50dam")
+            number = int(match.group(1))
+            if match.group(2) or number in (10, 50):
+                number *= 10
+            values[key] = number
+        elif key in ("lead", "level_hpa"):
             values[key] = _integer(value, key)
         elif key == "product":
             values[key] = value
         elif key == "bbox":
             values[key] = validate_icing_bbox(value.split(","))
+        elif key == "point":
+            values[key] = value.split(",")
         elif key == "run":
             match = re.fullmatch(r"(\d{8})/?(00|06|12|18)", value)
             if not match:
@@ -139,6 +168,7 @@ def parse_icing_input(text: str) -> IcingRequest:
 def icing_repeat_command(request: IcingRequest) -> str:
     r = validate_icing_request(request)
     run = f" run={r.run.date}/{r.run.cycle}" if r.run else ""
+    point = " point=" + ",".join(f"{value:.4f}".rstrip("0").rstrip(".") for value in r.point) if r.point is not None else ""
     bbox = ",".join(f"{x:g}" for x in r.bbox)
     return (f"/icing product={r.product} +{r.lead} level={r.level_hpa} "
-            f"contours={r.contour_step} bbox={bbox}{run}")
+            f"contours={r.contour_step // 10}dam bbox={bbox}{run}{point}")

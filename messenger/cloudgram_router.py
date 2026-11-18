@@ -226,7 +226,10 @@ class CloudgramMessengerRouter(WindgramMessengerRouter):
                 if point is None:
                     await gateway.send_text(event.chat_id, "В сценарии потеряна точка. Создайте cloudgram заново.")
                     return
-                await self._run_cloudgram(event, gateway, point, _cloudgram_params(recipe.params), None)
+                params = _cloudgram_params(recipe.params)
+                run = await self._recipe_forecast_run(event, gateway, recipe, params, int(params["to"]))
+                if run is not None:
+                    await self._run_cloudgram(event, gateway, point, params, run)
                 return
             if data.action == "toggle":
                 try:
@@ -311,7 +314,7 @@ class CloudgramMessengerRouter(WindgramMessengerRouter):
             except (TypeError, ValueError):
                 await gateway.send_text(event.chat_id, "Параметр кнопки устарел. Откройте /cloudgram заново.")
                 return
-            state.params = params
+            state.params = {**params, **{key: value for key, value in state.params.items() if key.startswith("_forecast_")}}
             state.step = "params"
             await self._send_cloudgram_params_card(event, gateway, state)
             return
@@ -320,7 +323,12 @@ class CloudgramMessengerRouter(WindgramMessengerRouter):
             if state.point is None:
                 await gateway.send_text(event.chat_id, "Точка выбора потеряна. Начните заново: /cloudgram")
                 return
-            await self._run_cloudgram(event, gateway, state.point, _cloudgram_params(state.params), state.pending_run)
+            params = _cloudgram_params(state.params)
+            run = await self._forecast_selection_run(event, gateway, state, int(params["to"]))
+            if (run is None or self.sessions.get(event.platform, event.user_id, event.chat_id) is not state
+                    or state.params.get("_forecast_lead", int(params["to"])) != int(params["to"])):
+                return
+            await self._run_cloudgram(event, gateway, state.point, params, run)
             return
         if data.action == "point":
             await self._ask_cloudgram_point(event, gateway, _cloudgram_params(state.params))
@@ -411,20 +419,19 @@ class CloudgramMessengerRouter(WindgramMessengerRouter):
     async def _send_cloudgram_params_card(self, event: NormalizedEvent, gateway: MessengerGateway, state: FlowState) -> None:
         state.product = "cloudgram"
         state.step = "params"
-        state.params = _cloudgram_params(state.params)
-        self.sessions.set(event.platform, event.user_id, event.chat_id, state)
-        await gateway.send_text(event.chat_id, _params_text(state.point, state.params), keyboard=_params_keyboard(state.params))
+        state.params = {**_cloudgram_params(state.params), **{key: value for key, value in state.params.items() if key.startswith("_forecast_")}}
+        await self._send_forecast_parameter_card(event, gateway, state, _params_text, _params_keyboard)
 
     async def _send_cloudgram_recipe_card(self, event: NormalizedEvent, gateway: MessengerGateway, recipe: UserRecipe) -> None:
         point = recipe.point or {}
         params = _cloudgram_params(recipe.params)
         pin_text = "★ Открепить" if recipe.pinned else "⭐ Закрепить"
-        await gateway.send_text(
-            event.chat_id,
-            "☁️ Облака и явления GFS\n"
+        await self._send_forecast_parameter_card(
+            event, gateway, self._forecast_recipe_state(recipe, params),
+            lambda *_: "☁️ Облака и явления GFS\n"
             f"📍 {point.get('label', 'точка')}\n"
             f"{MODE_TITLES[params['mode']]} · +{params['from']}…+{params['to']} ч · шаг {params['step']} ч",
-            keyboard=menu_keyboard(
+            lambda _: menu_keyboard(
                 [
                     [UiButton("▶ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],
                     [

@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from gfs_core import GfsRun
 
 from messenger.callback_codec import encode_callback
 from messenger.contracts import CommonProductResult, Location, NormalizedEvent, PlatformMessage
@@ -76,6 +77,7 @@ class WindgramRouterTests(unittest.IsolatedAsyncioTestCase):
                 geocode=lambda q, n: list(self.points),
                 profile_builder=profile_builder,
                 canonical_leads=lambda: [0, 3, 6, 12, 24, 48, 72, 96, 120, 240, 384],
+                latest_run_for_lead=lambda lead: GfsRun("20261118", "00"),
             ),
             recipes=self.store,
             windgram_builder=windgram_builder,
@@ -181,7 +183,7 @@ class WindgramRouterTests(unittest.IsolatedAsyncioTestCase):
             ),
             self.gateway,
         )
-        self.assertIsNone(self.built[-1][-1])
+        self.assertEqual(self.built[-1][-1], GfsRun("20261118", "00"))
 
 
 if __name__ == "__main__":

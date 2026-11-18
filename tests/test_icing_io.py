@@ -58,13 +58,31 @@ class IcingConfigTests(unittest.TestCase):
             self.assertEqual(parse_icing_input("bbox=10,20,40,50").bbox, (10, 20, 40, 50))
 
     def test_invalid_inputs_are_rejected_before_work(self):
-        for command in ("+121", "+24.5", "level=875", "contours=50", "product=intensity",
+        for command in ("+121", "+24.5", "level=875", "contours=25", "contours=100dam", "product=intensity",
                         "run=20260230/06", "bbox=nan,100,34,80", "bbox=100,-15,34,80",
                         "bbox=-180,180,0,85", "+24 +48", "unknown=1"):
             with self.subTest(command=command), self.assertRaises(GfsProfileError):
                 parse_icing_input(command)
         with self.assertRaises(GfsProfileError):
             validate_icing_request(replace(IcingRequest(), lead=True))
+
+    def test_decametre_commands_preserve_legacy_contour_spacing(self):
+        for value, metres in (("10dam", 100), ("50дам", 500), ("10", 100),
+                              ("50", 500), ("100", 100), ("500", 500)):
+            with self.subTest(value=value):
+                self.assertEqual(parse_icing_input(f"contours={value}").contour_step, metres)
+        self.assertIn("contours=50dam", icing_repeat_command(IcingRequest()))
+
+    def test_marked_point_round_trip_and_region_validation(self):
+        request = parse_icing_input("/icing product=slw_max +24 point=55.75583,37.61731 run=20261117/06")
+        self.assertEqual(request.point, (55.7558, 37.6173))
+        self.assertEqual(parse_icing_input(icing_repeat_command(request)), request)
+        eastern = parse_icing_input("bbox=130,140,50,60 point=55.1234,137.1234")
+        self.assertEqual(parse_icing_input(icing_repeat_command(eastern)), eastern)
+        for value in ("nan,37", "inf,37", "55", "55,37,1", "91,37", "55,181", "55,140"):
+            with self.subTest(value=value), self.assertRaises(GfsProfileError):
+                parse_icing_input(f"point={value}")
+        self.assertEqual(parse_icing_input("bbox=37,38,55,56 point=55,38").point, (55, 38))
 
 
 class IcingInputTests(unittest.TestCase):

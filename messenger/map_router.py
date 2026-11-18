@@ -6,6 +6,9 @@ import asyncio
 from threading import Lock
 from typing import Any, Callable
 
+from forecast_menu import UNVERIFIED_TIME_TEXT
+from forecast_time import forecast_lead_label, forecast_range_lines
+
 from geocode import GeoPoint
 
 from .callback_codec import CallbackCodecError, decode_callback, encode_callback
@@ -75,25 +78,29 @@ def _progress_text(point: Any, params: dict[str, Any], event: ProgressEvent) -> 
     return header + body
 
 
-def _card_text(point: Any, params: dict[str, Any]) -> str:
+def _card_text(point: Any, params: dict[str, Any], run=None) -> str:
     mode = {"gif": "Анимация", "single": "Одна карта", "series": "Серия PNG"}[params["mode"]]
     period = f"+{params['from']} ч" if params["mode"] == "single" else f"+{params['from']}…+{params['to']} ч · шаг {params['step']} ч"
+    timing = forecast_range_lines(run, params["from"], params["to"]) if run is not None else UNVERIFIED_TIME_TEXT
     return (
         "🗺 Композитная карта GFS\n"
         f"📍 {getattr(point, 'label', 'точка')}\n"
-        f"Режим: {mode}\nПериод: {period}\n"
+        f"Режим: {mode}\nПериод: {period}\n{timing}\n"
         f"Радиус: {int(params['radius'])} км\nПодложка: {dict(MAP_BASEMAP_CHOICES).get(params['basemap'], params['basemap'])}\n\n"
         "Слои: осадки, облачность, гроза, ветер 500 гПа, явления и видимость."
     )
 
 
-def _keyboard(params: dict[str, Any]) -> UiKeyboard:
+def _keyboard(params: dict[str, Any], run=None) -> UiKeyboard:
     mode = params["mode"]
     lead_to = params["from"] if mode == "single" else params["to"]
+    time_buttons = [UiButton(("✓ " if int(lead_to) == value else "") +
+                            (forecast_lead_label(run, value) if run is not None else f"+{value}"),
+                            "callback", encode_callback("map", "to", value)) for value in MAP_TO_HOURS]
     return menu_keyboard([
         [UiButton("▶ Построить", "callback", encode_callback("map", "run"))],
         [UiButton(("✓ " if mode == key else "") + label, "callback", encode_callback("map", "mode", key)) for key, label in MAP_MODES],
-        [UiButton(("✓ " if int(lead_to) == value else "") + f"+{value}", "callback", encode_callback("map", "to", value)) for value in MAP_TO_HOURS],
+        *[time_buttons[index:index + 2] for index in range(0, len(time_buttons), 2)],
         [UiButton(("✓ " if int(params["step"]) == value else "") + f"шаг {value}ч", "callback", encode_callback("map", "step", value)) for value in MAP_STEPS],
         [UiButton(("✓ " if int(params["radius"]) == value else "") + f"{value} км", "callback", encode_callback("map", "radius", value)) for value in MAP_RADII],
         [UiButton(("✓ " if params["basemap"] == key else "") + label, "callback", encode_callback("map", "base", key)) for key, label in MAP_BASEMAP_CHOICES],
@@ -177,7 +184,10 @@ class MapMessengerRouter(IcingMessengerRouter):
                 if point is None:
                     await gateway.send_text(event.chat_id, "В сценарии потеряна точка. Создайте карту заново.")
                     return
-                await self._run(event, gateway, point, _params(recipe.params), None)
+                params = _params(recipe.params)
+                run = await self._recipe_forecast_run(event, gateway, recipe, params, int(params["to"]))
+                if run is not None:
+                    await self._run(event, gateway, point, params, run)
                 return
             if data.action == "toggle":
                 try:
@@ -245,13 +255,18 @@ class MapMessengerRouter(IcingMessengerRouter):
                 p = _params(p)
             except (AssertionError, TypeError, ValueError, Exception) as exc:
                 await gateway.send_text(event.chat_id, f"Параметр карты недоступен: {exc}"); return
-            state.params = p
+            state.params = {**p, **{key: value for key, value in state.params.items() if key.startswith("_forecast_")}}
             await self._send_card(event, gateway, state)
             return
         if data.action == "run":
             if state.point is None:
                 await gateway.send_text(event.chat_id, "Точка потеряна. Начните /map заново."); return
-            await self._run(event, gateway, state.point, _params(state.params), state.pending_run); return
+            p = _params(state.params)
+            run = await self._forecast_selection_run(event, gateway, state, int(p["to"]))
+            if (run is None or self.sessions.get(event.platform, event.user_id, event.chat_id) is not state
+                    or state.params.get("_forecast_lead", int(p["to"])) != int(p["to"])):
+                return
+            await self._run(event, gateway, state.point, p, run); return
         if data.action == "point":
             await self._ask_map_point(event, gateway, _params(state.params)); return
         if data.action == "cancel":
@@ -293,14 +308,33 @@ class MapMessengerRouter(IcingMessengerRouter):
         await self._run(event, gateway, candidates[0], p, parsed.run)
 
     async def _send_card(self, event: NormalizedEvent, gateway: MessengerGateway, state: FlowState) -> None:
-        state.product, state.step, state.params = "map", "params", _params(state.params)
+        timing_state = {key: value for key, value in state.params.items() if key.startswith("_forecast_")}
+        state.product, state.step, state.params = "map", "params", {**_params(state.params), **timing_state}
+        token = int(state.params.get("_forecast_view", 0)) + 1
+        state.params["_forecast_view"] = token
         self.sessions.set(event.platform, event.user_id, event.chat_id, state)
-        await gateway.send_text(event.chat_id, _card_text(state.point, state.params), keyboard=_keyboard(state.params))
+        check_text = f"Проверяю данные GFS для +{state.params['to']} ч…"
+        if event.event_type.upper() == "CALLBACK" and event.message_id:
+            status = await gateway.edit_text(event.chat_id, event.message_id, check_text)
+        else:
+            status = await gateway.send_text(event.chat_id, check_text)
+        run = await self._forecast_menu_run(state, int(state.params["to"]))
+        if (self.sessions.get(event.platform, event.user_id, event.chat_id) is not state
+                or state.params.get("_forecast_view") != token):
+            return
+        self.sessions.set(event.platform, event.user_id, event.chat_id, state)
+        await gateway.edit_text(event.chat_id, status.message_id, _card_text(state.point, state.params, run), keyboard=_keyboard(state.params, run))
 
     async def _send_recipe(self, event: NormalizedEvent, gateway: MessengerGateway, recipe: UserRecipe) -> None:
         point = recipe.point or {}; p = _params(recipe.params)
+        state = self._forecast_recipe_state(recipe, p)
+        self.sessions.set(event.platform, event.user_id, event.chat_id, state)
+        status = await gateway.send_text(event.chat_id, f"Проверяю данные GFS для +{p['to']} ч…")
+        run = await self._forecast_menu_run(state, int(p["to"]))
+        if self.sessions.get(event.platform, event.user_id, event.chat_id) is not state:
+            return
         pin = "★ Открепить" if recipe.pinned else "⭐ Закрепить"
-        await gateway.send_text(event.chat_id, _card_text(SimplePoint(point), p), keyboard=menu_keyboard([
+        await gateway.edit_text(event.chat_id, status.message_id, _card_text(SimplePoint(point), p, run), keyboard=menu_keyboard([
             [UiButton("▶ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],
             [UiButton(pin, "callback", encode_callback("recipe", "toggle", recipe.recipe_id)), UiButton("⚙ Изменить", "callback", encode_callback("recipe", "change", recipe.recipe_id))],
         ]))

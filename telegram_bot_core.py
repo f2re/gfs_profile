@@ -30,6 +30,8 @@ from formatters import format_profile_summary, write_profile_csv
 from geocode import GeoPoint, GeocodeError
 from geocode_choices import search_location_candidates
 from gfs_core import CACHE_DIR, GfsProfileError, GfsRun, latest_available_run, latest_available_run_for_lead, validate_lead
+from forecast_menu import UNVERIFIED_TIME_TEXT, ensure_menu_run, menu_run
+from forecast_time import forecast_time_lines, forecast_range_lines
 from profile_plot import write_profile_png
 from telegram_aero import ParsedAeroRequest, resolve_aero_request, run_aero_product
 from telegram_cloudgram import ParsedCloudgramRequest, resolve_cloudgram_request, run_cloudgram_product
@@ -45,6 +47,7 @@ from telegram_product_wizard import (
     start_cloudgram_wizard_state,
     start_map_wizard_state,
     start_windgram_wizard_state,
+    wizard_forecast_leads,
 )
 from telegram_progress import build_profile_with_progress
 from telegram_ui import lead_keyboard, lead_page_text, location_keyboard, place_keyboard
@@ -131,6 +134,38 @@ def _location_keyboard_for_user(user_id: int):
 
 def _set_pending_point(context: ContextTypes.DEFAULT_TYPE, point: GeoPoint, run: GfsRun | None = None) -> None:
     context.user_data["pending_profile"] = {"point": _pack_point(point), "run": _pack_run(run)}
+
+
+async def _show_profile_leads(message, context, point, *, page=0, query=None) -> None:
+    pending = context.user_data["pending_profile"]
+    lead = int(pending.get("_forecast_lead", DEFAULT_LEAD))
+    token = int(pending.get("_forecast_view", 0)) + 1
+    pending["_forecast_view"] = token
+    check_text = f"Проверяю данные GFS для +{lead} ч…"
+    status = None
+    if query is not None:
+        await query.edit_message_text(check_text)
+    else:
+        status = await message.reply_text(check_text)
+    run = await ensure_menu_run(pending, lead, latest_available_run_for_lead,
+                                explicit_run=_unpack_run(pending.get("run")))
+    if context.user_data.get("pending_profile") is not pending or pending.get("_forecast_view") != token:
+        return
+    text = f"📍 {point.label}\n" + lead_page_text(page, run, lead)
+    if run is None:
+        text += "\n" + UNVERIFIED_TIME_TEXT
+    markup = lead_keyboard(page, run)
+    if query is not None:
+        await query.edit_message_text(text, reply_markup=markup)
+    else:
+        await status.edit_text(text, reply_markup=markup)
+
+
+async def _prepare_wizard_forecast(state: dict[str, object]):
+    if state.get("_schedule_setup"):
+        return None
+    _, lead_to = wizard_forecast_leads(state)
+    return await ensure_menu_run(state, lead_to, latest_available_run_for_lead)
 
 
 def _point_brief(point: GeoPoint) -> str:
@@ -321,6 +356,9 @@ async def _start_product_wizard(message, context: ContextTypes.DEFAULT_TYPE, sta
 
 async def _show_wizard_params(message, context: ContextTypes.DEFAULT_TYPE, state: dict[str, object]) -> None:
     context.user_data[PRODUCT_WIZARD_KEY] = state
+    await _prepare_wizard_forecast(state)
+    if context.user_data.get(PRODUCT_WIZARD_KEY) is not state:
+        return
     await message.reply_text(params_text(state), reply_markup=params_keyboard(state))
 
 
@@ -363,19 +401,36 @@ async def _resolve_wizard_point(message, context: ContextTypes.DEFAULT_TYPE, raw
 
 
 async def _run_wizard_product(message, context: ContextTypes.DEFAULT_TYPE, state: dict[str, object], user=None) -> None:
+    if context.user_data.get(PRODUCT_WIZARD_KEY) is not state:
+        return
     point_payload = state.get("point")
     if not isinstance(point_payload, dict):
         await message.reply_text("Сначала выберите точку.")
         return
     point = _unpack_point(point_payload)
     product = str(state.get("product", ""))
+    token = int(state.get("_forecast_launch", 0)) + 1
+    state["_forecast_launch"] = token
+    previous_run = menu_run(state)
+    selected_run = await _prepare_wizard_forecast(state)
+    if context.user_data.get(PRODUCT_WIZARD_KEY) is not state or state.get("_forecast_launch") != token:
+        return
+    if selected_run is None:
+        if state.get("_forecast_error"):
+            await message.reply_text(UNVERIFIED_TIME_TEXT, reply_markup=params_keyboard(state))
+        return
+    if previous_run != selected_run:
+        prefix = "Цикл обновлён для выбранного срока:\n" if previous_run is not None else ""
+        await message.reply_text(prefix + forecast_range_lines(selected_run, *wizard_forecast_leads(state)))
+        if context.user_data.get(PRODUCT_WIZARD_KEY) is not state or state.get("_forecast_launch") != token:
+            return
     context.user_data.pop(PRODUCT_WIZARD_KEY, None)
 
     if product == "aero":
         parsed = ParsedAeroRequest(
             location_query=f"{point.lat:.4f} {point.lon:.4f}",
             lead_hour=int(state.get("lead", DEFAULT_LEAD)),
-            run=None,
+            run=selected_run,
             diagram_type=str(state.get("diagram_type", "stuve")),
         )
         await _tracked_product(
@@ -394,7 +449,7 @@ async def _run_wizard_product(message, context: ContextTypes.DEFAULT_TYPE, state
     if product == "windgram":
         parsed = ParsedWindgramRequest(
             location_query=f"{point.lat:.4f} {point.lon:.4f}",
-            run=None,
+            run=selected_run,
             lead_from=int(state.get("from", 0)),
             lead_to=int(state.get("to", 120)),
             step=int(state.get("time_step", 6)),
@@ -417,7 +472,7 @@ async def _run_wizard_product(message, context: ContextTypes.DEFAULT_TYPE, state
     if product == "cloudgram":
         parsed = ParsedCloudgramRequest(
             location_query=f"{point.lat:.4f} {point.lon:.4f}",
-            run=None,
+            run=selected_run,
             lead_from=int(state.get("from", 0)),
             lead_to=int(state.get("to", 72)),
             step=int(state.get("time_step", 3)),
@@ -440,7 +495,7 @@ async def _run_wizard_product(message, context: ContextTypes.DEFAULT_TYPE, state
         map_mode = str(state.get("mode", "single"))
         parsed = ParsedMapRequest(
             location_query=f"{point.lat:.4f} {point.lon:.4f}",
-            run=None,
+            run=selected_run,
             lead_from=int(state.get("from", 0)) if map_mode in {"series", "gif"} else int(state.get("lead", DEFAULT_LEAD)),
             lead_to=int(state.get("to", 24)) if map_mode in {"series", "gif"} else int(state.get("lead", DEFAULT_LEAD)),
             step=int(state.get("time_step", 3)),
@@ -577,7 +632,7 @@ async def resolve_profile_request(message, context: ContextTypes.DEFAULT_TYPE, r
         await _tracked_run_profile(message, point, parsed.lead_hour, parsed.run, request_text=f"/profile {raw}")
         return
     _set_pending_point(context, point, parsed.run)
-    await message.reply_text(f"📍 Точка выбрана:\n{_point_brief(point)}\n\nВыберите срок прогноза:\n{lead_page_text(0)}", reply_markup=lead_keyboard(0))
+    await _show_profile_leads(message, context, point)
 
 
 async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -697,7 +752,7 @@ async def text_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if recent_point is not None:
         remember_location(user_id, recent_point)
         _set_pending_point(context, recent_point)
-        await message.reply_text(f"📍 Точка выбрана:\n{_point_brief(recent_point)}\n\nВыберите срок прогноза:\n{lead_page_text(0)}", reply_markup=lead_keyboard(0))
+        await _show_profile_leads(message, context, recent_point)
         return
     if text.startswith(RECENT_LOCATION_PREFIX):
         await message.reply_text("Эта последняя точка уже недоступна. Введите город/координаты или отправьте геолокацию.")
@@ -718,7 +773,7 @@ async def location_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await _show_wizard_params(message, context, new_state)
         return
     _set_pending_point(context, point)
-    await message.reply_text(f"📍 Геолокация получена:\n{_point_brief(point)}\n\nВыберите срок прогноза:\n{lead_page_text(0)}", reply_markup=lead_keyboard(0))
+    await _show_profile_leads(message, context, point)
 
 
 async def product_wizard_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -759,7 +814,18 @@ async def product_wizard_callback(update: Update, context: ContextTypes.DEFAULT_
         remember_location(_user_id_from_update(update), point)
         state = wizard_set_point(state, _pack_point(point))
         context.user_data[PRODUCT_WIZARD_KEY] = state
+        await query.edit_message_text("Проверяю данные GFS…")
+        await _prepare_wizard_forecast(state)
+        if context.user_data.get(PRODUCT_WIZARD_KEY) is not state:
+            return
         await query.edit_message_text(params_text(state), reply_markup=params_keyboard(state))
+        return
+
+    if data == "wiz:run":
+        if query.message:
+            await query.edit_message_text("Проверяю выбранный срок GFS…")
+            if context.user_data.get(PRODUCT_WIZARD_KEY) is state:
+                await _run_wizard_product(query.message, context, state, user=update.effective_user)
         return
 
     state = dict(state)
@@ -799,15 +865,15 @@ async def product_wizard_callback(update: Update, context: ContextTypes.DEFAULT_
         state["time_step"] = int(data.rsplit(":", 1)[1])
     elif data.startswith("wiz:map:basemap:"):
         state["basemap"] = data.rsplit(":", 1)[1]
-    elif data == "wiz:run":
-        if query.message:
-            await query.edit_message_text("Параметры выбраны. Запускаю расчёт…")
-            await _run_wizard_product(query.message, context, state, user=update.effective_user)
-        return
     else:
         return
 
     context.user_data[PRODUCT_WIZARD_KEY] = state
+    if not state.get("_schedule_setup"):
+        await query.edit_message_text("Проверяю данные GFS…")
+        await _prepare_wizard_forecast(state)
+        if context.user_data.get(PRODUCT_WIZARD_KEY) is not state:
+            return
     await query.edit_message_text(params_text(state), reply_markup=params_keyboard(state))
 
 
@@ -826,9 +892,26 @@ async def lead_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     point = _unpack_point(pending["point"])
     run = _unpack_run(pending.get("run"))
     lead_hour = int(data.split(":", 1)[1])
-    _clear_pending(context)
+    validate_lead(lead_hour)
+    token = int(pending.get("_forecast_selection", 0)) + 1
+    pending["_forecast_selection"] = token
+    await query.edit_message_text(f"Проверяю данные GFS для +{lead_hour} ч…")
+    if context.user_data.get("pending_profile") is not pending or pending.get("_forecast_selection") != token:
+        return
+    run = await ensure_menu_run(pending, lead_hour, latest_available_run_for_lead, explicit_run=run)
+    if (context.user_data.get("pending_profile") is not pending or pending.get("_forecast_lead", lead_hour) != lead_hour
+            or pending.get("_forecast_selection") != token):
+        return
+    if run is None:
+        if pending.get("_forecast_error"):
+            await query.edit_message_text(UNVERIFIED_TIME_TEXT, reply_markup=lead_keyboard())
+        return
     if query.message:
-        await query.edit_message_text(f"Срок +{lead_hour} ч выбран. Строю профиль…")
+        timing = forecast_time_lines(run, lead_hour) if run is not None else f"Прогноз +{lead_hour} ч"
+        await query.edit_message_text(f"{timing}\nСтрою профиль…")
+        if context.user_data.get("pending_profile") is not pending or pending.get("_forecast_selection") != token:
+            return
+        _clear_pending(context)
         await _tracked_run_profile(query.message, point, lead_hour, run, user=update.effective_user)
 
 
@@ -843,7 +926,7 @@ async def lead_page_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
     page = int((query.data or "leadpage:0").split(":", 1)[1])
     point = _unpack_point(pending["point"])
-    await query.edit_message_text(f"📍 Точка:\n{_point_brief(point)}\n\nВыберите срок прогноза:\n{lead_page_text(page)}", reply_markup=lead_keyboard(page))
+    await _show_profile_leads(query.message, context, point, page=page, query=query)
 
 
 async def noop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -886,7 +969,7 @@ async def place_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await _tracked_run_profile(query.message, point, lead_hour, run, user=update.effective_user)
         return
     _set_pending_point(context, point, run)
-    await query.edit_message_text(f"📍 Выбрано:\n{_point_brief(point)}\n\nВыберите срок прогноза:\n{lead_page_text(0)}", reply_markup=lead_keyboard(0))
+    await _show_profile_leads(query.message, context, point, query=query)
 
 
 def build_application() -> Application:

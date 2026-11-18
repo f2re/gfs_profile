@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from gfs_core import GfsRun
 
 from messenger.aero_router import AeroMessengerRouter
 from messenger.callback_codec import encode_callback
@@ -82,6 +83,7 @@ class AeroRouterTests(unittest.IsolatedAsyncioTestCase):
                 profile_builder=profile_builder,
                 profile_parser=lambda raw, default: Parsed(raw, 24, True),
                 canonical_leads=lambda: [0, 3, 6, 12, 24, 48, 72, 96],
+                latest_run_for_lead=lambda lead: GfsRun("20261118", "00"),
             ),
             recipes=self.store,
             aero_builder=aero_builder,
@@ -201,7 +203,7 @@ class AeroRouterTests(unittest.IsolatedAsyncioTestCase):
             callback_id="cb2",
         )
         await self.router.handle(lead, self.gateway)
-        self.assertEqual(self.aero_built[-1][1:], (24, None))
+        self.assertEqual(self.aero_built[-1][1:], (24, GfsRun("20261118", "00")))
 
     async def test_pinned_aero_recipe_opens_and_repeat_uses_fresh_run(self):
         recipe = self.store.record_success(
@@ -235,7 +237,7 @@ class AeroRouterTests(unittest.IsolatedAsyncioTestCase):
             callback_id="cb4",
         )
         await self.router.handle(run_recipe, self.gateway)
-        self.assertEqual(self.aero_built[-1][1:], (72, None))
+        self.assertEqual(self.aero_built[-1][1:], (72, GfsRun("20261118", "00")))
 
     async def test_start_can_show_profile_and_aero_recipes(self):
         profile = self.store.record_success("max", "42", "profile", {"lead": 24}, Point())

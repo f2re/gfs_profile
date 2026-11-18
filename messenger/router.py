@@ -8,6 +8,9 @@ from dataclasses import dataclass
 from threading import Lock
 from typing import Any, Callable
 
+from forecast_menu import UNVERIFIED_TIME_TEXT, ensure_menu_run, menu_run
+from forecast_time import forecast_lead_label, forecast_time_lines, forecast_range_lines
+
 from .callback_codec import CallbackCodecError, decode_callback, encode_callback
 from .contracts import MessengerGateway, NormalizedEvent, ProgressEvent, UiButton, UiKeyboard
 from .menu_catalog import HOME_TEXT, PRODUCT_LABELS, product_rows
@@ -228,6 +231,7 @@ class MessengerRouter:
                 step="choose_place",
                 candidates=list(candidates[:5]),
                 pending_lead=parsed.lead_hour if parsed.lead_from_user else None,
+                pending_run=parsed.run,
             )
             self.sessions.set(event.platform, event.user_id, event.chat_id, state)
             rows = [
@@ -241,7 +245,7 @@ class MessengerRouter:
         if parsed.lead_from_user:
             await self._run_profile(event, gateway, point, parsed.lead_hour, parsed.run)
             return
-        state = FlowState(step="choose_lead", point=point)
+        state = FlowState(step="choose_lead", point=point, pending_run=parsed.run)
         self.sessions.set(event.platform, event.user_id, event.chat_id, state)
         await self._send_lead_picker(event, gateway, state, page=0)
 
@@ -286,7 +290,7 @@ class MessengerRouter:
                 await gateway.send_text(event.chat_id, "Вариант точки устарел. Повторите запрос.")
                 return
             if state.pending_lead is not None:
-                await self._run_profile(event, gateway, point, state.pending_lead, None)
+                await self._run_profile(event, gateway, point, state.pending_lead, state.pending_run)
                 return
             state.point = point
             state.step = "choose_lead"
@@ -306,7 +310,11 @@ class MessengerRouter:
             if lead not in self.deps.leads():
                 await gateway.send_text(event.chat_id, "Этот срок GFS недоступен.")
                 return
-            await self._run_profile(event, gateway, state.point, lead, None)
+            run = await self._forecast_selection_run(event, gateway, state, lead)
+            if (run is None or self.sessions.get(event.platform, event.user_id, event.chat_id) is not state
+                    or state.params.get("_forecast_lead", lead) != lead):
+                return
+            await self._run_profile(event, gateway, state.point, lead, run)
             return
         if data.scope == "profile" and data.action == "leadpage":
             try:
@@ -317,11 +325,66 @@ class MessengerRouter:
             return
         await gateway.send_text(event.chat_id, "Кнопка больше не поддерживается. Начните заново: /start")
 
+    async def _forecast_menu_run(self, state: FlowState, lead: int | None = None):
+        return await ensure_menu_run(state.params, self.default_lead if lead is None else lead,
+                                     self.deps.latest_run, explicit_run=state.pending_run)
+
+    async def _forecast_selection_run(self, event, gateway, state: FlowState, lead: int, *, notify=True):
+        token = int(state.params.get("_forecast_selection", 0)) + 1
+        state.params["_forecast_selection"] = token
+        previous = menu_run(state.params)
+        run = await self._forecast_menu_run(state, lead)
+        if (self.sessions.get(event.platform, event.user_id, event.chat_id) is not state
+                or state.params.get("_forecast_lead", lead) != lead
+                or state.params.get("_forecast_selection") != token):
+            return None
+        if run is None:
+            if notify and state.params.get("_forecast_error"):
+                await gateway.send_text(event.chat_id, UNVERIFIED_TIME_TEXT)
+            return None
+        if notify and previous is not None and run != previous:
+            await gateway.send_text(event.chat_id, "Для выбранного срока доступен другой цикл:\n" + forecast_time_lines(run, lead))
+        if (self.sessions.get(event.platform, event.user_id, event.chat_id) is not state
+                or state.params.get("_forecast_selection") != token):
+            return None
+        return run
+
+    async def _send_forecast_parameter_card(self, event, gateway, state: FlowState, text_builder, keyboard_builder):
+        """One current card, with exact end-lead selection and cancellation fencing."""
+        token = int(state.params.get("_forecast_view", 0)) + 1
+        state.params["_forecast_view"] = token
+        self.sessions.set(event.platform, event.user_id, event.chat_id, state)
+        lead = int(state.params["to"])
+        check_text = f"Проверяю данные GFS для +{lead} ч…"
+        if event.event_type.upper() == "CALLBACK" and event.message_id:
+            status = await gateway.edit_text(event.chat_id, event.message_id, check_text)
+        else:
+            status = await gateway.send_text(event.chat_id, check_text)
+        run = await self._forecast_menu_run(state, lead)
+        if (self.sessions.get(event.platform, event.user_id, event.chat_id) is not state
+                or state.params.get("_forecast_view") != token):
+            return
+        timing = forecast_range_lines(run, state.params["from"], lead) if run is not None else UNVERIFIED_TIME_TEXT
+        await gateway.edit_text(event.chat_id, status.message_id,
+                                text_builder(state.point, state.params) + "\n" + timing,
+                                keyboard=keyboard_builder(state.params))
+
     async def _send_lead_picker(self, event: NormalizedEvent, gateway: MessengerGateway, state: FlowState, *, page: int) -> None:
+        token = int(state.params.get("_forecast_view", 0)) + 1
+        state.params["_forecast_view"] = token
+        check_text = f"Проверяю данные GFS для +{self.default_lead} ч…"
+        if event.event_type.upper() == "CALLBACK" and event.message_id:
+            status = await gateway.edit_text(event.chat_id, event.message_id, check_text)
+        else:
+            status = await gateway.send_text(event.chat_id, check_text)
+        run = await self._forecast_menu_run(state)
+        if (self.sessions.get(event.platform, event.user_id, event.chat_id) is not state
+                or state.params.get("_forecast_view") != token):
+            return
         leads = self.deps.leads()
         if page <= 0:
             values = [lead for lead in QUICK_LEADS if lead in leads]
-            rows = _lead_rows(values)
+            rows = _lead_rows(values, run)
             rows.append([UiButton("Все сроки до +384", "callback", encode_callback("profile", "leadpage", 1))])
             page_text = "быстрые сроки"
         else:
@@ -331,7 +394,7 @@ class MessengerRouter:
                 page = max(1, (len(leads) - 1) // LEAD_PAGE_SIZE + 1)
                 start = (page - 1) * LEAD_PAGE_SIZE
                 values = leads[start : start + LEAD_PAGE_SIZE]
-            rows = _lead_rows(values)
+            rows = _lead_rows(values, run)
             nav: list[UiButton] = []
             if page > 1:
                 nav.append(UiButton("‹", "callback", encode_callback("profile", "leadpage", page - 1)))
@@ -344,17 +407,20 @@ class MessengerRouter:
         state.step = "choose_lead"
         self.sessions.set(event.platform, event.user_id, event.chat_id, state)
         rows.append([UiButton("Другая точка", "callback", encode_callback("product", "open", "profile")), home_button()])
-        await gateway.send_text(
-            event.chat_id,
-            f"📍 {getattr(state.point, 'label', 'выбранная точка')}\nВыберите срок GFS ({page_text}):",
-            keyboard=UiKeyboard.from_rows(rows),
+        timing = forecast_time_lines(run, self.default_lead) if run is not None else UNVERIFIED_TIME_TEXT
+        await gateway.edit_text(
+            event.chat_id, status.message_id,
+            f"📍 {getattr(state.point, 'label', 'выбранная точка')}\n{timing}\n\nВыберите срок GFS ({page_text}, UTC):",
+            keyboard=menu_keyboard(rows),
         )
 
     async def _run_profile(self, event: NormalizedEvent, gateway: MessengerGateway, point: Any, lead: int, run: Any | None) -> None:
         self.sessions.clear(event.platform, event.user_id, event.chat_id)
         status = await gateway.send_text(
             event.chat_id,
-            f"⏳ Профиль GFS\n📍 {getattr(point, 'label', '')}\n🕒 +{lead} ч\n1/5 Проверяю опубликованный цикл…",
+            f"⏳ Профиль GFS\n📍 {getattr(point, 'label', '')}\n" +
+            (forecast_time_lines(run, lead) if run is not None else f"Прогноз +{lead} ч") +
+            "\n1/5 Проверяю опубликованный цикл…",
         )
         snapshot = {"event": ProgressEvent("check", "Проверяю данные")}
         lock = Lock()
@@ -434,10 +500,12 @@ def _short_label(point: Any) -> str:
     return (" ".join(str(getattr(point, "label", point)).split())[:58] or "Точка")
 
 
-def _lead_rows(values: list[int]) -> list[list[UiButton]]:
+def _lead_rows(values: list[int], run=None) -> list[list[UiButton]]:
+    width = 2 if run is not None else 3
     return [
-        [UiButton(f"+{lead}", "callback", encode_callback("profile", "lead", lead)) for lead in values[start : start + 3]]
-        for start in range(0, len(values), 3)
+        [UiButton(forecast_lead_label(run, lead) if run is not None else f"+{lead}",
+                  "callback", encode_callback("profile", "lead", lead)) for lead in values[start : start + width]]
+        for start in range(0, len(values), width)
     ]
 
 

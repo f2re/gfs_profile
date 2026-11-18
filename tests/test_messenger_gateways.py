@@ -14,6 +14,7 @@ from messenger.max.adapter import normalize_max_update
 from messenger.max.client import MaxApiClient
 from messenger.max.gateway import _keyboard_attachment
 from messenger.router import MessengerRouter, RouterDependencies
+from gfs_core import GfsRun
 from messenger.vk.adapter import normalize_vk_update
 from messenger.vk.client import VkApiClient
 from messenger.vk.gateway import _keyboard_json
@@ -256,7 +257,7 @@ class RouterTests(unittest.IsolatedAsyncioTestCase):
             return FakeParsed("Киров", 24, False)
 
         router = MessengerRouter(
-            RouterDependencies(geocode=lambda q, n: points, profile_builder=lambda *a, **k: None, profile_parser=parser, canonical_leads=lambda: [0, 3, 6, 12, 24, 48]),
+            RouterDependencies(geocode=lambda q, n: points, profile_builder=lambda *a, **k: None, profile_parser=parser, canonical_leads=lambda: [0, 3, 6, 12, 24, 48], latest_run_for_lead=lambda lead: GfsRun("20261118", "00")),
             progress_interval_seconds=0.01,
         )
         gateway = FakeGateway("vk")

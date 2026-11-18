@@ -14,11 +14,13 @@ from typing import Callable
 import numpy as np
 
 from gfs_core import CACHE_DIR, CACHE_TTL_SECONDS
+from forecast_time import forecast_time_lines
 from icing_config import (ICING_PRODUCTS, METHOD_VERSION, IcingRequest,
                           icing_repeat_command, validate_icing_request)
 from icing_io import check_cancel, load_icing_input
 from icing_meteorology import AGREEMENT_LABELS, PRODUCT_UNITS, compute_icing_fields, select_icing_field
 from icing_render import render_icing_png
+from icing_presentation import DISPLAY_UNITS, PRODUCT_HINTS, SOURCE_LABEL, SOURCE_URL, water_profile_missing
 
 from .contracts import CommonProductResult, ProductAttachment, ProgressEvent
 
@@ -131,36 +133,52 @@ def build_icing_product_result(
         _emit(progress_callback, "render", "4/5 Строю карту")
         (renderer or render_icing_png)(fields, inputs.lat, inputs.lon, request.product,
             run=inputs.run, lead=request.lead, bbox=request.bbox, level_hpa=request.level_hpa,
-            contour_step=request.contour_step, output_path=png)
+            contour_step=request.contour_step, point=request.point, output_path=png)
         check_cancel(cancel_event)
-        csv_path = _output_path(directory, request, ".csv")
-        paths.append(csv_path)
-        _emit(progress_callback, "export", "5/5 Формирую PNG и CSV")
-        write_icing_csv(csv_path, fields, inputs.lat, inputs.lon, request, cancel_event=cancel_event)
+        _emit(progress_callback, "export", "5/5 Подготавливаю карту и пояснение")
         valid_time = inputs.run.run_datetime_utc + timedelta(hours=request.lead)
         values = select_icing_field(fields, request.product, request.level_hpa)
         known, missing = _coverage(fields, request)
+        water_column = request.product in {"slw_max", "slw_height", "slwp"}
+        incomplete = water_profile_missing(fields) if water_column else np.zeros_like(known)
         title = ICING_PRODUCTS[request.product]
-        time_line = (f"Цикл {inputs.run.run_datetime_utc:%d.%m.%Y %H} UTC · +{request.lead} ч\n"
-                     f"Действителен {valid_time:%d.%m.%Y %H:%M} UTC")
+        time_line = forecast_time_lines(inputs.run, request.lead)
         west, east, south, north = request.bbox
         details = (f"{request.level_hpa} гПа" if request.product == "slw_level" else "1000–300 гПа, доступная часть профиля")
         summary = (f"{title}\n{time_line}\n"
                    f"Район: {west:g}…{east:g}° долготы; {south:g}…{north:g}° с.ш.\n"
-                   f"{details} · {PRODUCT_UNITS[request.product]}\n"
-                   "GFS data · 0.25°")
+                   f"{details} · {DISPLAY_UNITS[request.product]}\n"
+                   f"{PRODUCT_HINTS[request.product]}\n"
+                   f"{SOURCE_LABEL} · NOMADS")
+        if request.point is not None:
+            summary += f"\nОтмеченный пункт: {request.point[0]:g}°, {request.point[1]:g}°."
         if not np.isfinite(values).any():
-            summary += "\nНет определённых значений: проверьте покрытие и незамкнутые границы."
+            if request.product in {"slw_max", "slw_height"} and np.any(known) and not np.any(incomplete & known) and not np.any(fields["max_slwc_gm3"] > 0):
+                summary += "\nВ доступных данных переохлаждённая облачная вода не выявлена."
+            elif request.product in {"godske_base", "godske_top"} and np.any(known):
+                if np.any(fields["godske20_n_layers"] > 0):
+                    summary += "\nГраница слоя не определяется по доступным уровням."
+                else:
+                    summary += "\nВ доступных данных слои с условиями по Годске не выявлены."
+            else:
+                summary += "\nНедостаточно данных для этой карты; пояснение — в «Как читать карту»."
+        if np.any(incomplete):
+            summary += "\nЕсть неполные данные по высоте: доступные значения отмечены штриховкой, неопределённые — серым."
         metadata = {
             "product": "icing", "icing_product": request.product, "model": "GFS 0.25",
-            "source": "NOAA/NCEP NOMADS GRIB Filter", "data_kind": "model",
+            "source": "NOAA/NCEP NOMADS GRIB Filter", "source_url": SOURCE_URL,
+            "data_kind": "model",
             "run_date": inputs.run.date, "run_cycle": inputs.run.cycle, "lead": request.lead,
             "valid_time_utc": valid_time.isoformat(), "bbox": list(request.bbox),
+            "requested_point": list(request.point) if request.point is not None else None,
             "level_hpa": request.level_hpa, "contour_step": request.contour_step,
-            "method_version": METHOD_VERSION, "units": PRODUCT_UNITS[request.product],
+            "contour_step_dam": request.contour_step / 10,
+            "method_version": METHOD_VERSION, "units": DISPLAY_UNITS[request.product],
+            "raw_units": PRODUCT_UNITS[request.product],
             "pressure_levels_hpa": [int(x) for x in fields["pressure_hpa"]],
             "grid_shape": list(inputs.lat.shape), "covered_nodes": int(np.count_nonzero(known)),
             "nodes_with_internal_gaps": int(np.count_nonzero(missing)),
+            "nodes_with_incomplete_water_profile": int(np.count_nonzero(incomplete)),
             "finite_value_nodes": int(np.isfinite(values).sum()),
             "no_surface_extrapolation": True, "meteorological_skill_validated": False,
             "source_files": [path.name for path in inputs.paths],
@@ -168,8 +186,7 @@ def build_icing_product_result(
         check_cancel(cancel_event)
         return CommonProductResult(
             product="icing", summary=summary,
-            attachments=[ProductAttachment("image", png, png.name, title, "image/png"),
-                         ProductAttachment("file", csv_path, csv_path.name, "Численные значения и метаданные", "text/csv")],
+            attachments=[ProductAttachment("image", png, png.name, title, "image/png")],
             metadata=metadata, repeat_command=icing_repeat_command(request),
         )
     except BaseException:

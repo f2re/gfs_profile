@@ -62,6 +62,7 @@ class ProductionMenuWalkthroughTests(unittest.IsolatedAsyncioTestCase):
                 canonical_leads=canonical_leads, latest_run_for_lead=lambda lead: GfsRun("20261118", "00")),
             recipes=self.store, aero_builder=builder("aero"), windgram_builder=builder("windgram"),
             cloudgram_builder=builder("cloudgram"), icing_builder=builder("icing"), map_builder=builder("map"),
+            icing_run_selector=lambda request: (request.run or GfsRun("20261118", "00"), ""),
             meteogram_builder=builder("meteogram"), route_builder=builder("route"),
             progress_interval_seconds=0.25,
         )

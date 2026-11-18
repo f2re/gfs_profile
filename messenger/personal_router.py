@@ -5,12 +5,15 @@ from threading import Lock
 from typing import Any
 
 from geocode import GeoPoint
+from forecast_menu import UNVERIFIED_TIME_TEXT, menu_run
+from forecast_time import forecast_time_lines, forecast_range_lines
 
 from .callback_codec import CallbackCodecError, decode_callback, encode_callback
 from .contracts import MessengerGateway, NormalizedEvent, ProgressEvent, UiButton
 from .menu_catalog import PRODUCT_LABELS
 from .profile_service import cleanup_product_result
 from .router import MessengerRouter, RouterDependencies, _command_args, _profile_progress_text, menu_keyboard
+from .state import FlowState
 from .user_recipes import RecipeLimitError, UserRecipe, UserRecipeStore
 
 
@@ -97,7 +100,10 @@ class PersonalMessengerRouter(MessengerRouter):
                 if point is None:
                     await gateway.send_text(event.chat_id, "В сценарии потеряна точка. Создайте профиль заново.")
                     return
-                await self._run_profile(event, gateway, point, int(recipe.params.get("lead", 24)), None)
+                lead = int(recipe.params.get("lead", 24))
+                run = await self._recipe_forecast_run(event, gateway, recipe, {"lead": lead}, lead)
+                if run is not None:
+                    await self._run_profile(event, gateway, point, lead, run)
                 return
             if data.action == "toggle":
                 try:
@@ -122,13 +128,60 @@ class PersonalMessengerRouter(MessengerRouter):
                 return
         await super()._callback(event, gateway)
 
+    def _forecast_recipe_state(self, recipe: UserRecipe, params: dict[str, Any]) -> FlowState:
+        return FlowState(product=recipe.product, step="recipe", point=_recipe_point(recipe),
+                         params={**params, "_forecast_recipe_id": recipe.recipe_id})
+
+    async def _recipe_forecast_run(self, event, gateway, recipe: UserRecipe, params: dict[str, Any], lead: int):
+        """A dated recipe launches the verified cycle shown in its own card.
+
+        Quick actions without a current matching preview resolve and announce
+        a cycle. Expired previews are checked again and any change is explicit.
+        """
+        state = self.sessions.get(event.platform, event.user_id, event.chat_id)
+        if (state is None or state.product != recipe.product
+                or state.params.get("_forecast_recipe_id") != recipe.recipe_id):
+            state = self._forecast_recipe_state(recipe, params)
+            self.sessions.set(event.platform, event.user_id, event.chat_id, state)
+        previous = menu_run(state.params)
+        check_text = f"Проверяю данные GFS для +{lead} ч…"
+        if event.message_id:
+            status = await gateway.edit_text(event.chat_id, event.message_id, check_text)
+        else:
+            status = await gateway.send_text(event.chat_id, check_text)
+        if self.sessions.get(event.platform, event.user_id, event.chat_id) is not state:
+            return None
+        token = int(state.params.get("_forecast_selection", 0)) + 1
+        run = await self._forecast_selection_run(event, gateway, state, lead, notify=False)
+        if (self.sessions.get(event.platform, event.user_id, event.chat_id) is not state
+                or state.params.get("_forecast_selection") != token):
+            return None
+        if run is None:
+            if state.params.get("_forecast_error"):
+                await gateway.edit_text(event.chat_id, status.message_id, UNVERIFIED_TIME_TEXT)
+            return None
+        heading = "Цикл обновлён для выбранного срока:\n" if previous is not None and previous != run else ""
+        timing = forecast_range_lines(run, int(params.get("from", lead)), lead)
+        await gateway.edit_text(event.chat_id, status.message_id, heading + timing)
+        if (self.sessions.get(event.platform, event.user_id, event.chat_id) is not state
+                or state.params.get("_forecast_selection") != token):
+            return None
+        return run
+
     async def _send_recipe_card(self, event: NormalizedEvent, gateway: MessengerGateway, recipe: UserRecipe) -> None:
         point = recipe.point or {}
         lead = int(recipe.params.get("lead", 24))
+        state = self._forecast_recipe_state(recipe, {"lead": lead})
+        self.sessions.set(event.platform, event.user_id, event.chat_id, state)
+        status = await gateway.send_text(event.chat_id, f"Проверяю данные GFS для +{lead} ч…")
+        run = await self._forecast_menu_run(state, lead)
+        if self.sessions.get(event.platform, event.user_id, event.chat_id) is not state:
+            return
+        timing = forecast_time_lines(run, lead) if run is not None else UNVERIFIED_TIME_TEXT
         pin_text = "★ Открепить" if recipe.pinned else "⭐ Закрепить"
-        await gateway.send_text(
-            event.chat_id,
-            f"📈 Профиль GFS\n📍 {point.get('label', 'точка')}\nСрок: +{lead} ч",
+        await gateway.edit_text(
+            event.chat_id, status.message_id,
+            f"📈 Профиль GFS\n📍 {point.get('label', 'точка')}\n{timing}",
             keyboard=menu_keyboard(
                 [
                     [UiButton("▶ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],

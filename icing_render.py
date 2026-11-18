@@ -13,7 +13,13 @@ from threading import RLock
 import numpy as np
 
 from icing_meteorology import (
-    AGREEMENT_LABELS, PRODUCT_TITLES, PRODUCT_UNITS, select_icing_field,
+    AGREEMENT_LABELS, PRODUCT_TITLES,
+)
+from icing_presentation import (
+    DISPLAY_UNITS, PRODUCT_HINTS, SOURCE_LABEL, display_icing_field, water_profile_missing,
+)
+from icing_geography import (
+    draw_basemap as _basemap, draw_cities as _cities, draw_selected_point,
 )
 
 _RENDER_LOCK = RLock()
@@ -85,59 +91,11 @@ def _geographic_grid(ax, bbox, project, clip):
             ax.text(lx, ly, f"{latitude:g}° с.ш.", ha="left", va="center", fontsize=8.5, color="#526b79", clip_on=True, zorder=8)
 
 
-def _basemap(ax, bbox, project, clip):
-    from basemap_cache import basemap_data_dir, basemap_resolution, iter_layer_features
-    from matplotlib.collections import LineCollection, PolyCollection
-    candidates = dict.fromkeys(("50m", "110m", basemap_resolution(), "10m"))
-    resolution = next((r for r in candidates if (
-        basemap_data_dir() / "natural_earth" / r / f"ne_{r}_coastline.shp"
-    ).is_file()), basemap_resolution())
-    west, east, south, north = bbox
-    query = (south, north, west, east)
-    found = False
-    for layer, color, width in (("coastline", "#687f8d", 0.45), ("admin0", "#8396a2", 0.3), ("rivers", "#9abfce", 0.25), ("lakes", "#9abfce", 0.25)):
-        lines = []
-        try:
-            for feature in iter_layer_features(layer, query, resolution):
-                if len(feature.points) < 2:
-                    continue
-                points = np.asarray(feature.points, dtype=float)
-                lines.append(np.column_stack(project(points[:, 0], points[:, 1])))
-        except (OSError, ValueError):
-            continue
-        if not lines:
-            continue
-        found |= layer == "coastline"
-        if layer == "lakes":
-            patches = PolyCollection(lines, facecolors="#ddecf3", edgecolors="none", alpha=0.7, zorder=1)
-            ax.add_collection(patches)
-            patches.set_clip_path(clip)
-        collection = LineCollection(lines, colors=color, linewidths=width, zorder=5)
-        ax.add_collection(collection)
-        collection.set_clip_path(clip)
-    return found
-
-
-def _cities(ax, bbox, project):
-    from matplotlib import patheffects
-    west, east, south, north = bbox
-    cities = (("Лондон", -0.13, 51.51), ("Берлин", 13.4, 52.52), ("Москва", 37.62, 55.75),
-              ("Анкара", 32.86, 39.93), ("Екатеринбург", 60.6, 56.84),
-              ("Новосибирск", 82.92, 55.03), ("Красноярск", 92.87, 56.01), ("Мурманск", 33.08, 68.97))
-    for name, lon, lat in cities:
-        if not (west + 0.02 * (east - west) < lon < east - 0.02 * (east - west) and south < lat < north):
-            continue
-        x, y = project(lon, lat)
-        ax.plot(x, y, "o", color=_BLUE, ms=2, zorder=9)
-        label = ax.annotate(name, (x, y), xytext=(3, 4), textcoords="offset points", fontsize=10, color=_BLUE, zorder=10)
-        label.set_path_effects([patheffects.withStroke(linewidth=2, foreground="white")])
-
-
 def _presentation(product):
     if product in {"godske_sum", "godske_max"}:
-        return [100, 500, 1000, 1500, 2000, 2500, 3000, 4000, 5000], "YlGnBu"
+        return [10, 50, 100, 150, 200, 250, 300, 400, 500], "YlGnBu"
     if product in {"godske_base", "godske_top", "slw_height"}:
-        return [-500, 0, 250, 500, 1000, 1500, 2000, 3000, 4000, 6000, 8000], "PuBuGn"
+        return [-50, 0, 25, 50, 100, 150, 200, 300, 400, 600, 800], "PuBuGn"
     if product in {"slw_level", "slw_max"}:
         return [0.001, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.4, 0.8, 1.2], "BuPu"
     if product == "slwp":
@@ -152,17 +110,21 @@ def _unknown_mask(fields, product, values, level_hpa):
     if product in {"godske_base", "godske_top"}:
         unknown &= ~np.isfinite(fields["godske20_sum_gpm"]) | (fields["godske20_n_layers"] > 0)
     elif product == "slw_height":
-        unknown &= ~np.isfinite(fields["max_slwc_gm3"])
+        complete = ~water_profile_missing(fields)
+        known_dry = np.isfinite(fields["max_slwc_gm3"]) & (fields["max_slwc_gm3"] == 0)
+        known_warm = fields["water_valid_above_ground"].any(axis=0) & ~fields["SLWC_has_cold_levels"]
+        unknown &= ~((known_dry | known_warm) & complete)
     elif product == "slw_max":
         # A fully available, entirely warm column has no cold-level maximum.
-        known_warm = fields["water_valid_above_ground"].any(axis=0) & ~fields["SLWC_has_cold_levels"]
+        known_warm = (fields["water_valid_above_ground"].any(axis=0)
+                      & ~fields["SLWC_has_cold_levels"] & ~water_profile_missing(fields))
         unknown &= ~known_warm
     return unknown
 
 
 def render_icing_png(
     fields, lat, lon, product, *, run, lead, bbox, level_hpa=850,
-    contour_step=500, output_path,
+    contour_step=500, output_path, point=None,
 ) -> Path:
     """Render one regional PNG with explicit physical units and provenance."""
     from matplotlib import colormaps
@@ -172,18 +134,26 @@ def render_icing_png(
     from matplotlib.patches import Patch, PathPatch
     from matplotlib.path import Path as MplPath
     lat, lon = np.asarray(lat, dtype=float), np.asarray(lon, dtype=float)
-    values = select_icing_field(fields, product, level_hpa)
+    values = display_icing_field(fields, product, level_hpa)
     if lat.shape != values.shape or lon.shape != values.shape or values.ndim != 2:
         raise ValueError("Координаты и поле карты имеют разные размеры")
     if not np.isfinite(lat).all() or not np.isfinite(lon).all():
         raise ValueError("Координаты карты содержат пропуски")
     if contour_step not in (100, 500):
-        raise ValueError("Шаг изолиний должен быть 100 или 500 гп.м")
+        raise ValueError("Шаг изолиний на карте должен быть 10 или 50 дам")
     if len(bbox) != 4 or not np.isfinite(bbox).all():
         raise ValueError("Некорректный район карты")
     west, east, south, north = map(float, bbox)
     if not (west < east and 0 <= south < north <= 85):
         raise ValueError("Некорректные границы северного района")
+    if point is not None:
+        try:
+            point_lat, point_lon = map(float, point)
+        except (ValueError, TypeError) as exc:
+            raise ValueError("Пункт задаётся широтой и долготой") from exc
+        if not (np.isfinite([point_lat, point_lon]).all() and south <= point_lat <= north and west <= point_lon <= east):
+            raise ValueError("Выбранный пункт находится вне района карты")
+        point = (point_lat, point_lon)
     if not np.allclose(lat, lat[:, :1], atol=1e-7) or not np.allclose(lon, lon[:1, :], atol=1e-7):
         raise ValueError("Ожидалась регулярная широтно-долготная сетка GFS")
     target = Path(output_path)
@@ -197,7 +167,9 @@ def render_icing_png(
     outline = _boundary(bbox, project)
     bounds, palette = _presentation(product)
     categorical = product == "agreement"
-    colors = ["#f5f7f9", "#d7a55d", "#64acb9", "#574895", "#bf7892"] if categorical else colormaps[palette](np.linspace(0.12, 0.95, len(bounds) - 1))
+    # No diagnosed conditions leave the geographic base visible, including sea
+    # and lakes; category zero must not paint the whole map opaque white.
+    colors = [(1, 1, 1, 0), "#d7a55d", "#64acb9", "#574895", "#bf7892"] if categorical else colormaps[palette](np.linspace(0.12, 0.95, len(bounds) - 1))
     cmap = ListedColormap(colors)
     norm = BoundaryNorm(bounds, cmap.N)
     height_product = product in {"godske_base", "godske_top", "slw_height"}
@@ -207,13 +179,20 @@ def render_icing_png(
     run_dt = run.run_datetime_utc
     valid_dt = run_dt + timedelta(hours=int(lead))
     with _RENDER_LOCK:
-        fig = Figure(figsize=(12.8, 9.8), dpi=170, facecolor="white")
+        # Size the page around the projected map instead of fitting the map into
+        # a fixed, low strip between several blocks of technical text.
+        figure_width = 12.8
+        map_ratio = float(np.ptp(outline[:, 0]) / np.ptp(outline[:, 1]))
+        map_height = min(11.4, max(4.4, (figure_width - 0.28) / map_ratio))
+        header_height, footer_height = 1.00, 1.12 if categorical else 1.00
+        figure_height = map_height + header_height + footer_height
+        fig = Figure(figsize=(figure_width, figure_height), dpi=170, facecolor="white")
         FigureCanvasAgg(fig)
         try:
-            ax = fig.add_axes((0.035, 0.215, 0.93, 0.62))
+            ax = fig.add_axes((0.011, footer_height / figure_height, 0.978, map_height / figure_height))
             ax.set_aspect("equal")
-            ax.set_facecolor("#edf2f5")
-            border = PathPatch(MplPath(outline), facecolor="#fbfcfd", edgecolor="#8aa0ad", linewidth=0.65, zorder=0)
+            ax.set_facecolor("white")
+            border = PathPatch(MplPath(outline), facecolor="#fcfcfa", edgecolor="#9db0bb", linewidth=0.55, zorder=0)
             ax.add_patch(border)
             ax.set_xlim(outline[:, 0].min(), outline[:, 0].max())
             ax.set_ylim(outline[:, 1].min(), outline[:, 1].max())
@@ -227,17 +206,19 @@ def render_icing_png(
                 missing.set_clip_path(border)
             has_basemap = _basemap(ax, bbox, project, border)
             _geographic_grid(ax, bbox, project, border)
-            _cities(ax, bbox, project)
             if min(values.shape) >= 2 and product in {"godske_sum", "godske_max"}:
                 valid_values = values[np.isfinite(values)]
-                vmax = min(float(valid_values.max()), 20000) if len(valid_values) else 0
-                levels = np.arange(contour_step, vmax + 1e-7, contour_step)
+                vmax = min(float(valid_values.max()), 2000) if len(valid_values) else 0
+                contour_dam = contour_step / 10.0
+                levels = np.arange(contour_dam, vmax + 1e-7, contour_dam)
                 if len(levels) and np.ptp(valid_values) > 1e-9:
                     lines = ax.contour(x, y, np.ma.masked_invalid(values), levels=levels, colors="#254b60", linewidths=0.35 if contour_step == 100 else 0.65, alpha=0.45 if contour_step == 100 else 0.8, zorder=6)
                     lines.set_clip_path(border)
-                    labels = [v for v in levels if int(v) % 500 == 0]
+                    labels = [v for v in levels if int(v) % 50 == 0]
                     if labels:
-                        ax.clabel(lines, levels=labels, fontsize=9, inline=True, fmt="%d")
+                        for label in ax.clabel(lines, levels=labels, fontsize=9, inline=True, fmt="%d"):
+                            label.set_clip_path(border); label.set_clip_on(True)
+                            label.set_gid("icing_contour")
             if min(values.shape) >= 2 and product == "slw_level":
                 k = int(np.flatnonzero(np.isclose(fields["pressure_hpa"], level_hpa))[0])
                 temps = np.ma.masked_where(~fields["water_valid_above_ground"][k], fields["temperature_C"][k])
@@ -246,66 +227,91 @@ def render_icing_png(
                 if levels:
                     lines = ax.contour(x, y, temps, levels=levels, colors="#4f6b86", linewidths=0.6, zorder=6)
                     lines.set_clip_path(border)
-                    ax.clabel(lines, fontsize=9, fmt=lambda v: f"{v:g}°")
+                    for label in ax.clabel(lines, fontsize=9, fmt=lambda v: f"{v:g} °C"):
+                        label.set_clip_path(border); label.set_clip_on(True)
+                        label.set_gid("icing_contour")
             censored = np.zeros_like(unknown)
+            interior_missing = np.zeros_like(unknown)
             if product in {"godske_sum", "godske_max", "godske_count"}:
-                censored = (fields["godske20_lower_open"] | fields["godske20_upper_open"] | fields["godske20_interior_missing"]) & (fields["godske20_sum_gpm"] > 0)
-                if censored.any() and min(values.shape) >= 2:
-                    hatch = ax.contourf(x, y, np.where(censored, 1, np.nan), levels=[0.5, 1.5], colors="none", hatches=["..."], zorder=7)
-                    hatch.set_clip_path(border)
-                    hatch.set_edgecolor("#425b6a")
-                    hatch.set_linewidth(0.2)
+                active = fields["godske20_sum_gpm"] > 0
+                censored = (fields["godske20_lower_open"] | fields["godske20_upper_open"]) & active
+            if product.startswith("godske_"):
+                interior_missing = fields["godske20_interior_missing"] & ~unknown
+            elif product in {"slwp", "slw_max", "slw_height"}:
+                interior_missing = water_profile_missing(fields) & ~unknown
+            for mask, pattern in ((censored, ".."), (interior_missing, "//")):
+                if not mask.any():
+                    continue
+                if min(values.shape) >= 2:
+                    hatch = ax.contourf(x, y, np.where(mask, 1, np.nan), levels=[0.5, 1.5], colors="none", hatches=[pattern], zorder=7)
+                else:
+                    hatch = ax.pcolor(edge_x, edge_y, np.ma.masked_where(~mask, np.ones_like(values)),
+                                      facecolor="none", cmap=ListedColormap([(1, 1, 1, 0)]), hatch=pattern, zorder=7)
+                hatch.set_clip_path(border)
+                hatch.set_edgecolor("#657783")
+                hatch.set_linewidth(0.15)
             legend = []
             if unknown.any():
-                missing_label = "Уровень под рельефом / нет данных" if product == "slw_level" else "Нет данных / граница не определена"
+                missing_label = ("Ниже поверхности / нет данных" if product == "slw_level" else
+                                 "Граница не определена" if product in {"godske_base", "godske_top"} else
+                                 "Нет данных для расчёта")
                 legend.append(Patch(facecolor="#c9d0d5", label=missing_label))
             if censored.any():
-                legend.append(Patch(facecolor="none", edgecolor="#425b6a", hatch="...", label="Незамкнутый слой / пропуск в профиле"))
+                legend.append(Patch(facecolor="none", edgecolor="#657783", hatch="..", label="Слой выходит за доступные уровни"))
+            if interior_missing.any():
+                missing_text = "Неполные данные по высоте" if product in {"slwp", "slw_max", "slw_height"} else "Пропуски между уровнями"
+                legend.append(Patch(facecolor="none", edgecolor="#657783", hatch="//", label=missing_text))
             if legend:
-                ax.legend(handles=legend, loc="lower left", fontsize=9.5, framealpha=0.95)
+                ax.legend(handles=legend, loc="lower left", fontsize=9.5, framealpha=0.97,
+                          edgecolor="#d2dbe0", borderpad=0.5)
             shown = np.isfinite(values) & ~below_display
             if not shown.any():
                 if unknown.all():
                     message = "Поле не определено в доступных данных"
                 elif product in {"godske_base", "godske_top"} and (fields["godske20_n_layers"] > 0).any():
-                    message = "Граница слоя не замкнута доступными уровнями"
+                    message = "Высота границы вне доступных уровней"
                 else:
                     message = "Значений выше порога заливки не выявлено"
                 ax.text(0.5, 0.5, message, transform=ax.transAxes, ha="center", va="center", fontsize=12, color=_BLUE, bbox={"facecolor": "white", "alpha": 0.9, "edgecolor": "#b4c4ce", "pad": 8}, zorder=20)
-            fig.text(0.045, 0.956, "ОБЛЕДЕНЕНИЕ · GFS data", fontsize=12, weight="bold", color="#44718a")
-            fig.text(0.955, 0.956, f"Цикл {run_dt:%d.%m.%Y %H} UTC · +{int(lead)} ч", fontsize=11, color="#526b79", ha="right")
+            if point is not None:
+                draw_selected_point(ax, point, bbox, project, border)
+            _cities(ax, bbox, project, border)
+            top = lambda inches: 1.0 - inches / figure_height
+            bottom = lambda inches: inches / figure_height
+            fig.text(0.022, top(0.23), "ОБЛЕДЕНЕНИЕ · GFS 0,25°", fontsize=9.5, weight="bold", color="#44718a")
+            fig.text(0.978, top(0.23), f"Исходные данные {run_dt:%d.%m.%Y %H} UTC · +{int(lead)} ч", fontsize=10, color="#526b79", ha="right")
             title = PRODUCT_TITLES[product]
-            fig.text(0.045, 0.913, title, fontsize=22 if len(title) < 49 else 19, weight="bold", color=_BLUE)
+            fig.text(0.022, top(0.58), title, fontsize=19.5 if len(title) < 49 else 17.5, weight="bold", color=_BLUE)
             pressure_range = f"{float(fields['pressure_hpa'][0]):g}–{float(fields['pressure_hpa'][-1]):g} гПа"
-            subtitle = f"{level_hpa} гПа · T < 0 °C" if product == "slw_level" else f"Уровни {pressure_range}"
+            subtitle = f"{level_hpa} гПа · температура ниже 0 °C" if product == "slw_level" else f"{pressure_range}"
             if product.startswith("godske"):
-                subtitle = "Годске M8D20 · " + subtitle
-            fig.text(0.045, 0.878, subtitle, fontsize=12, color="#405d6f")
+                subtitle = "Метод Годске · " + subtitle
+            if product in {"godske_sum", "godske_max"}:
+                subtitle += f" · изолинии {contour_step // 10} дам"
+            fig.text(0.022, top(0.87), f"Прогноз на {valid_dt:%d.%m.%Y %H:%M} UTC", fontsize=11.4, weight="bold", color=_BLUE)
+            fig.text(0.978, top(0.87), subtitle, fontsize=10.4, ha="right", color="#405d6f")
             if categorical:
                 patches = [Patch(facecolor=color, edgecolor="#a8b5bf", label=label) for color, label in zip(colors, AGREEMENT_LABELS)]
-                fig.legend(handles=patches, loc="lower center", bbox_to_anchor=(0.5, 0.123), ncol=2, fontsize=10, frameon=False)
+                fig.legend(handles=patches, loc="lower center", bbox_to_anchor=(0.5, bottom(0.54)), ncol=3, fontsize=9.5, frameon=False)
             else:
-                cax = fig.add_axes((0.15, 0.158, 0.73, 0.022))
+                cax = fig.add_axes((0.045, bottom(0.76), 0.84, bottom(0.14)))
                 ticks = range(1, 6) if product == "godske_count" else bounds
                 colorbar = fig.colorbar(mesh, cax=cax, orientation="horizontal", ticks=ticks, spacing="uniform", extend="both" if height_product else "max")
-                colorbar.ax.tick_params(labelsize=10.5)
+                colorbar.ax.tick_params(labelsize=9, length=3, pad=3)
                 colorbar.ax.set_xticklabels([f"{v:g}".replace(".", ",") for v in ticks])
-                colorbar.set_label(PRODUCT_UNITS[product], fontsize=11, labelpad=4)
-            if product in {"godske_sum", "godske_max"}:
-                note = f"Изолинии {contour_step} гп.м · заливка от 100 гп.м"
-            elif product in {"godske_base", "godske_top", "slw_height"}:
-                note = "Высоты: геопотенциальные метры от уровня моря (MSL)"
-            elif product == "godske_count":
-                note = "Число отдельных слоёв Годске M8D20"
-            elif product == "agreement":
-                note = "Водность ≥ 0,001 г/м³ при T < 0 °C · совпадение по одному высотному интервалу"
+                fig.text(0.91, bottom(0.80), DISPLAY_UNITS[product], fontsize=11.5, weight="bold", color=_BLUE)
+            note = PRODUCT_HINTS[product]
+            fig.text(0.022, bottom(0.37), note, fontsize=9.7, color="#405d6f")
+            if has_basemap and "ocean" in has_basemap:
+                basemap_note = "География: Natural Earth"
+            elif has_basemap:
+                basemap_note = "Natural Earth · слой морей не установлен"
             else:
-                note = f"Облачная жидкая вода · заливка от {bounds[0]:g} {PRODUCT_UNITS[product]}".replace("0.001", "0,001")
-            fig.text(0.045, 0.082, note, fontsize=11, color="#405d6f")
-            basemap_note = "" if has_basemap else " · подложка: координатная сетка"
-            fig.text(0.045, 0.047, f"Действителен {valid_dt:%d.%m.%Y %H} UTC · NOAA/NCEP · 0,25°{basemap_note}", fontsize=10.5, color="#526b79")
-            fig.text(0.045, 0.021, f"Район: {west:g}…{east:g}° долготы, {south:g}…{north:g}° с.ш.", fontsize=10, color="#526b79")
-            fig.savefig(target, format="png", dpi=170, metadata={"Title": title, "Description": f"GFS {run_dt.isoformat()} +{int(lead)}h; valid {valid_dt.isoformat()}; {PRODUCT_UNITS[product]}; GFS data; model"})
+                basemap_note = "Подложка не установлена"
+            fig.text(0.022, bottom(0.13), f"{SOURCE_LABEL} · NOMADS", fontsize=9.1, color="#526b79")
+            fig.text(0.978, bottom(0.13), basemap_note, fontsize=9.1, color="#526b79", ha="right")
+            point_metadata = f"; selected point {point[0]:.4f},{point[1]:.4f}" if point is not None else ""
+            fig.savefig(target, format="png", dpi=170, metadata={"Title": title, "Description": f"GFS {run_dt.isoformat()} +{int(lead)}h; valid {valid_dt.isoformat()}; {DISPLAY_UNITS[product]}; GFS data; model{point_metadata}"})
         finally:
             fig.clear()
     return target

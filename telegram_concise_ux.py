@@ -17,7 +17,7 @@ from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler
 
 from feature_flags import weathernext3_enabled
 from messenger.menu_catalog import HOME_TEXT, PRODUCT_LABELS
-from telegram_product_wizard import PRODUCT_WIZARD_KEY, copy_command
+from telegram_product_wizard import PRODUCT_WIZARD_KEY, copy_command, wizard_forecast_text
 from telegram_ui import CANCEL_TEXT, location_keyboard, product_button_rows
 from user_location_session import RECENT_LOCATION_PREFIX
 
@@ -107,7 +107,8 @@ def params_text(state: dict[str, object]) -> str:
         body = f"🗺️ Карта\n{point}\n{mode_label} · {period} · радиус {int(state.get('radius', 100))} км"
     else:
         body = f"Параметры\n{point}"
-    return body + command_line
+    timing = wizard_forecast_text(state)
+    return body + ("\n" + timing if timing else "") + command_line
 
 
 async def _remove_reply_keyboard(message) -> None:
@@ -206,10 +207,7 @@ def install(namespace: dict[str, Any]) -> None:
     async def show_profile_leads(message, context, point, run=None) -> None:
         namespace["_set_pending_point"](context, point, run)
         await _remove_reply_keyboard(message)
-        await message.reply_text(
-            f"📍 {point.label}\nВыберите срок.",
-            reply_markup=namespace["lead_keyboard"](0),
-        )
+        await namespace["_show_profile_leads"](message, context, point)
 
     async def resolve_wizard_point(message, context, raw: str) -> bool:
         state = namespace["_wizard_state"](context)
@@ -310,7 +308,11 @@ def install(namespace: dict[str, Any]) -> None:
     async def show_wizard_params(message, context, state) -> None:
         context.user_data[PRODUCT_WIZARD_KEY] = state
         await _remove_reply_keyboard(message)
-        await message.reply_text(
+        status = await message.reply_text("Проверяю данные GFS…")
+        await namespace["_prepare_wizard_forecast"](state)
+        if context.user_data.get(PRODUCT_WIZARD_KEY) is not state:
+            return
+        await status.edit_text(
             params_text(state),
             parse_mode=ParseMode.HTML,
             reply_markup=namespace["params_keyboard"](state),
@@ -409,7 +411,7 @@ def install(namespace: dict[str, Any]) -> None:
             await namespace["_tracked_run_profile"](query.message, point, lead, run, user=update.effective_user)
             return
         namespace["_set_pending_point"](context, point, run)
-        await query.edit_message_text(f"📍 {point.label}\nВыберите срок.", reply_markup=namespace["lead_keyboard"](0))
+        await namespace["_show_profile_leads"](query.message, context, point, query=query)
 
     async def product_wizard_callback(update, context) -> None:
         query = update.callback_query

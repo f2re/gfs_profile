@@ -21,6 +21,8 @@ from geocode import GeoPoint
 from gfs_core import canonical_leads
 from messenger.menu_catalog import PRODUCT_LABELS
 from telegram_ui import COMMON_LEADS, product_button_rows
+from forecast_menu import UNVERIFIED_TIME_TEXT, ensure_menu_run
+from forecast_time import forecast_lead_label, forecast_time_lines
 from telegram_product_wizard import PRODUCT_WIZARD_KEY
 from telegram_user_state import (
     ProductPreference,
@@ -351,27 +353,26 @@ def _locations_keyboard(user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def _profile_text(point: Mapping[str, Any], lead: int) -> str:
+def _profile_text(point: Mapping[str, Any], lead: int, run=None) -> str:
+    timing = forecast_time_lines(run, lead) if run is not None else f"Прогноз +{lead} ч\n{UNVERIFIED_TIME_TEXT}"
     return (
         "📈 Вертикальный профиль GFS\n"
         f"{_point_line(point)}\n"
-        f"Срок: +{lead} ч"
+        f"{timing}"
     )
 
 
-def _profile_keyboard(lead: int) -> InlineKeyboardMarkup:
+def _profile_keyboard(lead: int, run=None) -> InlineKeyboardMarkup:
     values = COMMON_LEADS
     buttons = [
         InlineKeyboardButton(
-            ("✓ " if value == lead else "") + f"+{value}ч",
+            ("✓ " if value == lead else "") + (forecast_lead_label(run, value) if run is not None else f"+{value}ч"),
             callback_data=f"personal:profile:lead:{value}",
         )
         for value in values
     ]
     return InlineKeyboardMarkup(
-        [
-            buttons[:3],
-            buttons[3:],
+        [buttons[index:index + 2] for index in range(0, len(buttons), 2)] + [
             [InlineKeyboardButton("Все сроки →", callback_data="personal:profile:all")],
             [InlineKeyboardButton(f"▶ Построить +{lead} ч", callback_data="personal:profile:run")],
             [
@@ -380,6 +381,27 @@ def _profile_keyboard(lead: int) -> InlineKeyboardMarkup:
             ],
         ]
     )
+
+
+async def _show_profile_parameters(message, context, state, namespace, *, query=None):
+    token = int(state.get("_forecast_view", 0)) + 1
+    state["_forecast_view"] = token
+    lead = int(state.get("lead", 24))
+    check_text = f"Проверяю данные GFS для +{lead} ч…"
+    if query is not None:
+        await query.edit_message_text(check_text)
+        status = None
+    else:
+        status = await message.reply_text(check_text)
+    run = await ensure_menu_run(state, lead, namespace["latest_available_run_for_lead"])
+    if context.user_data.get("personal_profile") is not state or state.get("_forecast_view") != token:
+        return
+    text = _profile_text(state["point"], lead, run)
+    keyboard = _profile_keyboard(lead, run)
+    if query is not None:
+        await query.edit_message_text(text, reply_markup=keyboard)
+    else:
+        await status.edit_text(text, reply_markup=keyboard)
 
 
 def _quick_card(preference: ProductPreference) -> tuple[str, InlineKeyboardMarkup]:
@@ -674,7 +696,11 @@ def install(namespace: dict[str, Any]) -> None:
         import telegram_concise_ux
 
         await telegram_concise_ux._remove_reply_keyboard(message)
-        await message.reply_text(
+        status = await message.reply_text("Проверяю данные GFS…")
+        await namespace["_prepare_wizard_forecast"](personalised)
+        if context.user_data.get(PRODUCT_WIZARD_KEY) is not personalised:
+            return
+        await status.edit_text(
             namespace["params_text"](personalised),
             parse_mode=ParseMode.HTML,
             reply_markup=namespace["params_keyboard"](personalised),
@@ -691,7 +717,10 @@ def install(namespace: dict[str, Any]) -> None:
             )
 
     async def run_wizard_product(message, context, state, user=None):
+        if context.user_data.get(PRODUCT_WIZARD_KEY) is not state:
+            return
         state_value = _normalise_map_state(state) if str(state.get("product")) == "map" else dict(state)
+        context.user_data[PRODUCT_WIZARD_KEY] = state_value
         token = _PENDING_WIZARD_STATE.set(state_value)
         try:
             await original_run_wizard_product(message, context, state_value, user=user)
@@ -799,11 +828,12 @@ def install(namespace: dict[str, Any]) -> None:
             await original_profile_command(update, context)
             return
         lead = int((preference.params if preference else default_product_params("profile")).get("lead", 24))
-        context.user_data["personal_profile"] = {"point": point, "lead": lead}
+        state = {"point": point, "lead": lead}
+        context.user_data["personal_profile"] = state
         import telegram_concise_ux
 
         await telegram_concise_ux._remove_reply_keyboard(message)
-        await message.reply_text(_profile_text(point, lead), reply_markup=_profile_keyboard(lead))
+        await _show_profile_parameters(message, context, state, namespace)
 
     async def map_command(update, context):
         raw = " ".join(context.args or []).strip()
@@ -910,6 +940,7 @@ async def _run_preference(update, context, namespace: dict[str, Any], preference
     if product in {"aero", "windgram", "cloudgram", "map"}:
         params = _map_state_params(preference.params) if product == "map" else dict(preference.params)
         state = {"product": product, "step": "params", "point": point_payload, **params}
+        context.user_data[PRODUCT_WIZARD_KEY] = state
         await namespace["_run_wizard_product"](
             message,
             context,
@@ -973,13 +1004,18 @@ async def _edit_preference_card(update, context, namespace: dict[str, Any], pref
     namespace["_clear_pending"](context)
     if product == "profile" and point_payload:
         lead = int(preference.params.get("lead", 24))
-        context.user_data["personal_profile"] = {"point": point_payload, "lead": lead}
-        await query.edit_message_text(_profile_text(point_payload, lead), reply_markup=_profile_keyboard(lead))
+        state = {"point": point_payload, "lead": lead}
+        context.user_data["personal_profile"] = state
+        await _show_profile_parameters(query.message, context, state, namespace, query=query)
         return
     if product in {"aero", "windgram", "cloudgram", "map"} and point_payload:
         params = _map_state_params(preference.params) if product == "map" else dict(preference.params)
         state = {"product": product, "step": "params", "point": point_payload, **params}
         context.user_data[PRODUCT_WIZARD_KEY] = state
+        await query.edit_message_text("Проверяю данные GFS…")
+        await namespace["_prepare_wizard_forecast"](state)
+        if context.user_data.get(PRODUCT_WIZARD_KEY) is not state:
+            return
         await query.edit_message_text(
             namespace["params_text"](state),
             parse_mode=ParseMode.HTML,
@@ -1191,7 +1227,9 @@ def register(application, namespace: dict[str, Any]) -> None:
             else:
                 point = _unpack_point(state["point"])
                 namespace["_set_pending_point"](context, point)
-                await query.edit_message_text(f"📍 {point.label}\nВыберите срок.", reply_markup=namespace["lead_keyboard"](1))
+                pending = context.user_data["pending_profile"]
+                pending.update({key: state[key] for key in ("_forecast_run", "_forecast_lead", "_forecast_checked") if key in state})
+                await namespace["_show_profile_leads"](query.message, context, point, page=1, query=query)
             raise ApplicationHandlerStop
 
         if data.startswith("personal:profile:lead:"):
@@ -1206,25 +1244,39 @@ def register(application, namespace: dict[str, Any]) -> None:
                 raise ApplicationHandlerStop
             state["lead"] = lead
             save_product_selection(user_id, "profile", {"lead": state["lead"]}, state["point"])
-            await query.edit_message_text(
-                _profile_text(state["point"], int(state["lead"])),
-                reply_markup=_profile_keyboard(int(state["lead"])),
-            )
+            await _show_profile_parameters(query.message, context, state, namespace, query=query)
             raise ApplicationHandlerStop
         if data == "personal:profile:run":
             await query.answer()
-            state = context.user_data.pop("personal_profile", None)
+            state = context.user_data.get("personal_profile")
             if not isinstance(state, dict) or not isinstance(state.get("point"), dict):
                 await query.edit_message_text("Выбор устарел. Откройте профиль заново.", reply_markup=home_keyboard(user_id))
                 raise ApplicationHandlerStop
             point = _unpack_point(state["point"])
             lead = int(state.get("lead", 24))
-            await query.edit_message_text(f"Строю профиль +{lead} ч…")
+            token = int(state.get("_forecast_selection", 0)) + 1
+            state["_forecast_selection"] = token
+            await query.edit_message_text(f"Проверяю данные GFS для +{lead} ч…")
+            if context.user_data.get("personal_profile") is not state or state.get("_forecast_selection") != token:
+                raise ApplicationHandlerStop
+            run = await ensure_menu_run(state, lead, namespace["latest_available_run_for_lead"])
+            if (context.user_data.get("personal_profile") is not state or state.get("_forecast_lead", lead) != lead
+                    or state.get("_forecast_selection") != token):
+                raise ApplicationHandlerStop
+            if run is None:
+                if state.get("_forecast_error"):
+                    await query.edit_message_text(UNVERIFIED_TIME_TEXT, reply_markup=_profile_keyboard(lead))
+                raise ApplicationHandlerStop
+            timing = forecast_time_lines(run, lead) if run is not None else f"Прогноз +{lead} ч"
+            await query.edit_message_text(f"{timing}\nСтрою профиль…")
+            if context.user_data.get("personal_profile") is not state or state.get("_forecast_selection") != token:
+                raise ApplicationHandlerStop
+            context.user_data.pop("personal_profile", None)
             await namespace["_tracked_run_profile"](
                 query.message,
                 point,
                 lead,
-                None,
+                run,
                 user=update.effective_user,
             )
             raise ApplicationHandlerStop
