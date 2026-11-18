@@ -27,7 +27,7 @@ from .contracts import NormalizedEvent, ProgressEvent, UiButton, UiKeyboard
 from .icing_service import build_icing_product_result
 from .cloudgram_router import CloudgramMessengerRouter
 from .profile_service import cleanup_product_result
-from .router import LEAD_PAGE_SIZE, QUICK_LEADS, RouterDependencies, _command_args
+from .router import LEAD_PAGE_SIZE, QUICK_LEADS, RouterDependencies, _command_args, menu_keyboard
 from .state import FlowState
 
 LOG = logging.getLogger(__name__)
@@ -52,7 +52,7 @@ METHOD_TEXT = (
     "Диапазон 1000–300 гПа. Ниже первого надземного уровня и через пропуски "
     "профиль не достраивается. Незамкнутые границы отмечаются отдельно. "
     "Сравнение методов учитывает их пересечение в одном слое.\n\n"
-    "GFS 0.25° — модельный прогноз, не наблюдение и не радиозонд."
+    "GFS data · 0.25°"
 )
 
 
@@ -113,7 +113,7 @@ def _owned_keyboard(keyboard: UiKeyboard, event: NormalizedEvent) -> UiKeyboard:
                 button = replace(button, payload=icing_payload(action, request, owner=icing_owner(event)))
             bound.append(button)
         rows.append(bound)
-    return UiKeyboard.from_rows(rows)
+    return menu_keyboard(rows)
 
 
 def _region_text(request: IcingRequest) -> str:
@@ -122,13 +122,13 @@ def _region_text(request: IcingRequest) -> str:
 
 
 def icing_menu_keyboard(request: IcingRequest) -> UiKeyboard:
-    return UiKeyboard.from_rows([
+    return menu_keyboard([
         [_button("Вода на уровне", "c", replace(request, product="slw_level")),
-         _button("Мощность по Годске", "g", request)],
-        [_button("Границы слоёв", "b", request),
-         _button("Максимум водности", "w", request)],
+         _button("Годске", "g", request)],
+        [_button("Границы", "b", request),
+         _button("Макс. вода", "w", request)],
         [_button("Запас воды", "c", replace(request, product="slwp")),
-         _button("Сравнение методов", "c", replace(request, product="agreement"))],
+         _button("Сравнение", "c", replace(request, product="agreement"))],
         [_button("О методах", "m", request), _button("Отмена", "x", request)],
     ])
 
@@ -145,7 +145,7 @@ def icing_card_text(request: IcingRequest) -> str:
         lines.append("Метод: Годске M8D20")
     if request.product in {"godske_sum", "godske_max"}:
         lines.append(f"Изолинии: {request.contour_step} гп.м")
-    lines.append("GFS 0.25° · модельный прогноз")
+    lines.append("GFS data · 0.25°")
     return "\n".join(lines)
 
 
@@ -155,7 +155,7 @@ def icing_card_keyboard(request: IcingRequest) -> UiKeyboard:
         controls.append(_button("Уровень", "z", request))
     elif request.product in {"godske_sum", "godske_max"}:
         controls.append(_button("Изолинии", "o", request))
-    return UiKeyboard.from_rows([
+    return menu_keyboard([
         [_button("Построить", "r", request)], controls,
         [_button("Другой продукт", "h", request), _button("О методе", "m", request)],
         [_button("Новый цикл", "c", replace(request, run=None)), _button("Отмена", "x", request)],
@@ -179,7 +179,7 @@ def icing_lead_keyboard(request: IcingRequest, page: int = 0) -> UiKeyboard:
             nav.append(_button(f"{page}/{pages} ›", f"l{page + 1}", request))
         rows.append(nav)
     rows.append([_button("Назад", "c", request)])
-    return UiKeyboard.from_rows(rows)
+    return menu_keyboard(rows)
 
 
 def _result_keyboard(request: IcingRequest) -> UiKeyboard:
@@ -196,7 +196,7 @@ def _result_keyboard(request: IcingRequest) -> UiKeyboard:
         [_button("Другой продукт", "h", request), _button("Параметры", "c", request)],
         [_button("Последний цикл", "c", replace(request, run=None))],
     ])
-    return UiKeyboard.from_rows(rows)
+    return menu_keyboard(rows)
 
 
 def _progress_text(request: IcingRequest, progress: ProgressEvent) -> str:
@@ -205,6 +205,9 @@ def _progress_text(request: IcingRequest, progress: ProgressEvent) -> str:
 
 
 class IcingMessengerRouter(CloudgramMessengerRouter):
+
+    home_products = CloudgramMessengerRouter.home_products + ("icing",)
+
     def __init__(self, dependencies: RouterDependencies, *, icing_builder: Callable[..., Any] = build_icing_product_result,
                  icing_parser: Callable[[str], IcingRequest] = parse_icing_input, **kwargs: Any) -> None:
         super().__init__(dependencies, **kwargs)
@@ -241,7 +244,7 @@ class IcingMessengerRouter(CloudgramMessengerRouter):
             if (event.text or "").strip() in {"Отмена", "✖ Отмена"}:
                 await self.cancel_icing(event, gateway)
             else:
-                await gateway.send_text(event.chat_id, "Выберите продукт и срок кнопками. Район уже задан; ввод города не требуется.")
+                await gateway.send_text(event.chat_id, "Район выбран. Выберите карту и срок кнопками.")
             return
         await super()._text(event, gateway)
 
@@ -276,15 +279,15 @@ class IcingMessengerRouter(CloudgramMessengerRouter):
                 await self._icing_status(event, gateway)
             elif action == "m":
                 await self._icing_page(event, gateway, request, METHOD_TEXT,
-                    UiKeyboard.from_rows([[_button("К параметрам", "c", request), _button("Все продукты", "h", request)]]))
+                    menu_keyboard([[_button("К параметрам", "c", request), _button("Все продукты", "h", request)]]))
             elif action.startswith("l") and action[1:].isdigit():
                 await self._icing_page(event, gateway, request, "Обледенение · срок прогноза", icing_lead_keyboard(request, int(action[1:])))
             elif action == "z":
                 rows = [[_button(f"{p} гПа", "c", replace(request, level_hpa=p)) for p in ICING_LEVELS_HPA[i:i+3]] for i in range(0, len(ICING_LEVELS_HPA), 3)]
                 rows.append([_button("Назад", "c", request)])
-                await self._icing_page(event, gateway, request, "Переохлаждённая облачная вода · уровень", UiKeyboard.from_rows(rows))
+                await self._icing_page(event, gateway, request, "Переохлаждённая облачная вода · уровень", menu_keyboard(rows))
             elif action == "o":
-                await self._icing_page(event, gateway, request, "Шаг изолиний мощности\nИнтервал линий не равен точности высоты.", UiKeyboard.from_rows([
+                await self._icing_page(event, gateway, request, "Шаг изолиний мощности, гп.м", menu_keyboard([
                     [_button("100 гп.м", "c", replace(request, contour_step=100)), _button("500 гп.м", "c", replace(request, contour_step=500))],
                     [_button("Назад", "c", request)],
                 ]))
@@ -295,7 +298,7 @@ class IcingMessengerRouter(CloudgramMessengerRouter):
                 title, products = groups[action]
                 rows = [[_button(ICING_PRODUCTS[p], "c", replace(request, product=p))] for p in products]
                 rows.append([_button("Все продукты", "h", request)])
-                await self._icing_page(event, gateway, request, title, UiKeyboard.from_rows(rows))
+                await self._icing_page(event, gateway, request, title, menu_keyboard(rows))
             else:
                 raise ValueError("Кнопка больше не поддерживается. Откройте /icing")
         except (GfsProfileError, ValueError) as exc:
@@ -318,7 +321,7 @@ class IcingMessengerRouter(CloudgramMessengerRouter):
 
     async def _icing_menu(self, event, gateway, request):
         await self._icing_page(event, gateway, request,
-            f"❄ Обледенение · GFS 0.25°\n{_region_text(request)}\nВыберите карту. Город вводить не требуется.",
+            f"Обледенение · GFS data\n{_region_text(request)}\nВыберите карту.",
             icing_menu_keyboard(request))
 
     async def _icing_card(self, event, gateway, request):
@@ -344,7 +347,7 @@ class IcingMessengerRouter(CloudgramMessengerRouter):
             if status:
                 await gateway.edit_text(event.chat_id, status.message_id, "Обледенение: отменено. Текущий сетевой этап может завершиться по тайм-ауту.")
                 return
-        await gateway.send_text(event.chat_id, "Обледенение: выбор сброшен. /icing — открыть меню.")
+        await gateway.send_text(event.chat_id, "Выбор отменён.", keyboard=menu_keyboard([]))
 
     async def icing_wait_idle(self):
         tasks = [job["task"] for job in list(self.icing_jobs.values()) if "task" in job]
@@ -366,7 +369,7 @@ class IcingMessengerRouter(CloudgramMessengerRouter):
         self.sessions.set(event.platform, event.user_id, event.chat_id, FlowState(product="icing", step="params", params={"request": request}))
         job = {"cancel": Event(), "stop": asyncio.Event()}
         self.icing_jobs[key] = job  # Reserve before the first await.
-        keyboard = _owned_keyboard(UiKeyboard.from_rows([[_button("Статус", "s", request), _button("Отмена", "x", request)]]), event)
+        keyboard = _owned_keyboard(menu_keyboard([[_button("Статус", "s", request), _button("Отмена", "x", request)]]), event)
         try:
             job["status"] = await gateway.send_text(event.chat_id, f"❄ {ICING_PRODUCTS[request.product]}\nОжидаю свободный слот…", keyboard=keyboard)
         except BaseException:

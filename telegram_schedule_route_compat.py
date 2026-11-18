@@ -53,25 +53,7 @@ def install() -> None:
     original_execute_schedule = schedules.execute_schedule
 
     def product_keyboard() -> InlineKeyboardMarkup:
-        # Keep the established product order and add route as the seventh item.
-        return InlineKeyboardMarkup(
-            [
-                [
-                    InlineKeyboardButton("📈 Профиль", callback_data="sched:product:profile"),
-                    InlineKeyboardButton("🧾 Аэродиаграмма", callback_data="sched:product:aero"),
-                ],
-                [
-                    InlineKeyboardButton("🟦 Срок × уровень", callback_data="sched:product:windgram"),
-                    InlineKeyboardButton("☁️ Облака", callback_data="sched:product:cloudgram"),
-                ],
-                [
-                    InlineKeyboardButton("🗺️ Карта / анимация", callback_data="sched:product:map"),
-                    InlineKeyboardButton("📊 Метеограмма / отчёт", callback_data="sched:product:meteogram"),
-                ],
-                [InlineKeyboardButton("✈ Маршрут", callback_data="sched:product:route")],
-                [InlineKeyboardButton("← Расписания", callback_data="sched:list")],
-            ]
-        )
+        return original_product_keyboard(products=("profile", "aero", "windgram", "cloudgram", "map", "meteogram", "route"))
 
     def product_title(product: str) -> str:
         return "✈ Маршрут" if str(product) == "route" else original_product_title(product)

@@ -92,10 +92,8 @@ def format_map_file_caption(data: dict, *, animated: bool = False, series: bool 
     missing = data.get("missing") or set()
     kind = animation_format if animated else "PNG-серия" if series else "PNG"
     lines = [
-        f"{kind} · MAP · GFS {run.date} {run.cycle}Z · UTC",
-        f"{point.label} · {point.lat:.4f}, {point.lon:.4f}",
-        f"срок +{int(data['lead_hour'])} ч",
-        f"радиус {int(data['radius_km'])} км · модель GFS 0.25",
+        f"{kind} · GFS data · {run.date} {run.cycle}Z",
+        f"{point.label} · +{int(data['lead_hour'])} ч · радиус {int(data['radius_km'])} км",
     ]
     if missing:
         lines.append("Нет полей: " + ", ".join(sorted(missing)))
@@ -106,15 +104,13 @@ def format_map_status(data: dict, *, animated: bool = False, series: bool = Fals
     run = data["run"]
     point = data["point"]
     lead = data["lead_hour"]
-    title = "🗺️ Композитная карта GFS"
+    title = "GFS data · карта"
     if animated:
-        title = f"🗺️ Композитная MP4-анимация GFS ({lead_count} кадров)"
+        title = f"GFS data · анимация · {lead_count} кадров"
     elif series:
-        title = f"🗺️ Серия PNG-карт GFS ({lead_count} кадров)"
+        title = f"GFS data · серия карт · {lead_count} кадров"
     return (
-        f"{title}\n📍 {point.label}\n🕒 {run.date} {run.cycle}Z · +{lead} ч · UTC\n"
-        "Слои: осадки, облачность, гроза, ветер 500 гПа, явления, видимость.\n"
-        "GFS 0.25: модельная карта, не радар и не наблюдения."
+        f"{title}\n📍 {point.label}\n{run.date} {run.cycle}Z · +{lead} ч"
     )
 
 
@@ -129,7 +125,7 @@ def _repeat_command(point: GeoPoint, parsed: ParsedMapRequest, run: GfsRun) -> s
 
 
 def format_repeat_map_message(point: GeoPoint, parsed: ParsedMapRequest, run: GfsRun) -> str:
-    return "📋 Повторить карту:\n" f"<code>{html.escape(_repeat_command(point, parsed, run))}</code>\n\n" "Нажмите на строку команды и скопируйте её целиком."
+    return f"📋 <code>{html.escape(_repeat_command(point, parsed, run))}</code>"
 
 
 def _series_frame_caption(path: Path) -> str:

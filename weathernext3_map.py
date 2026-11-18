@@ -153,7 +153,7 @@ def write_weathernext3_map_png(frame: WeatherNext3MapFrame, path: str | Path | N
         ax.set(xlim=(-radius, radius), ylim=(-radius, radius), xlabel="км от точки", ylabel="км от точки")
         ax.set_aspect("equal", adjustable="box"); ax.grid(alpha=0.12, linewidth=0.4)
         ax.set_title(f"WeatherNext 3 · {KIND_TITLES.get(frame.kind, frame.kind)} · {('p90−p10' if frame.kind == 'temperature_spread' else frame.statistic)}\nrun {frame.run.init_time_utc:%Y-%m-%d %HZ} · +{frame.lead_hour} ч · valid {frame.valid_time_utc:%d.%m %H:%M UTC}", fontsize=11)
-        fig.text(0.5, 0.012, "WeatherNext 3 • Google • 64-member statistics • модельный прогноз, не радар и не спутниковое наблюдение", ha="center", va="bottom", fontsize=7, color="#475569")
+        fig.text(0.5, 0.012, "WeatherNext 3 data · Google · статистики ансамбля из 64 членов", ha="center", va="bottom", fontsize=7, color="#475569")
         fig.tight_layout(rect=(0.01, 0.035, 0.99, 0.98)); fig.savefig(output, dpi=dpi, facecolor="white")
         if not output.exists() or output.stat().st_size < 1024:
             output.unlink(missing_ok=True); raise WeatherNext3Error("PNG-карта WeatherNext 3 не создана")

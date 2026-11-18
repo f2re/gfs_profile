@@ -110,18 +110,16 @@ def format_meteogram_summary(series: Any, output_format: str, fallback_reason: s
     member_text = f"\n{member}" if member else ""
     init = getattr(series, "init_time_utc", None)
     init_text = f"\nRun: {init:%Y-%m-%d %HZ}" if init is not None else ""
-    provenance = (
-        "Исходный cycle не указывается, если поставщик его не передал."
-        if init is None
-        else "Показан фактический опубликованный init UTC."
-    )
+    data_label = "GFS data" if source.source_id == "gfs" else f"{source.model} data"
+    if init is None:
+        init_text = "\nЦикл: не указан поставщиком"
     return (
         f"📊 {'Ансамблевая ' if source.ensemble else ''}метеограмма\n"
         f"📍 {series.point_label} · {float(series.requested_lat):.4f}, {float(series.requested_lon):.4f}{grid}\n"
         f"Модель: {source.model}\nПоставщик: {source.provider}{init_text}{member_text}\n"
         f"Период: {series.times[0]:%d.%m %H:%M} — {series.times[-1]:%d.%m %H:%M} · {series.timezone}\n"
         f"Результат: {output_format.upper()}{warning_text}\n"
-        f"ℹ Модельный прогноз, не наблюдение. {provenance}"
+        f"{data_label}"
     )
 
 

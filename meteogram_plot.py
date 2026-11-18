@@ -73,7 +73,7 @@ def build_meteogram_figure(
     figure, raw_axes = plt.subplots(
         5,
         1,
-        figsize=(width, 7.75),
+        figsize=(width, 7.75 if report_mode else 8.8),
         dpi=dpi,
         sharex=True,
         gridspec_kw={

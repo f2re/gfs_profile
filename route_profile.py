@@ -393,7 +393,7 @@ def route_summary(data: RouteProfileData) -> str:
         f"📏 {data.total_distance_km:.0f} км · {data.duration_hours:.1f} ч · {data.speed_kmh} км/ч · точек {len(data.waypoints)}\n"
         f"🚦 {risk_label(data.max_risk)} · худший участок около {worst.distance_km:.0f} км: {reasons}\n"
         f"🟢/🟡/🟠/🔴 точек: {counts[0]}/{counts[1]}/{counts[2]}/{counts[3]}\n"
-        "ℹ Модельная диагностика GFS, не авиационное разрешение. Проверяйте METAR/TAF/SIGMET/NOTAM и решение командира."
+        "GFS data"
     )
 
 

@@ -18,6 +18,9 @@ from telegram.constants import ParseMode
 from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler, CommandHandler
 
 from geocode import GeoPoint
+from gfs_core import canonical_leads
+from messenger.menu_catalog import PRODUCT_LABELS
+from telegram_ui import COMMON_LEADS, product_button_rows
 from telegram_product_wizard import PRODUCT_WIZARD_KEY
 from telegram_user_state import (
     ProductPreference,
@@ -43,16 +46,6 @@ _PENDING_WIZARD_STATE: ContextVar[dict[str, Any] | None] = ContextVar(
     default=None,
 )
 _INSTALLED = False
-
-PRODUCT_LABELS = {
-    "profile": "📈 Профиль",
-    "aero": "🧾 Аэродиаграмма",
-    "windgram": "🟦 Срок × уровень",
-    "cloudgram": "☁️ Облака",
-    "map": "🗺 Карта",
-    "meteogram": "📊 Метеограмма",
-    "route": "✈️ Маршрут",
-}
 
 _PARAM_RE = re.compile(r"(?<!\S)(?P<key>[a-z_]+)=(?P<value>[^\s]+)", re.IGNORECASE)
 _LEAD_RE = re.compile(r"(?:^|\s)\+(?P<value>\d{1,3})(?=\s|$)")
@@ -249,55 +242,21 @@ def _summary(preference: ProductPreference) -> str:
 
 def home_text(user_id: int) -> str:
     active = get_active_location(user_id)
-    lines = ["🌦 GFS 0.25 · модельные прогнозы"]
-    if active:
-        lines.append(f"📍 {active.label} · {active.lat:.4f}, {active.lon:.4f}")
-    else:
-        lines.append("📍 Основная точка ещё не выбрана")
-    quick = get_quick_preferences(user_id, 2)
-    if quick:
-        lines.extend(["", "Быстрые действия:"])
-        lines.extend(_summary(item) for item in quick)
-    lines.extend(["", "Выберите продукт.", "ℹ GFS grid, не наблюдение и не радиозонд."])
-    return "\n".join(lines)
+    point = (f"📍 {active.label} · {active.lat:.4f}, {active.lon:.4f}"
+             if active else "Город, координаты или геолокация")
+    return f"GFS data\n{point}\n\nВыберите продукт."
 
 
 def home_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    rows: list[list[InlineKeyboardButton]] = []
-    for preference in get_quick_preferences(user_id, 2):
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    ("▶ " + _summary(preference))[:64],
-                    callback_data=f"quick:{preference.product}",
-                )
-            ]
-        )
-    rows.extend(
-        [
-            [
-                InlineKeyboardButton("📈 Профиль", callback_data="home:profile"),
-                InlineKeyboardButton("🗺 Карта", callback_data="home:map"),
-            ],
-            [InlineKeyboardButton("❄ Обледенение", callback_data="home:icing")],
-            [
-                InlineKeyboardButton("☁️ Облака", callback_data="home:cloudgram"),
-                InlineKeyboardButton("🟦 Срок × уровень", callback_data="home:windgram"),
-            ],
-            [
-                InlineKeyboardButton("📊 Метеограмма", callback_data="home:meteogram"),
-                InlineKeyboardButton("🧾 Аэродиаграмма", callback_data="home:aero"),
-            ],
-            [
-                InlineKeyboardButton("✈️ Маршрут", callback_data="home:route"),
-                InlineKeyboardButton("🕒 Расписания", callback_data="home:schedule"),
-            ],
-            [
-                InlineKeyboardButton("⚙️ Настройки", callback_data="home:settings"),
-                InlineKeyboardButton("❓ Помощь", callback_data="home:help"),
-            ],
-        ]
-    )
+    rows = [[InlineKeyboardButton(("▶ " + _summary(preference))[:64],
+             callback_data=f"quick:{preference.product}")]
+            for preference in get_quick_preferences(user_id, 2)]
+    rows.extend(product_button_rows())
+    rows.extend([
+        [InlineKeyboardButton("Расписания", callback_data="home:schedule"),
+         InlineKeyboardButton("Настройки", callback_data="home:settings")],
+        [InlineKeyboardButton("Помощь", callback_data="home:help")],
+    ])
     return InlineKeyboardMarkup(rows)
 
 
@@ -332,7 +291,7 @@ def _settings_text(user_id: int) -> str:
     lines.extend(
         [
             "",
-            "Выбор продукта сохраняется сразу; быстрые действия появляются только после успешного расчёта.",
+            "Параметры сохраняются автоматически.",
         ]
     )
     return "\n".join(lines)
@@ -347,7 +306,7 @@ def _settings_keyboard(user_id: int) -> InlineKeyboardMarkup:
         if get_product_preference(user_id, product):
             reset_buttons.append(
                 InlineKeyboardButton(
-                    f"Сбросить {PRODUCT_LABELS[product].split(' ', 1)[-1]}",
+                    f"Сбросить {PRODUCT_LABELS[product]}",
                     callback_data=f"prefs:reset:{product}",
                 )
             )
@@ -396,13 +355,12 @@ def _profile_text(point: Mapping[str, Any], lead: int) -> str:
     return (
         "📈 Вертикальный профиль GFS\n"
         f"{_point_line(point)}\n"
-        f"Срок: +{lead} ч\n\n"
-        "Параметры сохранятся после выбора; быстрый повтор — после успешного расчёта."
+        f"Срок: +{lead} ч"
     )
 
 
 def _profile_keyboard(lead: int) -> InlineKeyboardMarkup:
-    values = (0, 6, 12, 24, 48, 72)
+    values = COMMON_LEADS
     buttons = [
         InlineKeyboardButton(
             ("✓ " if value == lead else "") + f"+{value}ч",
@@ -414,6 +372,7 @@ def _profile_keyboard(lead: int) -> InlineKeyboardMarkup:
         [
             buttons[:3],
             buttons[3:],
+            [InlineKeyboardButton("Все сроки →", callback_data="personal:profile:all")],
             [InlineKeyboardButton(f"▶ Построить +{lead} ч", callback_data="personal:profile:run")],
             [
                 InlineKeyboardButton("📍 Другая точка", callback_data="personal:profile:point"),
@@ -786,7 +745,7 @@ def install(namespace: dict[str, Any]) -> None:
         data = (query.data or "") if query else ""
         if query and data == "wiz:cancel":
             await query.answer()
-            context.user_data.pop(PRODUCT_WIZARD_KEY, None)
+            namespace["_clear_pending"](context)
             user_id = _user_id_from_update(update)
             await query.edit_message_text(home_text(user_id), reply_markup=home_keyboard(user_id))
             raise ApplicationHandlerStop
@@ -885,14 +844,7 @@ def install(namespace: dict[str, Any]) -> None:
         import telegram_concise_ux
 
         await telegram_concise_ux._remove_reply_keyboard(message)
-        text = telegram_concise_ux.help_text().replace(
-            "/map Москва from=0 to=24 step=3 mode=gif",
-            "/map Москва from=0 to=48 step=3 mode=gif",
-        )
-        text += (
-            "\n\n/settings — основная точка и сохранённые параметры. "
-            "Карта без прежних настроек: анимация +0…+48 ч, шаг 3 ч."
-        )
+        text = telegram_concise_ux.help_text()
         await message.reply_text(
             text,
             parse_mode=ParseMode.HTML,
@@ -938,6 +890,7 @@ async def _run_preference(update, context, namespace: dict[str, Any], preference
     message = update.effective_message
     if not message:
         return
+    namespace["_clear_pending"](context)
     point_payload = _preference_point(preference.user_id, preference)
     if preference.product != "route" and not point_payload:
         await message.reply_text("Сохранённая точка отсутствует. Выберите точку заново.")
@@ -1106,6 +1059,10 @@ def register(application, namespace: dict[str, Any]) -> None:
             raise ApplicationHandlerStop
         if data == "prefs:home":
             await query.answer()
+            namespace["_clear_pending"](context)
+            if query.message:
+                from telegram_concise_ux import _remove_reply_keyboard
+                await _remove_reply_keyboard(query.message)
             await query.edit_message_text(home_text(user_id), reply_markup=home_keyboard(user_id))
             raise ApplicationHandlerStop
         if data == "prefs:locations":
@@ -1226,13 +1183,28 @@ def register(application, namespace: dict[str, Any]) -> None:
                 await _edit_preference_card(update, context, namespace, preference)
             raise ApplicationHandlerStop
 
+        if data == "personal:profile:all":
+            await query.answer()
+            state = context.user_data.get("personal_profile")
+            if not isinstance(state, dict) or not isinstance(state.get("point"), dict):
+                await query.edit_message_text("Выбор устарел. Откройте профиль заново.", reply_markup=home_keyboard(user_id))
+            else:
+                point = _unpack_point(state["point"])
+                namespace["_set_pending_point"](context, point)
+                await query.edit_message_text(f"📍 {point.label}\nВыберите срок.", reply_markup=namespace["lead_keyboard"](1))
+            raise ApplicationHandlerStop
+
         if data.startswith("personal:profile:lead:"):
             await query.answer()
             state = context.user_data.get("personal_profile")
             if not isinstance(state, dict) or not isinstance(state.get("point"), dict):
                 await query.edit_message_text("Выбор устарел. Откройте профиль заново.", reply_markup=home_keyboard(user_id))
                 raise ApplicationHandlerStop
-            state["lead"] = int(data.rsplit(":", 1)[1])
+            lead = int(data.rsplit(":", 1)[1])
+            if lead not in canonical_leads():
+                await query.edit_message_text("Срок недоступен. Выберите срок заново.", reply_markup=_profile_keyboard(int(state.get("lead", 24))))
+                raise ApplicationHandlerStop
+            state["lead"] = lead
             save_product_selection(user_id, "profile", {"lead": state["lead"]}, state["point"])
             await query.edit_message_text(
                 _profile_text(state["point"], int(state["lead"])),

@@ -141,8 +141,8 @@ def format_profile_summary(result: ProfileResult) -> str:
             ]
         )
 
-    source = "NOMADS subset" if result.model_label.startswith("GFS") else result.source_label
-    lines.append(f"ℹ {source} • Zg — геопотенциальная высота MSL • ветер — откуда°/м/с • {result.model_label}, не радиозонд")
+    data_label = "GFS data" if result.model_label.startswith("GFS") else f"{result.model_label} data"
+    lines.append(f"{data_label} · Zg MSL · ветер: откуда, °/м/с")
     return "\n".join(lines)
 
 

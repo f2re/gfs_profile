@@ -12,7 +12,7 @@ from .aero_router import AeroMessengerRouter
 from .callback_codec import CallbackCodecError, decode_callback, encode_callback
 from .contracts import MessengerGateway, NormalizedEvent, ProgressEvent, UiButton, UiKeyboard
 from .profile_service import cleanup_product_result
-from .router import RouterDependencies, _command_args, _short_label
+from .router import RouterDependencies, _command_args, _short_label, menu_keyboard
 from .state import FlowState
 from .user_recipes import RecipeLimitError, UserRecipe
 from .windgram_service import (
@@ -26,13 +26,6 @@ WINDGRAM_PARAMS = (("wind", "Ветер"), ("temp", "Температура"), (
 WINDGRAM_TO_HOURS = (120, 240, 384)
 WINDGRAM_STEPS = (3, 6, 12)
 DEFAULT_WINDGRAM_PARAMS = {"from": 0, "to": 120, "step": 6, "top": 500, "param": "wind"}
-
-START_TEXT = (
-    "🌦 GFS 0.25 — модельный прогноз\n"
-    "Укажите город, координаты или геолокацию. Быстрый запрос: Москва +24.\n\n"
-    "Продукты: /profile, /aero, /windgram. Остальные подключаются к тому же общему service поэтапно.\n"
-    "GFS — модель, не наблюдение и не радиозонд."
-)
 
 
 def _recipe_point(recipe: UserRecipe) -> GeoPoint | None:
@@ -69,20 +62,6 @@ def _params_from_parsed(parsed: ParsedWindgramInput) -> dict[str, Any]:
         "top": int(parsed.top_hpa),
         "param": str(parsed.param),
     }
-
-
-def _quick_recipe_label(recipe: UserRecipe) -> str:
-    point = recipe.point or {}
-    marker = "★" if recipe.pinned else "▶"
-    if recipe.product == "profile":
-        return f"{marker} Профиль · {point.get('label', 'точка')} · +{int(recipe.params.get('lead', 24))} ч"[:62]
-    if recipe.product == "aero":
-        return f"{marker} Аэродиаграмма · {point.get('label', 'точка')} · +{int(recipe.params.get('lead', 24))} ч"[:62]
-    params = _windgram_params(recipe.params)
-    return (
-        f"{marker} Срок × уровень · {point.get('label', 'точка')} · "
-        f"+{params['from']}…+{params['to']}"
-    )[:62]
 
 
 def _windgram_progress_text(point: Any, params: dict[str, Any], event: ProgressEvent) -> str:
@@ -131,7 +110,7 @@ def _params_keyboard(params: dict[str, Any]) -> UiKeyboard:
     param = str(params["param"])
     lead_to = int(params["to"])
     step = int(params["step"])
-    return UiKeyboard.from_rows(
+    return menu_keyboard(
         [
             [UiButton("▶ Построить", "callback", encode_callback("windgram", "run"))],
             [
@@ -156,6 +135,8 @@ def _params_keyboard(params: dict[str, Any]) -> UiKeyboard:
 
 class WindgramMessengerRouter(AeroMessengerRouter):
     """Messenger-neutral profile + aero + windgram UX for MAX and VK."""
+
+    home_products = AeroMessengerRouter.home_products + ("windgram",)
 
     def __init__(
         self,
@@ -182,25 +163,6 @@ class WindgramMessengerRouter(AeroMessengerRouter):
             "windgram",
         )
 
-    async def _start(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
-        self.sessions.clear(event.platform, event.user_id, event.chat_id)
-        rows: list[list[UiButton]] = []
-        for recipe in self.recipes.quick(event.platform, event.user_id, limit=2):
-            if recipe.product in {"profile", "aero", "windgram"}:
-                rows.append(
-                    [UiButton(_quick_recipe_label(recipe), "callback", encode_callback("recipe", "run", recipe.recipe_id))]
-                )
-        rows.extend(
-            [
-                [
-                    UiButton("📈 Профиль", "callback", encode_callback("product", "open", "profile")),
-                    UiButton("🧾 Аэродиаграмма", "callback", encode_callback("product", "open", "aero")),
-                ],
-                [UiButton("🟦 Срок × уровень", "callback", encode_callback("product", "open", "windgram"))],
-                [UiButton("📍 Геолокация", "request_location")],
-            ]
-        )
-        await gateway.send_text(event.chat_id, START_TEXT, keyboard=UiKeyboard.from_rows(rows))
 
     async def _text(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
         command = (event.command or "").lower().lstrip("/")
@@ -372,7 +334,7 @@ class WindgramMessengerRouter(AeroMessengerRouter):
 
         if data.action == "cancel":
             self.sessions.clear(event.platform, event.user_id, event.chat_id)
-            await gateway.send_text(event.chat_id, "Выбор windgram отменён. Откройте /start.")
+            await gateway.send_text(event.chat_id, "Выбор отменён.", keyboard=menu_keyboard([]))
             return
 
         await gateway.send_text(event.chat_id, "Кнопка windgram больше не поддерживается. Начните заново: /windgram")
@@ -391,8 +353,8 @@ class WindgramMessengerRouter(AeroMessengerRouter):
         )
         await gateway.send_text(
             event.chat_id,
-            "🟦 Срок × уровень GFS · шаг 1/2. Укажите город, координаты или отправьте геолокацию.",
-            keyboard=UiKeyboard.from_rows([[UiButton("📍 Отправить геолокацию", "request_location")]]),
+            "Высота × срок · GFS data\nУкажите город, координаты или геолокацию.",
+            keyboard=menu_keyboard([[UiButton("Геолокация", "request_location")]]),
         )
 
     async def _resolve_windgram_point_text(
@@ -423,7 +385,7 @@ class WindgramMessengerRouter(AeroMessengerRouter):
                 for index, point in enumerate(state.candidates)
             ]
             rows.append([UiButton("Отмена", "callback", encode_callback("windgram", "cancel"))])
-            await gateway.send_text(event.chat_id, "Найдено несколько точек. Выберите нужную:", keyboard=UiKeyboard.from_rows(rows))
+            await gateway.send_text(event.chat_id, "Найдено несколько точек. Выберите нужную:", keyboard=menu_keyboard(rows))
             return
         await self._send_windgram_params_card(
             event,
@@ -456,7 +418,7 @@ class WindgramMessengerRouter(AeroMessengerRouter):
                 for index, point in enumerate(state.candidates)
             ]
             rows.append([UiButton("Отмена", "callback", encode_callback("windgram", "cancel"))])
-            await gateway.send_text(event.chat_id, "Найдено несколько точек. Выберите нужную:", keyboard=UiKeyboard.from_rows(rows))
+            await gateway.send_text(event.chat_id, "Найдено несколько точек. Выберите нужную:", keyboard=menu_keyboard(rows))
             return
         await self._run_windgram(event, gateway, candidates[0], params, parsed.run)
 
@@ -491,7 +453,7 @@ class WindgramMessengerRouter(AeroMessengerRouter):
             f"📍 {point.get('label', 'точка')}\n"
             f"{PARAM_NAMES.get(str(params['param']), params['param'])} · +{params['from']}…+{params['to']} ч · "
             f"шаг {params['step']} ч · до {params['top']} гПа",
-            keyboard=UiKeyboard.from_rows(
+            keyboard=menu_keyboard(
                 [
                     [UiButton("▶ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],
                     [

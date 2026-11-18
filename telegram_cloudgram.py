@@ -12,7 +12,6 @@ from geocode import GeocodeError, GeoPoint
 from geocode_choices import search_location_candidates
 from gfs_core import GfsProfileError, GfsRun, latest_available_run_for_lead
 from messenger.cloudgram_service import (
-    MODE_DESCRIPTIONS,
     MODE_TITLES,
     ParsedCloudgramInput,
     build_cloudgram_product_result,
@@ -52,10 +51,6 @@ def _mode_title(mode: str) -> str:
     return "SIMPLE" if normalize_cloudgram_mode(mode) == "simple" else "PRO"
 
 
-def _mode_description(mode: str) -> str:
-    return MODE_DESCRIPTIONS[normalize_cloudgram_mode(mode)]
-
-
 def _hazard_label(value: int) -> str:
     return hazard_label(value)
 
@@ -68,18 +63,15 @@ def format_cloudgram_caption(data: CloudgramData, mode: str = "pro") -> str:
     max_hazard = max((cell.hazard_score for cell in data.cells), default=0)
     missing = f"\n⚠️ Нет полей GFS: {', '.join(data.missing_fields)}" if data.missing_fields else ""
     return (
-        f"☁️ Cloudgram GFS 0.25 · {_mode_title(mode)}\n"
-        f"🕒 {data.run.date} {data.run.cycle}Z · UTC · +{data.leads[0]}…+{data.leads[-1]} ч · шаг {_lead_step(data)} ч\n"
-        f"📍 Узел GFS: {data.grid_lat:.3f}, {data.grid_lon:.3f}\n"
-        f"📊 {_mode_description(mode)}\n"
-        f"⚠️ Макс. опасность: {_hazard_label(max_hazard)}"
-        f"{missing}\n"
-        "PNG ниже. Команда для повтора — отдельным сообщением."
+        f"GFS data · облака и осадки · {'кратко' if mode == 'simple' else 'подробно'}\n"
+        f"{data.run.date} {data.run.cycle}Z · +{data.leads[0]}…+{data.leads[-1]} ч · шаг {_lead_step(data)} ч\n"
+        f"Узел {data.grid_lat:.3f}, {data.grid_lon:.3f}\n"
+        f"Максимальная оценка: {_hazard_label(max_hazard)}{missing}"
     )
 
 
 def format_cloudgram_file_caption(data: CloudgramData, mode: str = "pro") -> str:
-    return f"PNG · {_mode_title(mode)} · GFS {data.run.date} {data.run.cycle}Z · +{data.leads[0]}…+{data.leads[-1]} ч · UTC"
+    return f"PNG · {_mode_title(mode)} · GFS data {data.run.date} {data.run.cycle}Z · +{data.leads[0]}…+{data.leads[-1]} ч · UTC"
 
 
 def repeat_cloudgram_command(point: GeoPoint, parsed: ParsedCloudgramRequest, run: GfsRun) -> str:
@@ -95,7 +87,7 @@ def repeat_cloudgram_command(point: GeoPoint, parsed: ParsedCloudgramRequest, ru
 
 def format_repeat_cloudgram_message(point: GeoPoint, parsed: ParsedCloudgramRequest, run: GfsRun) -> str:
     command = html.escape(repeat_cloudgram_command(point, parsed, run))
-    return "📋 Повторить этот расчёт:\n" f"<code>{command}</code>\n\n" "Нажмите на строку команды и скопируйте её целиком."
+    return f"📋 <code>{command}</code>"
 
 
 def _progress_text(point: GeoPoint, parsed: ParsedCloudgramRequest, event: ProgressEvent) -> str:

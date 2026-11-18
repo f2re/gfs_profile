@@ -466,41 +466,15 @@ async def _run_wizard_product(message, context: ContextTypes.DEFAULT_TYPE, state
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    if not message:
-        return
-    await message.reply_text(
-        "🌦️ GFS 0.25 по точке\n"
-        "Бот строит модельные продукты ближайшего узла GFS: профиль, аэродиаграммы, windgram, cloudgram и карту.\n\n"
-        "Быстро:\n"
-        "• отправьте геолокацию или город — для профиля;\n"
-        "• /cloudgram — облака, осадки, гроза, видимость;\n"
-        "• /map — композитная карта вокруг точки: одна PNG, серия PNG или GIF;\n"
-        "• /windgram — срок × уровень;\n"
-        "• /aero или /skewt — аэрологическая диаграмма.\n\n"
-        "После расчёта бот отдаёт PNG/GIF/CSV и команду для повтора.",
-        reply_markup=_location_keyboard_for_user(_user_id_from_update(update)),
-    )
+    import telegram_concise_ux as ux
+    if update.effective_message:
+        await update.effective_message.reply_text(ux.home_text(), reply_markup=ux.home_keyboard())
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    message = update.effective_message
-    if not message:
-        return
-    await message.reply_text(
-        "Команды:\n"
-        "<code>/profile Москва +24</code> — вертикальный профиль\n"
-        "<code>/aero Москва +24 type=skewt</code> — аэродиаграмма\n"
-        "<code>/windgram Москва to=120 step=6 param=temp</code> — срок × уровень\n"
-        "<code>/cloudgram Москва to=72 step=3 mode=simple</code> — облака и явления\n\n"
-        "<code>/map Москва +24</code> — одна композитная карта\n"
-        "<code>/map Краснодар from=0 to=24 step=3 mode=series</code> — серия PNG отдельными картами\n"
-        "<code>/map Краснодар from=0 to=24 step=3 mode=gif</code> — GIF-анимация\n"
-        "<code>/map Москва +24 basemap=roads</code> — подложка: basic|water|places|roads\n\n"
-        "/map объединяет осадки, облачность, грозовой риск, значки явлений, видимость и ветер AT500. Подложка читается из локального Natural Earth cache; если слой отсутствует, карта строится с fallback и пометкой в footer. GFS — модель, не наблюдения. Без параметров /aero, /skewt, /windgram, /cloudgram и /map запускают пошаговый выбор. Время — UTC.",
-        parse_mode=ParseMode.HTML,
-        reply_markup=_location_keyboard_for_user(_user_id_from_update(update)),
-    )
+    import telegram_concise_ux as ux
+    if update.effective_message:
+        await update.effective_message.reply_text(ux.help_text(), parse_mode=ParseMode.HTML, reply_markup=ux.home_keyboard())
 
 
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -532,10 +506,6 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             lines.append(f"+{lead:03d} ч → {run.date} {run.cycle}Z")
         except GfsProfileError:
             lines.append(f"+{lead:03d} ч → недоступно")
-    lines.append("")
-    lines.append(f"GFS-запросы: до {MAX_CONCURRENT_GFS} одновременно")
-    lines.append(f"Геокодинг: до {MAX_CONCURRENT_GEOCODE} одновременно")
-    lines.append(f"Кэш GRIB2: {CACHE_DIR}")
     await message.reply_text("\n".join(lines))
 
 

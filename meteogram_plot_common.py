@@ -92,10 +92,12 @@ def _draw_header(figure: Figure, series: MeteogramSeries, tracked) -> None:
         color=COLORS["text"],
     )
     resolution = f" · {series.source.resolution}" if series.source.resolution else ""
+    init = getattr(series, "init_time_utc", None)
+    cycle = f"цикл {init:%d.%m.%Y %H} UTC" if init is not None else "цикл не указан"
     provider = figure.text(
         0.063,
         0.925,
-        f"{series.source.provider}{resolution} · цикл не передан поставщиком",
+        f"{series.source.provider}{resolution} · {cycle}",
         ha="left",
         va="top",
         fontsize=8.0,
@@ -125,12 +127,12 @@ def _base_axis(axis, ylabel: str) -> None:
     axis.spines[["top", "right"]].set_visible(False)
     axis.spines["left"].set_color(COLORS["grid"])
     axis.spines["bottom"].set_color(COLORS["grid"])
-    axis.tick_params(labelsize=7.3, length=2.5, colors=COLORS["text"])
+    axis.tick_params(labelsize=8.5, length=2.5, colors=COLORS["text"])
     axis.set_ylabel(
         ylabel,
         rotation=0,
         labelpad=18,
-        fontsize=8,
+        fontsize=9,
         color=COLORS["text"],
     )
 
@@ -154,7 +156,7 @@ def _legend_above(
         loc="lower left",
         bbox_to_anchor=(0.0, anchor_y),
         borderaxespad=0.0,
-        fontsize=fontsize,
+        fontsize=max(8.0, fontsize),
         frameon=True,
         facecolor="white",
         edgecolor="none",
@@ -271,8 +273,8 @@ def _finish_axes(figure: Figure, axes, series: MeteogramSeries, tracked, *, repo
     minor_hours = (6, 12, 18) if duration_days <= 8 else (12,)
     axes[-1].xaxis.set_minor_locator(mdates.HourLocator(byhour=minor_hours, tz=timezone))
     axes[-1].xaxis.set_minor_formatter(mdates.DateFormatter("%H", tz=timezone))
-    axes[-1].tick_params(axis="x", which="major", labelsize=6.9, pad=5)
-    axes[-1].tick_params(axis="x", which="minor", labelsize=5.8, pad=2)
+    axes[-1].tick_params(axis="x", which="major", labelsize=8.5, pad=5)
+    axes[-1].tick_params(axis="x", which="minor", labelsize=7.5, pad=2)
     axes[-1].set_xlim(series.times[0], series.times[-1])
     for axis in axes[:-1]:
         axis.tick_params(axis="x", labelbottom=False)
@@ -287,27 +289,19 @@ def _finish_axes(figure: Figure, axes, series: MeteogramSeries, tracked, *, repo
         grid = f" · расчётная точка {series.grid_lat:.3f},{series.grid_lon:.3f}"
         if distance is not None:
             grid += f" ({distance:.1f} км)"
-    generated = datetime.now(dt_timezone.utc)
-    footer1 = figure.text(
-        0.063, 0.096,
-        f"Запрошено {series.requested_lat:.4f},{series.requested_lon:.4f}{grid}",
-        ha="left", va="bottom", fontsize=6.35, color=COLORS["muted"],
-    )
-    footer2 = figure.text(
-        0.063, 0.074,
-        f"Получено {series.retrieved_at_utc:%d.%m.%Y %H:%M} UTC · PNG {generated:%d.%m.%Y %H:%M} UTC · модельный прогноз, не наблюдение",
-        ha="left", va="bottom", fontsize=6.35, color=COLORS["muted"],
-    )
-    explanation = (
-        "T/Td/p — среднее; направление — круговое среднее; прочее — медиана; q25–q75/q10–q90; P — доля членов за исходный интервал"
-        if series.source.ensemble
-        else "непрерывные поля сглажены PCHIP; осадки показаны без сглаживания"
-    )
-    footer3 = figure.text(0.063, 0.052, explanation, ha="left", va="bottom", fontsize=6.15, color=COLORS["muted"])
-    footer4 = figure.text(0.063, 0.030, "Пунктир — среднее за 24 ч; мин./макс. T — по доступным срокам местных суток.", ha="left", va="bottom", fontsize=5.95, color=COLORS["muted"])
-    footer5 = figure.text(0.063, 0.008, "Красный ромб — диагностический порог: T ≤−20/≥+35 °C; RH ≥95%; осадки ≥5 мм/ч; ветер ≥10; порывы ≥14 м/с.", ha="left", va="bottom", fontsize=5.80, color=COLORS["muted"])
-    tracked.extend(((footer1, 100), (footer2, 100), (footer3, 100), (footer4, 100), (footer5, 100)))
+    data_label = "GFS data" if series.source.source_id == "gfs" else f"{series.source.model} data"
+    notes = [
+        f"{data_label} · запрошено {series.requested_lat:.4f},{series.requested_lon:.4f}{grid}",
+        f"Получено {series.retrieved_at_utc:%d.%m.%Y %H:%M} UTC · пунктир — среднее за 24 ч · min/max T — за местные сутки",
+        "Красный ромб — диагностический порог · осадки — за исходный интервал · время местное",
+    ]
+    if series.source.ensemble:
+        notes.append("T/Td/p — среднее; прочее — медиана · q25–q75 / q10–q90 · P — доля членов ансамбля")
+    for index, note in enumerate(notes):
+        footer = figure.text(0.063, 0.090 - index * 0.024, note, ha="left", va="bottom", fontsize=8.1, color=COLORS["muted"])
+        tracked.append((footer, 100))
     figure.subplots_adjust(left=0.078, right=0.895, top=0.855, bottom=0.185)
+
 
 def _line(axis, x, values, color, width, label, style="-") -> None:
     sx, sy = _smooth(x, values)

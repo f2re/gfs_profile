@@ -4,7 +4,7 @@ import tempfile
 from pathlib import Path
 
 from gfs_core import ProfileResult
-from plot_style import METEO, add_footer, annotation_box_kwargs, apply_meteo_rcparams, style_axis
+from plot_style import METEO, add_footer, apply_meteo_rcparams, style_axis
 
 PRESSURE_TICKS = (1000, 925, 850, 700, 500, 300, 200, 100)
 WIND_LEVELS = (1000, 925, 850, 700, 500, 300, 200)
@@ -28,11 +28,12 @@ def _setup_pressure_axis(axis, df) -> None:
         idx = (df["pressure_hpa"] - level).abs().idxmin()
         row = df.loc[idx]
         if abs(float(row["pressure_hpa"]) - level) <= 35.0:
-            labels.append(f"{level}\n{_height_km(row):.1f} км")
+            labels.append(f"{level} / {_height_km(row):.1f}")
         else:
             labels.append(str(level))
     axis.set_yticklabels(labels)
     style_axis(axis)
+    axis.tick_params(labelsize=9)
 
 
 def _nearest_rows(df, levels: tuple[int, ...], tolerance_hpa: float = 35.0):
@@ -46,22 +47,20 @@ def _nearest_rows(df, levels: tuple[int, ...], tolerance_hpa: float = 35.0):
 
 
 def _profile_title(result: ProfileResult) -> str:
+    data_label = "GFS data" if result.model_label.startswith("GFS") else f"{result.model_label} data"
     return (
-        f"{result.model_label} · вертикальный профиль · запуск {result.run.date} {result.run.cycle}Z · "
-        f"срок +{result.lead_hour} ч · узел {result.grid_lat:.2f}, {result.grid_lon:.2f}"
+        f"Вертикальный профиль · {data_label}\n"
+        f"Цикл {result.run.date} {result.run.cycle}Z · +{result.lead_hour} ч · "
+        f"узел {result.grid_lat:.2f}, {result.grid_lon:.2f}"
     )
 
 
 def _diagnostic_text(result: ProfileResult, df) -> str:
-    lines = [
-        f"Модельная точка {result.model_label}",
-        f"действительно {result.valid_time_utc:%Y-%m-%d %H:%M UTC}",
-    ]
+    lines = [f"Действителен {result.valid_time_utc:%d.%m.%Y %H:%M UTC}"]
     if "wind_speed_ms" in df:
-        idx = df["wind_speed_ms"].idxmax()
-        row = df.loc[idx]
-        lines.append(f"Vmax {float(row['wind_speed_ms']):.0f} м/с @ {int(round(float(row['pressure_hpa'])))} гПа")
-    return "\n".join(lines)
+        row = df.loc[df["wind_speed_ms"].idxmax()]
+        lines.append(f"Vmax {float(row['wind_speed_ms']):.0f} м/с на {int(round(float(row['pressure_hpa'])))} гПа")
+    return " · ".join(lines)
 
 
 def write_profile_png(result: ProfileResult) -> Path:
@@ -84,7 +83,7 @@ def write_profile_png(result: ProfileResult) -> Path:
     try:
         pressure = df["pressure_hpa"]
         fig, axes = plt.subplots(1, 4, figsize=(14.2, 7.6), sharey=True, facecolor=METEO.figure_bg)
-        fig.suptitle(_profile_title(result), fontsize=12, fontweight="bold", color=METEO.axis_text)
+        fig.suptitle(_profile_title(result), fontsize=14, fontweight="bold", color=METEO.axis_text)
 
         axes[0].plot(df["temperature_c"], pressure, label="T — температура", color=METEO.temperature, linewidth=2.35)
         if "dewpoint_c" in df:
@@ -126,23 +125,12 @@ def write_profile_png(result: ProfileResult) -> Path:
         axes[3].set_xticks([])
         axes[3].set_xlabel("Zg MSL · dd° / V м/с")
         axes[3].set_title("Ветер")
-        axes[3].text(
-            0.05,
-            0.03,
-            _diagnostic_text(result, df),
-            transform=axes[3].transAxes,
-            ha="left",
-            va="bottom",
-            fontsize=8,
-            color=METEO.axis_text,
-            bbox=annotation_box_kwargs(),
-        )
-
         for axis in axes:
             _setup_pressure_axis(axis, df)
 
-        add_footer(fig, f"Модельный профиль {result.model_label}; Zg — геопотенциальная высота над средним уровнем моря (MSL), не AGL.")
-        fig.tight_layout(rect=(0, 0.045, 1, 0.94))
+        add_footer(fig, _diagnostic_text(result, df), y=0.045, fontsize=10)
+        add_footer(fig, "Zg: геопотенциальная высота MSL · ветер: откуда, °/м/с", fontsize=9)
+        fig.tight_layout(rect=(0, 0.09, 1, 0.92))
         fig.savefig(out_path, dpi=170, bbox_inches="tight")
     except Exception:
         out_path.unlink(missing_ok=True)

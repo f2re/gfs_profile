@@ -669,24 +669,12 @@ def _manager_keyboard(items: list[ProductSchedule]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def _product_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("📈 Профиль", callback_data="sched:product:profile"),
-                InlineKeyboardButton("🧾 Аэродиаграмма", callback_data="sched:product:aero"),
-            ],
-            [
-                InlineKeyboardButton("🟦 Срок × уровень", callback_data="sched:product:windgram"),
-                InlineKeyboardButton("☁️ Облака", callback_data="sched:product:cloudgram"),
-            ],
-            [
-                InlineKeyboardButton("🗺️ Карта / анимация", callback_data="sched:product:map"),
-                InlineKeyboardButton("📊 Метеограмма / отчёт", callback_data="sched:product:meteogram"),
-            ],
-            [InlineKeyboardButton("← Расписания", callback_data="sched:list")],
-        ]
-    )
+def _product_keyboard(products=("profile", "aero", "windgram", "cloudgram", "map", "meteogram")) -> InlineKeyboardMarkup:
+    from telegram_ui import product_button_rows
+    return InlineKeyboardMarkup([
+        *product_button_rows("sched:product", products),
+        [InlineKeyboardButton("← Расписания", callback_data="sched:list")],
+    ])
 
 
 def _frequency_keyboard() -> InlineKeyboardMarkup:
@@ -1227,7 +1215,7 @@ async def schedule_callback(update: Update, context, namespace: dict[str, Any]) 
     if data == "sched:home":
         import telegram_concise_ux
 
-        context.user_data.pop(SCHEDULE_WIZARD_KEY, None)
+        namespace["_clear_pending"](context)
         await query.edit_message_text(telegram_concise_ux.home_text(), reply_markup=telegram_concise_ux.home_keyboard())
         raise ApplicationHandlerStop
     if data == "sched:new":

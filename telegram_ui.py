@@ -6,27 +6,36 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton,
 
 from geocode import GeoPoint
 from gfs_core import canonical_leads
+from messenger.menu_catalog import PRODUCT_LABELS, product_rows
 from user_location_session import recent_location_button_label
 
+CANCEL_TEXT = "✖ Отмена"
 COMMON_LEADS = (0, 3, 6, 12, 24, 48)
-LEAD_PAGE_SIZE = 15
+LEAD_PAGE_SIZE = 12
 MAX_LEAD = 384
-LEAD_LABELS = {
-    0: "+0 ч анализ",
-    3: "+3 ч",
-    6: "+6 ч",
-    12: "+12 ч",
-    24: "+24 ч сутки",
-    48: "+48 ч 2 суток",
-}
 
 
 def _lead_label(lead: int) -> str:
-    if lead in LEAD_LABELS:
-        return LEAD_LABELS[lead]
-    if lead % 24 == 0:
-        return f"+{lead} ч ({lead // 24} сут)"
     return f"+{lead} ч"
+
+
+def button_rows(buttons, columns: int = 2) -> list[list[InlineKeyboardButton]]:
+    """Keep action labels readable; callers may use three short numeric options."""
+    buttons = list(buttons)
+    return [buttons[index:index + columns] for index in range(0, len(buttons), columns)]
+
+
+def product_button_rows(prefix: str = "home", products=None) -> list[list[InlineKeyboardButton]]:
+    enabled = products if products is not None else set(PRODUCT_LABELS) - {"weathernext3"}
+    return [
+        [InlineKeyboardButton(PRODUCT_LABELS[product], callback_data=f"{prefix}:{product}") for product in row]
+        for row in product_rows(enabled)
+    ]
+
+
+def native_callback_payload(payload: str | None) -> str | None:
+    """Return from a shared product card to the complete native Telegram menu."""
+    return {"v1|flow|home": "prefs:home", "v1|flow|help": "home:help"}.get(payload, payload)
 
 
 def lead_page_count() -> int:
@@ -43,7 +52,7 @@ def lead_keyboard(page: int = 0) -> InlineKeyboardMarkup:
                 buttons[:3],
                 buttons[3:],
                 [InlineKeyboardButton("Все сроки →", callback_data="leadpage:1")],
-                [InlineKeyboardButton("Максимум +384 ч", callback_data="lead:384")],
+                [InlineKeyboardButton("+384 ч", callback_data="lead:384"), InlineKeyboardButton("Отмена", callback_data="cancel")],
             ]
         )
 
@@ -64,6 +73,7 @@ def lead_keyboard(page: int = 0) -> InlineKeyboardMarkup:
         nav.append(InlineKeyboardButton("→", callback_data=f"leadpage:{page + 1}"))
     rows.append(nav)
     rows.append([InlineKeyboardButton("Популярные", callback_data="leadpage:0"), InlineKeyboardButton("+384 ч", callback_data="lead:384")])
+    rows.append([InlineKeyboardButton("Отмена", callback_data="cancel")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -90,7 +100,7 @@ def location_keyboard(recent_locations: list[GeoPoint] | None = None) -> ReplyKe
     recent_buttons = [KeyboardButton(recent_location_button_label(point)) for point in (recent_locations or [])[:4]]
     for index in range(0, len(recent_buttons), 2):
         rows.append(recent_buttons[index : index + 2])
-    rows.append([KeyboardButton("✖ Отмена")])
+    rows.append([KeyboardButton(CANCEL_TEXT)])
     return ReplyKeyboardMarkup(
         rows,
         resize_keyboard=True,

@@ -5,6 +5,7 @@ from wn3_test_support import enable_for_module as setUpModule
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from messenger.callback_codec import encode_callback
 from messenger.contracts import CommonProductResult, NormalizedEvent, PlatformMessage
@@ -75,6 +76,25 @@ class WeatherNext3RouterTests(unittest.IsolatedAsyncioTestCase):
         await self.router.shutdown_wn3()
         self.tmp.cleanup()
 
+    async def test_help_and_menu_match_enabled_capabilities(self):
+        all_products = self.router.home_products
+        for platform in ("max", "vk"):
+            for enabled, configured in ((True, True), (False, True), (True, False)):
+                with self.subTest(platform=platform, enabled=enabled, configured=configured):
+                    products = all_products if configured else tuple(p for p in all_products if p != "weathernext3")
+                    gateway = Gateway(platform)
+                    with patch.dict("os.environ", {"WEATHERNEXT3_ENABLED": "1" if enabled else "0"}), patch.object(self.router, "home_products", products):
+                        await self.router.handle(NormalizedEvent(platform, "start", "COMMAND", "42", "chat", text="/start", command="start"), gateway)
+                        callbacks = {button.payload for row in gateway.calls[-1][2].rows for button in row}
+                        expected = enabled and configured
+                        self.assertEqual(encode_callback("product", "open", "weathernext3") in callbacks, expected)
+                        await self.router.handle(NormalizedEvent(platform, "help", "COMMAND", "42", "chat", text="/help", command="help"), gateway)
+                        command_text = gateway.calls[-1][1]
+                        await self.router.handle(NormalizedEvent(platform, "help-button", "CALLBACK", "42", "chat", callback_payload=encode_callback("flow", "help"), callback_id="help-button"), gateway)
+                        self.assertEqual(command_text, gateway.calls[-1][1])
+                        self.assertEqual("/wn3 — WeatherNext 3" in command_text, expected)
+        self.assertEqual(self.built, [])
+
     async def test_start_exposes_weathernext3_on_max_and_vk(self):
         for platform in ("max", "vk"):
             gateway = Gateway(platform)
@@ -82,7 +102,7 @@ class WeatherNext3RouterTests(unittest.IsolatedAsyncioTestCase):
             await self.router.handle(event, gateway)
             keyboards = [call[2] for call in gateway.calls if call[0] == "send_text" and call[2] is not None]
             labels = [button.text for keyboard in keyboards for row in keyboard.rows for button in row]
-            self.assertIn("🛰 WeatherNext 3", labels)
+            self.assertIn("WeatherNext 3", labels)
 
     async def test_direct_point_forecast_uses_common_builder(self):
         gateway = Gateway("max")

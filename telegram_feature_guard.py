@@ -10,7 +10,9 @@ async def guard(update, context) -> None:
         return
     message = update.effective_message
     query = update.callback_query
-    blocked = disabled_input(getattr(message, 'text', '') or '', getattr(query, 'data', '') or '')
+    text = getattr(message, 'text', '') or ''
+    payload = getattr(query, 'data', '') or ''
+    blocked = disabled_input('' if query is not None else text, payload)
     # A previous in-memory wizard must never continue into a disabled provider.
     stale = False
     for key in ('weathernext3_wizard', 'meteogram_wizard', 'schedule_wizard'):
@@ -22,9 +24,9 @@ async def guard(update, context) -> None:
         if not product_available(product, spec.get('params', spec)):
             context.user_data.pop(key, None)
             stale = True
-    # Let /start, /cancel and other commands recover normally from stale state.
-    text = getattr(message, 'text', '') or ''
-    if not blocked and not (stale and (query is not None or not text.startswith('/'))):
+    # A native menu/product button is an exit from the old provider, just like /start.
+    recovery = payload == 'prefs:home' or payload.startswith('home:')
+    if not blocked and (recovery or not (stale and (query is not None or not text.startswith('/')))):
         return
     if query is not None:
         await query.answer(DISABLED_SOURCE_MESSAGE)

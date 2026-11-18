@@ -3,17 +3,15 @@ from __future__ import annotations
 import math
 import tempfile
 from pathlib import Path
-from typing import Iterable
 
 import numpy as np
 
-from aviation_style import AVIATION, risk_color, risk_label
+from aviation_style import AVIATION
 from plot_style import add_footer, apply_meteo_rcparams, style_axis
 from route_profile import RouteProfileData
-from route_profile_icons import draw_hazard_icon
 from route_profile_smoothing import RouteDisplayGrid
 from route_profile_visual_style import PALETTE
-import route_profile_plot as legacy
+from route_profile_card_policy import draw_simple_cards, draw_professional_cards, route_card_groups
 
 ISOTHERM_COLORS = {
     0.0: PALETTE.isotherm_0,
@@ -50,51 +48,6 @@ def output_path(data: RouteProfileData) -> Path:
 
 def confirmed_thunder(point) -> bool:
     return str(getattr(point.surface, "phenomena", "")) == "TSRA"
-
-
-def hazard_tokens(
-    data: RouteProfileData,
-    indices: Iterable[int],
-    limit: int = 4,
-):
-    selected = tuple(sorted(set(int(index) for index in indices)))
-    if not selected:
-        return ()
-    points = [data.waypoints[index] for index in selected]
-    active = {
-        "thunder": any(confirmed_thunder(point) for point in points),
-        "icing": finite_max(data.icing_score[:, selected]) >= 1,
-        "turbulence": finite_max(data.turbulence_score[:, selected]) >= 1,
-        "wind": finite_max(data.wind_speed_ms[:, selected]) >= 20.0,
-        "visibility": any(
-            (
-                point.surface.visibility_km is not None
-                and point.surface.visibility_km < 5.0
-            )
-            or (
-                point.surface.ceiling_m is not None
-                and point.surface.ceiling_m < 1000.0
-            )
-            for point in points
-        ),
-        "precip": any((point.surface.precip_mm or 0.0) >= 0.2 for point in points),
-        "cloud": bool(np.any(data.cloud_mask[:, selected])),
-    }
-    result = []
-    for key in (
-        "thunder",
-        "icing",
-        "turbulence",
-        "wind",
-        "visibility",
-        "precip",
-        "cloud",
-    ):
-        if active[key] and not (key == "precip" and active["thunder"]):
-            result.append(legacy._HAZARD_TOKENS[key])
-        if len(result) >= limit:
-            break
-    return tuple(result)
 
 
 def configure_axis(
@@ -189,223 +142,8 @@ def draw_header(fig, data: RouteProfileData, *, professional: bool) -> None:
 def draw_mode_footer(fig) -> None:
     add_footer(
         fig,
-        "GFS grid, не радиозонд. Сглаживание применяется только к отображению; "
-        "риск считается по исходным точкам. Не является разрешением на полёт; "
-        "обязательны METAR/TAF/SIGMET/GAMET/NOTAM и решение командира.",
+        "GFS data · высоты MSL · оценка участков по исходным точкам",
         y=0.012,
-    )
-
-
-def groups(data: RouteProfileData):
-    return legacy._display_groups(data, max_cards=12)
-
-
-def _draw_card_shell(ax, group, score: int, *, rounded: bool) -> None:
-    from matplotlib.patches import FancyBboxPatch, Rectangle
-
-    width = max(1.0, group.end_km - group.start_km)
-    if rounded:
-        patch = FancyBboxPatch(
-            (group.start_km, 0.04),
-            width,
-            0.91,
-            boxstyle="round,pad=0.01,rounding_size=0.04",
-            facecolor=risk_color(score, soft=True),
-            edgecolor=risk_color(score),
-            linewidth=0.85,
-            alpha=0.96,
-        )
-    else:
-        patch = Rectangle(
-            (group.start_km, 0.04),
-            width,
-            0.91,
-            facecolor=risk_color(score, soft=True),
-            edgecolor="#FFFFFF",
-            linewidth=1.0,
-        )
-    ax.add_patch(patch)
-
-
-def draw_simple_cards(ax, data: RouteProfileData) -> None:
-    ax.set_xlim(0.0, max(1.0, data.total_distance_km))
-    ax.set_ylim(0.0, 1.0)
-    ax.axis("off")
-    ax.set_title(
-        "Оценка маршрута по участкам",
-        loc="left",
-        fontsize=9.4,
-        fontweight="bold",
-        pad=6,
-    )
-    for group in groups(data):
-        score = int(
-            max(data.waypoints[index].risk_score for index in group.point_indices)
-        )
-        tokens = hazard_tokens(data, group.point_indices, 3)
-        point = data.waypoints[group.start_index]
-        _draw_card_shell(ax, group, score, rounded=True)
-        ax.text(
-            group.center_km,
-            0.86,
-            f"{group.start_km:.0f}–{group.end_km:.0f} км",
-            ha="center",
-            va="center",
-            fontsize=6.3,
-            color=PALETTE.muted,
-        )
-        ax.text(
-            group.center_km,
-            0.69,
-            risk_label(score).replace("ВЫСОКИЙ РИСК", "ВЫСОКИЙ\nРИСК"),
-            ha="center",
-            va="center",
-            fontsize=7.7,
-            fontweight="bold",
-            color=risk_color(score),
-            linespacing=0.9,
-        )
-        width = max(1.0, group.end_km - group.start_km)
-        if tokens:
-            for index, token in enumerate(tokens):
-                x_value = group.start_km + width * (index + 1) / (len(tokens) + 1)
-                draw_hazard_icon(
-                    ax,
-                    token.key,
-                    x_value,
-                    0.45,
-                    size=0.035,
-                    transform=ax.get_xaxis_transform(),
-                    color=token.color,
-                    zorder=8,
-                )
-            summary = " · ".join(token.label for token in tokens[:2])
-        else:
-            ax.text(
-                group.center_km,
-                0.45,
-                "✓",
-                ha="center",
-                va="center",
-                fontsize=12,
-                color=AVIATION.safe,
-                fontweight="bold",
-            )
-            summary = "значимых рисков нет"
-        ax.text(
-            group.center_km,
-            0.25,
-            summary,
-            ha="center",
-            va="center",
-            fontsize=5.8,
-            color=PALETTE.muted,
-        )
-        ax.text(
-            group.center_km,
-            0.10,
-            f"+{point.lead_hour} ч · {point.valid_time_utc:%d.%m %H}Z",
-            ha="center",
-            va="center",
-            fontsize=5.9,
-            color=PALETTE.text,
-        )
-    ax.text(
-        0.5,
-        -0.08,
-        "Расстояние · срок GFS и UTC-время начала участка",
-        transform=ax.transAxes,
-        ha="center",
-        va="top",
-        fontsize=8.0,
-        color=PALETTE.text,
-    )
-
-
-def draw_professional_cards(ax, data: RouteProfileData) -> None:
-    ax.set_xlim(0.0, max(1.0, data.total_distance_km))
-    ax.set_ylim(0.0, 1.0)
-    ax.axis("off")
-    ax.set_title(
-        "Профессиональная сводка участков",
-        loc="left",
-        fontsize=9.4,
-        fontweight="bold",
-        pad=6,
-    )
-    for group in groups(data):
-        score = int(
-            max(data.waypoints[index].risk_score for index in group.point_indices)
-        )
-        point = data.waypoints[group.start_index]
-        _draw_card_shell(ax, group, score, rounded=False)
-        ax.text(
-            group.center_km,
-            0.87,
-            f"{group.start_km:.0f}–{group.end_km:.0f} км",
-            ha="center",
-            va="center",
-            fontsize=6.2,
-            color=PALETTE.muted,
-        )
-        ax.text(
-            group.center_km,
-            0.72,
-            f"R{score} · {risk_label(score, short=True)}",
-            ha="center",
-            va="center",
-            fontsize=6.8,
-            fontweight="bold",
-            color=risk_color(score),
-        )
-        indices = group.point_indices
-        vmax = finite_max(data.wind_speed_ms[:, indices])
-        precip = max(
-            (data.waypoints[index].surface.precip_mm or 0.0)
-            for index in indices
-        )
-        vis_values = [
-            data.waypoints[index].surface.visibility_km
-            for index in indices
-            if data.waypoints[index].surface.visibility_km is not None
-        ]
-        ceiling_values = [
-            data.waypoints[index].surface.ceiling_m
-            for index in indices
-            if data.waypoints[index].surface.ceiling_m is not None
-        ]
-        vis = min(vis_values) if vis_values else None
-        ceiling = min(ceiling_values) if ceiling_values else None
-        ax.text(
-            group.center_km,
-            0.43,
-            f"Vmax {vmax:.0f} м/с · P {precip:.1f} мм\n"
-            f"VIS {'—' if vis is None else f'{vis:.0f} км'} · "
-            f"ВНГО {'—' if ceiling is None else f'{ceiling:.0f} м'}",
-            ha="center",
-            va="center",
-            fontsize=5.4,
-            color=PALETTE.muted,
-            linespacing=1.12,
-        )
-        ax.text(
-            group.center_km,
-            0.10,
-            f"+{point.lead_hour} ч · {point.valid_time_utc:%d.%m %H}Z",
-            ha="center",
-            va="center",
-            fontsize=5.9,
-            color=PALETTE.text,
-        )
-    ax.text(
-        0.5,
-        -0.08,
-        "Расстояние · срок GFS и UTC-время начала участка",
-        transform=ax.transAxes,
-        ha="center",
-        va="top",
-        fontsize=8.0,
-        color=PALETTE.text,
     )
 
 
@@ -417,12 +155,13 @@ def prepare_figure(data: RouteProfileData, *, professional: bool):
 
     apply_meteo_rcparams(plt)
     width = max(14.5, min(22.0, 13.5 + len(data.waypoints) * 0.06))
-    height = 10.3 if professional else 9.3
+    card_rows = max(1, (len(route_card_groups(data)) + 4) // 5)
+    height = (10.3 if professional else 9.3) + 1.5 * (card_rows - 1)
     fig = plt.figure(figsize=(width, height), facecolor=PALETTE.figure_bg)
     grid = fig.add_gridspec(
         3,
         1,
-        height_ratios=[5.6, 0.72, 1.85 if professional else 1.65],
+        height_ratios=[5.6, 0.72, (1.85 if professional else 1.65) * card_rows],
         left=0.065,
         right=0.985,
         top=0.855,

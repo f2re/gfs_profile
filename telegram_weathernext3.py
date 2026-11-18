@@ -37,6 +37,7 @@ def get_router():
 
 
 def telegram_markup(keyboard):
+    from telegram_ui import native_callback_payload
     if keyboard is None:
         return None
     if any(button.action == 'request_location' for row in keyboard.rows for button in row):
@@ -47,7 +48,7 @@ def telegram_markup(keyboard):
         buttons = []
         for button in row:
             if button.action == 'callback':
-                buttons.append(InlineKeyboardButton(button.text, callback_data=button.payload))
+                buttons.append(InlineKeyboardButton(button.text, callback_data=native_callback_payload(button.payload)))
             elif button.action == 'link':
                 buttons.append(InlineKeyboardButton(button.text, url=button.url))
         if buttons:
@@ -178,6 +179,9 @@ def _card_keyboard(params):
     for row in markup.inline_keyboard:
         buttons = []
         for button in row:
+            if not str(button.callback_data).startswith('v1|'):
+                buttons.append(button)
+                continue
             data = decode_callback(button.callback_data)
             payload = ':'.join(filter(lambda value: value is not None, ('wn3', data.action, data.value))) if data.scope == 'wn3' else button.callback_data
             buttons.append(InlineKeyboardButton(button.text, callback_data=payload))
@@ -217,13 +221,13 @@ def install() -> None:
         return _insert_wn3_button(concise_keyboard())
 
     def patched_concise_text():
-        return concise_text().replace("🌦 GFS-прогнозы", "🌦 Модельные прогнозы GFS + WeatherNext 3")
+        return concise_text().replace("GFS data", "GFS data · WeatherNext 3")
 
     def patched_personal_keyboard(user_id: int):
         return _insert_wn3_button(personal_keyboard(user_id))
 
     def patched_personal_text(user_id: int):
-        return personal_text(user_id).replace("🌦 GFS 0.25 · модельные прогнозы", "🌦 GFS 0.25 + WeatherNext 3 · модельные прогнозы")
+        return personal_text(user_id).replace("GFS data", "GFS data · WeatherNext 3")
 
     telegram_concise_ux.home_keyboard = patched_concise_keyboard
     telegram_concise_ux.home_text = patched_concise_text
@@ -248,7 +252,7 @@ def install() -> None:
 def register(application):
     if not weathernext3_enabled():
         return
-    application.add_handler(CallbackQueryHandler(_navigation_guard, pattern=r'^(home:|recipe:)'), group=-13)
+    application.add_handler(CallbackQueryHandler(_navigation_guard, pattern=r'^(home:|recipe:|prefs:home$)'), group=-13)
     application.add_handler(CommandHandler(['wn3', 'weathernext3'], wn3_update), group=-12)
     application.add_handler(CallbackQueryHandler(wn3_update, pattern=r'^(home:wn3|wn3:|w3\||v1\|(wn3|recipe|schedule|settings)\|)'), group=-12)
     application.add_handler(MessageHandler(filters.LOCATION | (filters.TEXT & ~filters.COMMAND), wn3_update), group=-12)

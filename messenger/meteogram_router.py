@@ -25,16 +25,11 @@ from .meteogram_service import (
     parse_meteogram_input,
 )
 from .profile_service import cleanup_product_result
-from .router import RouterDependencies, _command_args, _short_label
+from .router import RouterDependencies, _command_args, _short_label, menu_keyboard
 from .state import FlowState
 from .user_recipes import RecipeLimitError, UserRecipe
 
 OUTPUTS = (("png", "PNG"), ("docx", "DOCX"), ("pdf", "PDF"))
-START_TEXT = (
-    "🌦 GFS 0.25 — модельный прогноз\n"
-    "Доступны профиль, аэродиаграмма, срок × уровень, облака, карта и метеограмма.\n"
-    "Метеограмма поддерживает несколько моделей и ансамблей; модель — не наблюдение."
-)
 
 
 def _meteogram_params(value: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -52,20 +47,6 @@ def _recipe_point(recipe: UserRecipe) -> GeoPoint | None:
     )
 
 
-def _quick_label(recipe: UserRecipe) -> str:
-    marker = "★" if recipe.pinned else "▶"
-    label = (recipe.point or {}).get("label", "точка")
-    if recipe.product == "meteogram":
-        p = _meteogram_params(recipe.params)
-        source = source_for_id(p["source"])
-        return f"{marker} Метеограмма · {label} · {source.label} · {p['days']} сут"[:62]
-    titles = {
-        "profile": "Профиль", "aero": "Аэродиаграмма", "windgram": "Срок × уровень",
-        "cloudgram": "Облака", "map": "Карта",
-    }
-    return f"{marker} {titles.get(recipe.product, recipe.product)} · {label}"[:62]
-
-
 def _card_text(point: Any, params: dict[str, Any]) -> str:
     source = source_for_id(params["source"])
     return (
@@ -74,14 +55,13 @@ def _card_text(point: Any, params: dict[str, Any]) -> str:
         f"Тип: {'Ансамбль' if source.ensemble else 'Одна модель'}\n"
         f"Модель: {source.label}\n"
         f"Период: {params['days']} суток\n"
-        f"Результат: {params['format'].upper()}\n\n"
-        "Модельный прогноз; разные ансамблевые системы не смешиваются."
+        f"Результат: {params['format'].upper()}"
     )
 
 
 def _main_keyboard(params: dict[str, Any]) -> UiKeyboard:
     source = source_for_id(params["source"])
-    return UiKeyboard.from_rows([
+    return menu_keyboard([
         [UiButton("▶ Построить", "callback", encode_callback("meteo", "run"))],
         [
             UiButton("✓ Одна модель" if not source.ensemble else "Одна модель", "callback", encode_callback("meteo", "kind", "det")),
@@ -90,8 +70,8 @@ def _main_keyboard(params: dict[str, Any]) -> UiKeyboard:
         [
             UiButton("Модель", "callback", encode_callback("meteo", "model")),
             UiButton("Период", "callback", encode_callback("meteo", "period")),
-            UiButton("Формат", "callback", encode_callback("meteo", "format")),
         ],
+        [UiButton("Формат", "callback", encode_callback("meteo", "format"))],
         [
             UiButton("📍 Другая точка", "callback", encode_callback("meteo", "point")),
             UiButton("Отмена", "callback", encode_callback("meteo", "cancel")),
@@ -102,7 +82,7 @@ def _main_keyboard(params: dict[str, Any]) -> UiKeyboard:
 def _sources_keyboard(ensemble: bool) -> UiKeyboard:
     rows = [[UiButton(source.label, "callback", encode_callback("meteo", "source", source.source_id))] for source in sources_by_kind(ensemble)]
     rows.append([UiButton("Назад", "callback", encode_callback("meteo", "back"))])
-    return UiKeyboard.from_rows(rows)
+    return menu_keyboard(rows)
 
 
 def _period_keyboard(source_id: str, current: int) -> UiKeyboard:
@@ -114,11 +94,11 @@ def _period_keyboard(source_id: str, current: int) -> UiKeyboard:
             for value in values[start:start + 3]
         ])
     rows.append([UiButton("Назад", "callback", encode_callback("meteo", "back"))])
-    return UiKeyboard.from_rows(rows)
+    return menu_keyboard(rows)
 
 
 def _format_keyboard(current: str) -> UiKeyboard:
-    return UiKeyboard.from_rows([
+    return menu_keyboard([
         [UiButton(("✓ " if key == current else "") + label, "callback", encode_callback("meteo", "out", key)) for key, label in OUTPUTS],
         [UiButton("Назад", "callback", encode_callback("meteo", "back"))],
     ])
@@ -140,6 +120,9 @@ def _progress_text(point: Any, source_id: str, event: ProgressEvent) -> str:
 
 
 class MeteogramMessengerRouter(MapMessengerRouter):
+
+    home_products = MapMessengerRouter.home_products + ("meteogram",)
+
     def __init__(
         self,
         dependencies: RouterDependencies,
@@ -162,20 +145,6 @@ class MeteogramMessengerRouter(MapMessengerRouter):
             event.platform, event.user_id, "meteogram"
         )
 
-    async def _start(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
-        self.sessions.clear(event.platform, event.user_id, event.chat_id)
-        rows: list[list[UiButton]] = []
-        for recipe in self.recipes.quick(event.platform, event.user_id, limit=2):
-            if recipe.product in {"profile", "aero", "windgram", "cloudgram", "map", "meteogram"}:
-                rows.append([UiButton(_quick_label(recipe), "callback", encode_callback("recipe", "run", recipe.recipe_id))])
-        rows.extend([
-            [UiButton("📈 Профиль", "callback", encode_callback("product", "open", "profile")), UiButton("🧾 Аэродиаграмма", "callback", encode_callback("product", "open", "aero"))],
-            [UiButton("🟦 Срок × уровень", "callback", encode_callback("product", "open", "windgram")), UiButton("☁ Облака", "callback", encode_callback("product", "open", "cloudgram"))],
-            [UiButton("🗺 Карта", "callback", encode_callback("product", "open", "map")), UiButton("📊 Метеограмма", "callback", encode_callback("product", "open", "meteogram"))],
-            [UiButton("❄ Обледенение", "callback", encode_callback("product", "open", "icing"))],
-            [UiButton("📍 Геолокация", "request_location")],
-        ])
-        await gateway.send_text(event.chat_id, START_TEXT, keyboard=UiKeyboard.from_rows(rows))
 
     async def _text(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
         command = (event.command or "").lower().lstrip("/")
@@ -322,11 +291,11 @@ class MeteogramMessengerRouter(MapMessengerRouter):
             return
         if data.action == "cancel":
             self.sessions.clear(event.platform, event.user_id, event.chat_id)
-            await gateway.send_text(event.chat_id, "Выбор метеограммы отменён.")
+            await gateway.send_text(event.chat_id, "Выбор отменён.", keyboard=menu_keyboard([]))
 
     async def _ask_meteogram_point(self, event: NormalizedEvent, gateway: MessengerGateway, params: dict[str, Any]) -> None:
         self.sessions.set(event.platform, event.user_id, event.chat_id, FlowState(product="meteogram", step="await_point", params=_meteogram_params(params)))
-        await gateway.send_text(event.chat_id, "📊 Метеограмма · укажите город, координаты или геолокацию.", keyboard=UiKeyboard.from_rows([[UiButton("📍 Отправить геолокацию", "request_location")]]))
+        await gateway.send_text(event.chat_id, "📊 Метеограмма · укажите город, координаты или геолокацию.", keyboard=menu_keyboard([[UiButton("Геолокация", "request_location")]]))
 
     async def _resolve_meteogram_point(self, event: NormalizedEvent, gateway: MessengerGateway, raw: str, params: dict[str, Any]) -> None:
         try:
@@ -341,7 +310,7 @@ class MeteogramMessengerRouter(MapMessengerRouter):
             state = FlowState(product="meteogram", step="choose_place", candidates=list(candidates[:5]), params={**_meteogram_params(params), "_direct": False})
             self.sessions.set(event.platform, event.user_id, event.chat_id, state)
             rows = [[UiButton(_short_label(point), "callback", encode_callback("meteo", "place", i))] for i, point in enumerate(state.candidates)]
-            await gateway.send_text(event.chat_id, "Выберите точку:", keyboard=UiKeyboard.from_rows(rows))
+            await gateway.send_text(event.chat_id, "Выберите точку:", keyboard=menu_keyboard(rows))
             return
         await self._send_meteogram_card(event, gateway, FlowState(product="meteogram", step="params", point=candidates[0], params=_meteogram_params(params)))
 
@@ -360,7 +329,7 @@ class MeteogramMessengerRouter(MapMessengerRouter):
             state = FlowState(product="meteogram", step="choose_place", candidates=list(candidates[:5]), params={**p, "_direct": True})
             self.sessions.set(event.platform, event.user_id, event.chat_id, state)
             rows = [[UiButton(_short_label(point), "callback", encode_callback("meteo", "place", i))] for i, point in enumerate(state.candidates)]
-            await gateway.send_text(event.chat_id, "Выберите точку:", keyboard=UiKeyboard.from_rows(rows))
+            await gateway.send_text(event.chat_id, "Выберите точку:", keyboard=menu_keyboard(rows))
             return
         await self._run_meteogram(event, gateway, candidates[0], p)
 
@@ -377,7 +346,7 @@ class MeteogramMessengerRouter(MapMessengerRouter):
             return
         p = _meteogram_params(recipe.params)
         pin = "★ Открепить" if recipe.pinned else "⭐ Закрепить"
-        await gateway.send_text(event.chat_id, _card_text(point, p), keyboard=UiKeyboard.from_rows([
+        await gateway.send_text(event.chat_id, _card_text(point, p), keyboard=menu_keyboard([
             [UiButton("▶ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],
             [UiButton(pin, "callback", encode_callback("recipe", "toggle", recipe.recipe_id)), UiButton("⚙ Изменить", "callback", encode_callback("recipe", "change", recipe.recipe_id))],
         ]))

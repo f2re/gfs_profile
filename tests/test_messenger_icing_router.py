@@ -260,7 +260,7 @@ class IcingCallbackTests(unittest.TestCase):
         text = " ".join(b.text for row in icing_menu_keyboard(IcingRequest()).rows for b in row)
         self.assertNotIn("WAFS", text)
         self.assertNotIn("осадки", text)
-        self.assertEqual(len(icing_menu_keyboard(IcingRequest()).rows), 4)
+        self.assertEqual(len(icing_menu_keyboard(IcingRequest()).rows), 5)
 
 
 if __name__ == "__main__":

@@ -150,8 +150,8 @@ def style_axis(axis, *, grid: bool = True) -> None:
         axis.grid(True, which="minor", linewidth=0.35, alpha=0.55, color=METEO.grid_minor)
 
 
-def add_footer(fig, text: str, *, y: float = 0.012) -> None:
-    fig.text(0.5, y, text, ha="center", va="bottom", fontsize=8, color=METEO.muted_text)
+def add_footer(fig, text: str, *, y: float = 0.012, fontsize: float = 9) -> None:
+    fig.text(0.5, y, text, ha="center", va="bottom", fontsize=fontsize, color=METEO.muted_text)
 
 
 def annotation_box_kwargs() -> dict[str, object]:

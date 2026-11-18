@@ -238,7 +238,7 @@ def format_map_summary(first: dict[str, Any], point: Any, params: dict[str, Any]
         f"Область: радиус {int(params['radius'])} км · сетка GFS 0.25° · подложка {params['basemap']}\n"
         f"Слои: осадки, облачность, гроза, ветер 500 гПа, явления, видимость"
         f"{missing_line}\n"
-        "GFS • модельная карта, не радар и не наблюдение"
+        "GFS data"
     )
 
 

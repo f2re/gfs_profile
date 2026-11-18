@@ -42,7 +42,7 @@ def build_aero_product(
 
 def format_aero_caption(result: ProfileResult, diagram_type: str = DEFAULT_AERO_DIAGRAM) -> str:
     return (
-        "🧾 GFS · аэрологическая диаграмма\n"
+        "🧾 GFS data · аэрологическая диаграмма\n"
         f"{result.run.date} {result.run.cycle}Z · +{result.lead_hour} ч · {result.valid_time_utc:%d.%m %H:%M UTC}\n"
-        f"Узел {result.grid_lat:.3f}, {result.grid_lon:.3f} · Zg MSL · icing/CAT — модельные прокси"
+        f"Узел {result.grid_lat:.3f}, {result.grid_lon:.3f} · Zg MSL"
     )

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from telegram import InlineKeyboardMarkup, ReplyKeyboardMarkup
 
@@ -13,8 +15,10 @@ from telegram_ui import location_keyboard
 class TelegramConciseUxTests(unittest.TestCase):
     def test_start_text_is_short_and_explains_products(self) -> None:
         text = ux.home_text()
+        self.assertIn("GFS data", text)
+        self.assertIn("Москва +24", text)
         for command in ("/profile", "/route", "/aero", "/windgram", "/cloudgram", "/meteogram", "/map", "/schedule"):
-            self.assertIn(command, text)
+            self.assertIn(command, ux.help_text())
         self.assertLess(len(text), 500)
         for redundant in ("не радар", "не наблюдение", "не радиозонд"):
             self.assertNotIn(redundant, text.lower())
@@ -31,9 +35,16 @@ class TelegramConciseUxTests(unittest.TestCase):
         self.assertIn("home:help", callbacks)
         self.assertEqual(callbacks.count("home:meteogram"), 1)
         meteogram_button = next(button for button in buttons if button.callback_data == "home:meteogram")
-        self.assertTrue(meteogram_button.text.startswith("📊"))
+        self.assertEqual(meteogram_button.text, "Метеограмма")
         commands = [command.command for command in BOT_COMMANDS]
         self.assertEqual(commands.count("meteogram"), 1)
+
+    def test_help_only_lists_weathernext_when_enabled(self) -> None:
+        with patch.dict(os.environ, {"WEATHERNEXT3_ENABLED": "0"}):
+            self.assertNotIn("/wn3", ux.help_text())
+            self.assertNotIn("WeatherNext", ux.help_text())
+        with patch.dict(os.environ, {"WEATHERNEXT3_ENABLED": "1"}):
+            self.assertIn("/wn3 — WeatherNext 3", ux.help_text())
 
     def test_location_keyboard_is_temporary_and_stage_specific(self) -> None:
         point = SimpleNamespace(label="Москва", lat=55.75, lon=37.62)
@@ -67,7 +78,6 @@ class TelegramConciseUxTests(unittest.TestCase):
         self.assertNotIn("модель", text.lower())
 
     def test_map_result_status_does_not_repeat_radar_disclaimer(self) -> None:
-        ux._patch_product_messages()
         import telegram_map
 
         data = {

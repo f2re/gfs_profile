@@ -273,7 +273,7 @@ def _point_summary(point, series, hour):
         f"Ветер {_fmt(row['wind_from_mean_vector_deg'], '°', 0)} откуда · {_fmt(row['wind_speed_mean_ms'], ' м/с')} (средняя скалярная скорость)\n"
         f"MSLP {_fmt(row['pressure_msl_hpa'], ' гПа')} · облачность {_fmt(row['cloud_total_pct'], '%', 0)}\n"
         f"Осадки за час: основные {_fmt(row['precip_native_mean_mm'], ' мм')}; IMERG {_fmt(row['precip_imerg_mean_mm'], ' мм')}; эксперимент {_fmt(row['precip_experimental_mean_mm'], ' мм')}\n"
-        "Google BigQuery · готовые статистики ансамбля · модель, не наблюдение"
+        "WeatherNext 3 data · Google BigQuery · статистики ансамбля"
     )
 
 
@@ -367,7 +367,7 @@ def build_weathernext3_product_result(
                            f"Run {series.run.init_time_utc:%Y-%m-%d %HZ} · +1…+{hours_to} ч\n"
                            f"valid {rows[0]['valid_utc']:%d.%m %H:%M} — {rows[-1]['valid_utc']:%d.%m %H:%M UTC}\n"
                            f"Точка {point.lat:.4f}, {point.lon:.4f}; сетка 0.1° {series.grid_lat}, {series.grid_lon}\n"
-                           "Google BigQuery · готовое среднее ансамбля · модель, не наблюдение")
+                           "WeatherNext 3 data · Google BigQuery · среднее ансамбля")
             attachments.append(csv_attachment(surface_rows(series), kind))
             return CommonProductResult('weathernext3', summary, attachments,
                 {'kind': kind, 'model': 'WeatherNext 3', 'provider': 'Google BigQuery', 'data_kind': 'model',
@@ -457,7 +457,7 @@ def build_weathernext3_product_result(
             f"valid {first_valid:%d.%m %H:%M} — {last_valid:%d.%m %H:%M UTC}\n"
             f"📍 {getattr(point, 'label', 'точка')} · {float(point.lat):.4f}, {float(point.lon):.4f}\n"
             f"Область: радиус {int(params['radius'])} км · surface grid 0.1° · {stat_text} ансамбля{note}\n"
-            "WeatherNext 3 • Google BigQuery • модельный прогноз, не радар/наблюдение/спутниковый снимок"
+            "WeatherNext 3 data · Google BigQuery"
         )
         time_part = (
             f"from={leads[0]} to={leads[-1]} step={params['step']} mode={params['mode']}"

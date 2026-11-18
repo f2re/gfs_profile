@@ -55,7 +55,7 @@ def format_aero_file_caption(
     lead_hour: int,
     diagram_type: str = AERO_DIAGRAM_TYPE,
 ) -> str:
-    return f"PNG · GFS · аэрологическая диаграмма · {run.date} {run.cycle}Z · +{lead_hour} ч"
+    return f"PNG · GFS data · аэрологическая диаграмма · {run.date} {run.cycle}Z · +{lead_hour} ч"
 
 
 def repeat_aero_command(point: GeoPoint, parsed: ParsedAeroRequest, run: GfsRun) -> str:

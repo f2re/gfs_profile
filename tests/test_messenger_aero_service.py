@@ -52,7 +52,7 @@ class AeroServiceTests(unittest.TestCase):
             self.assertEqual(result.product, "aero")
             self.assertIn("GFS 0.25", result.summary)
             self.assertIn("Skew-T", result.summary)
-            self.assertIn("модель, не радиозонд", result.summary)
+            self.assertIn("GFS data", result.summary)
             self.assertEqual(result.metadata["run_date"], "20260904")
             self.assertEqual(result.metadata["grid_lon"], 39.0)
             self.assertTrue(result.metadata["icing_cat_are_model_proxies"])

@@ -105,7 +105,7 @@ def _x_tick_labels(data: WindgramData) -> list[str]:
             labels.append(f"+{lead}")
         else:
             valid = data.run.run_datetime_utc + timedelta(hours=lead)
-            labels.append(f"+{lead}\n{valid:%d.%m}\n{valid:%HZ}")
+            labels.append(f"+{lead}\n{valid:%HZ}")
     return labels
 
 
@@ -115,10 +115,8 @@ def _format_cell_value(value: float, param: str) -> str:
 
 def _annotate_cell(ax, x: int, y: int, value: float, wind_dir: float, n_leads: int, param: str) -> None:
     color = value_text_color(value, param=param)
-    shadow_color = "#FFFFFF" if color != "#FFFFFF" else "#102033"
     label = _format_cell_value(value, param)
-    ax.text(x, y + 0.20, label, ha="center", va="center", fontsize=7, color=shadow_color, fontweight="bold", alpha=0.42)
-    ax.text(x, y + 0.18, label, ha="center", va="center", fontsize=7, color=color, fontweight="bold")
+    ax.text(x, y + 0.18, label, ha="center", va="center", fontsize=10 if n_leads <= 25 else 9, color=color, fontweight="bold")
     if not math.isnan(wind_dir):
         dx, dy = _flow_arrow_components(float(wind_dir))
         length = 0.32 if n_leads <= 25 else 0.25
@@ -128,7 +126,7 @@ def _annotate_cell(ax, x: int, y: int, value: float, wind_dir: float, n_leads: i
             "",
             xy=end,
             xytext=start,
-            arrowprops={"arrowstyle": "-|>", "lw": 1.05, "color": color, "shrinkA": 0, "shrinkB": 0, "mutation_scale": 8},
+            arrowprops={"arrowstyle": "-|>", "lw": 1.05, "color": color, "shrinkA": 0, "shrinkB": 0, "mutation_scale": 10},
         )
 
 
@@ -175,13 +173,13 @@ def write_windgram_png(data: WindgramData, param: str | None = None) -> Path:
         image = ax.imshow(value_plot, cmap=cmap, norm=norm, aspect="auto", origin="upper", interpolation="nearest")
 
         ax.set_xticks(range(n_leads))
-        ax.set_xticklabels(_x_tick_labels(data), rotation=90 if n_leads > 25 else 0, fontsize=7 if n_leads > 25 else 8)
+        ax.set_xticklabels(_x_tick_labels(data), rotation=90 if n_leads > 25 else 0, fontsize=9)
         ax.set_yticks(range(n_levels))
-        ax.set_yticklabels([height_labels[level] for level in levels_top_down], fontsize=8)
+        ax.set_yticklabels([height_labels[level] for level in levels_top_down], fontsize=9.5)
         ax.set_xlabel("Срок прогноза и UTC-время")
         ax.set_ylabel("Изобарический уровень p, гПа / средняя Zg MSL по срокам, км")
         ax.set_title(
-            f"{data.model_label} · windgram: {PARAM_TITLES[selected_param]} по срокам и уровням · {data.run.date} {data.run.cycle}Z · "
+            f"{PARAM_TITLES[selected_param]} · срок × уровень\n{data.run.date} {data.run.cycle}Z · "
             f"+{data.leads[0]}…+{data.leads[-1]} ч · узел {data.grid_lat:.2f}, {data.grid_lon:.2f}",
             fontsize=10.5,
             fontweight="bold",
@@ -190,7 +188,11 @@ def write_windgram_png(data: WindgramData, param: str | None = None) -> Path:
         )
 
         style_axis(ax, grid=False)
-        draw_utc_day_guides(ax, _lead_guide_items(data), -0.86, fontsize=7.4 if n_leads > 25 else 8.0)
+        ax.tick_params(labelsize=9)
+        ax.title.set_fontsize(13)
+        ax.xaxis.label.set_fontsize(10)
+        ax.yaxis.label.set_fontsize(10)
+        draw_utc_day_guides(ax, _lead_guide_items(data), -0.86, fontsize=9)
         ax.set_xticks([x - 0.5 for x in range(1, n_leads)], minor=True)
         ax.set_yticks([y - 0.5 for y in range(1, n_levels)], minor=True)
         ax.grid(which="minor", linewidth=0.65, color="#FFFFFF", alpha=0.92)
@@ -205,17 +207,17 @@ def write_windgram_png(data: WindgramData, param: str | None = None) -> Path:
                 _annotate_cell(ax, x, y, float(value), float(wind_dir), n_leads, selected_param)
 
         ax.set_xlim(-0.5, n_leads - 0.5)
-        ax.set_ylim(n_levels - 0.5, -0.5)
+        ax.set_ylim(n_levels - 0.5, -1.15)
         colorbar = fig.colorbar(image, ax=ax, pad=0.012, fraction=0.032)
         colorbar.set_label(PARAM_COLORBAR_LABELS[selected_param], color=METEO.axis_text)
-        colorbar.ax.tick_params(labelsize=8, colors=METEO.axis_text)
+        colorbar.ax.tick_params(labelsize=9.5, colors=METEO.axis_text)
         colorbar.outline.set_edgecolor(METEO.spine)
         colorbar.outline.set_linewidth(0.8)
 
         add_footer(
             fig,
-            PARAM_FOOTERS[selected_param]
-            + f" Zgср слева — геопотенциальная высота MSL. {data.model_label} · модельный прогноз.",
+            ("GFS data" if data.model_label.startswith("GFS") else f"{data.model_label} data")
+            + f" · {PARAM_FOOTERS[selected_param]} Zgср — средняя геопотенциальная высота MSL.",
             y=0.012,
         )
         fig.tight_layout(rect=(0, 0.052, 1, 1))

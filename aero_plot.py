@@ -358,9 +358,9 @@ def _card(ax, x: float, y: float, w: float, h: float, title: str, value: str, no
             linewidth=0.75,
         )
     )
-    ax.text(x + 0.018, y + h - 0.035, title, ha="left", va="top", fontsize=7.1, color=METEO.muted_text, fontweight="bold", clip_on=True)
-    ax.text(x + 0.018, y + h * 0.51, value, ha="left", va="center", fontsize=10.4, color=METEO.axis_text, fontweight="bold", clip_on=True)
-    ax.text(x + 0.018, y + 0.022, fill(note, width=25), ha="left", va="bottom", fontsize=6.1, color=METEO.muted_text, linespacing=1.05, clip_on=True)
+    ax.text(x + 0.018, y + h - 0.035, title, ha="left", va="top", fontsize=8.0, color=METEO.muted_text, fontweight="bold", clip_on=True)
+    ax.text(x + 0.018, y + h * 0.51, value, ha="left", va="center", fontsize=12, color=METEO.axis_text, fontweight="bold", clip_on=True)
+    ax.text(x + 0.018, y + 0.022, fill(note, width=24), ha="left", va="bottom", fontsize=7.1, color=METEO.muted_text, linespacing=1.05, clip_on=True)
 
 
 def _plot_index_cards(ax, df, diag, layers) -> None:
@@ -692,7 +692,7 @@ def _plot_metpy_diagram(result: ProfileResult, out_path: Path) -> None:
 
         add_footer(
             fig,
-            f"{getattr(result, 'model_label', 'GFS 0.25')} · модель, не радиозонд. {getattr(result, 'diagnostics_note', '')}",
+            "GFS data" if str(getattr(result, "model_label", "GFS")).startswith("GFS") else f"{result.model_label} data",
             y=0.018,
         )
         fig.savefig(out_path, dpi=180, bbox_inches="tight", facecolor=METEO.figure_bg)

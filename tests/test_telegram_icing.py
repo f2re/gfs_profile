@@ -59,8 +59,8 @@ class TelegramIcingTests(unittest.IsolatedAsyncioTestCase):
         kwargs = self.bot.edit_message_text.call_args.kwargs
         labels = [b.text for row in kwargs["reply_markup"].inline_keyboard for b in row]
         self.assertIn("Вода на уровне", labels)
-        self.assertIn("Мощность по Годске", labels)
-        self.assertIn("Сравнение методов", labels)
+        self.assertIn("Годске", labels)
+        self.assertIn("Сравнение", labels)
         self.assertEqual(self.built, [])
 
     async def test_status_cancel_are_captured_only_for_icing(self):
@@ -152,7 +152,7 @@ class TelegramIcingRegistrationTests(unittest.TestCase):
     def test_markup_preserves_common_payloads(self):
         common = icing_card_keyboard(IcingRequest())
         native = tg.telegram_markup(common)
-        self.assertEqual([[b.payload for b in row] for row in common.rows],
+        self.assertEqual([["prefs:home" if b.payload == "v1|flow|home" else b.payload for b in row] for row in common.rows],
                          [[b.callback_data for b in row] for row in native.inline_keyboard])
 
 

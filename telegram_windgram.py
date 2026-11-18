@@ -13,7 +13,6 @@ from gfs_core import GfsProfileError, GfsRun, latest_available_run_for_lead
 from messenger.contracts import ProgressEvent
 from messenger.profile_service import cleanup_product_result
 from messenger.windgram_service import (
-    PARAM_CAPTIONS,
     PARAM_NAMES,
     ParsedWindgramInput,
     build_windgram_product_result,
@@ -54,16 +53,14 @@ def _lead_step(data: WindgramData) -> int:
 
 def format_windgram_caption(data: WindgramData) -> str:
     return (
-        f"🟦 Windgram GFS 0.25 · {PARAM_NAMES.get(data.param, data.param)}\n"
-        f"🕒 {data.run.date} {data.run.cycle}Z · UTC · +{data.leads[0]}…+{data.leads[-1]} ч · шаг {_lead_step(data)} ч\n"
-        f"📍 Узел GFS: {data.grid_lat:.3f}, {data.grid_lon:.3f}\n"
-        f"📊 {PARAM_CAPTIONS.get(data.param, PARAM_CAPTIONS['wind'])}\n"
-        "PNG ниже. Команда для повтора — отдельным сообщением."
+        f"GFS data · высота × срок · {PARAM_NAMES.get(data.param, data.param)}\n"
+        f"{data.run.date} {data.run.cycle}Z · +{data.leads[0]}…+{data.leads[-1]} ч · шаг {_lead_step(data)} ч\n"
+        f"Узел {data.grid_lat:.3f}, {data.grid_lon:.3f}"
     )
 
 
 def format_windgram_file_caption(data: WindgramData) -> str:
-    return f"PNG · WINDGRAM · {PARAM_NAMES.get(data.param, data.param)} · GFS {data.run.date} {data.run.cycle}Z · +{data.leads[0]}…+{data.leads[-1]} ч · UTC"
+    return f"PNG · WINDGRAM · {PARAM_NAMES.get(data.param, data.param)} · GFS data {data.run.date} {data.run.cycle}Z · +{data.leads[0]}…+{data.leads[-1]} ч · UTC"
 
 
 def repeat_windgram_command(point: GeoPoint, parsed: ParsedWindgramRequest, run: GfsRun) -> str:
@@ -80,7 +77,7 @@ def repeat_windgram_command(point: GeoPoint, parsed: ParsedWindgramRequest, run:
 
 def format_repeat_windgram_message(point: GeoPoint, parsed: ParsedWindgramRequest, run: GfsRun) -> str:
     command = html.escape(repeat_windgram_command(point, parsed, run))
-    return "📋 Повторить этот расчёт:\n" f"<code>{command}</code>\n\n" "Нажмите на строку команды и скопируйте её целиком."
+    return f"📋 <code>{command}</code>"
 
 
 def _progress_text(point: GeoPoint, parsed: ParsedWindgramRequest, event: ProgressEvent) -> str:

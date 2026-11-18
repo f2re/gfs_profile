@@ -10,22 +10,50 @@ from typing import Any, Callable
 
 from .callback_codec import CallbackCodecError, decode_callback, encode_callback
 from .contracts import MessengerGateway, NormalizedEvent, ProgressEvent, UiButton, UiKeyboard
+from .menu_catalog import HOME_TEXT, PRODUCT_LABELS, product_rows
 from .profile_service import ParsedProfileInput, build_profile_product, cleanup_product_result, parse_profile_input
 from .state import FlowState, InMemorySessionStore
 
 QUICK_LEADS = (0, 3, 6, 12, 24, 48)
 LEAD_PAGE_SIZE = 12
-START_TEXT = (
-    "🌦 GFS 0.25 — модельный прогноз\n"
-    "Укажите город, координаты или геолокацию. Для быстрого профиля: Москва +24.\n\n"
-    "Продукты: /profile, /aero, /windgram, /cloudgram, /meteogram, /map, /icing.\n"
-    "GFS — модель, не наблюдение и не радиозонд."
-)
+START_TEXT = HOME_TEXT
 HELP_TEXT = (
-    "Команды: /profile, /aero, /windgram, /cloudgram, /meteogram, /map, /icing, /status, /cancel.\n"
-    "/icing — карты обледенения по заданному району; город вводить не требуется.\n"
-    "Пример: Москва +24 или /profile Москва +24. Сроки GFS доступны до +384 ч."
+    "GFS data\n\n"
+    "Москва → выбор срока. Москва +24 → профиль сразу.\n"
+    "Координаты и геолокация работают так же. Сроки — до +384 ч, время — UTC.\n\n"
+    "/profile — профиль · /aero — аэрограмма\n"
+    "/windgram — высота × срок · /cloudgram — облака и осадки\n"
+    "/meteogram — метеограмма · /map — карта\n"
+    "/icing — обледенение по району · /route — маршрут\n"
+    "/settings — точки и сценарии · /schedule — расписания\n"
+    "/status — состояние · /cancel — отмена · /start — меню"
 )
+
+
+def home_button() -> UiButton:
+    return UiButton("Меню", "callback", encode_callback("flow", "home"))
+
+
+def menu_keyboard(rows: list[list[UiButton]]) -> UiKeyboard:
+    """Keep controls readable and leave a way out of every product card."""
+    result = []
+    has_home = False
+    for row in rows:
+        if not row:
+            continue
+        numeric = all(any(char.isdigit() for char in button.text) and len(button.text) <= 14 for button in row)
+        columns = 3 if numeric else 2
+        result.extend(list(row[start:start + columns]) for start in range(0, len(row), columns))
+        has_home = has_home or any(button.payload in {
+            encode_callback("flow", "home"), encode_callback("settings", "home"),
+            encode_callback("schedule", "home"), encode_callback("wn3", "home"),
+        } for button in row)
+    if not has_home:
+        if result and len(result[-1]) == 1 and "Отмена" in result[-1][0].text:
+            result[-1].append(home_button())
+        else:
+            result.append([home_button()])
+    return UiKeyboard.from_rows(result)
 
 
 @dataclass
@@ -50,6 +78,10 @@ class RouterDependencies:
 
 
 class MessengerRouter:
+    home_products = ("profile",)
+    home_settings = False
+    home_schedule = False
+
     def __init__(
         self,
         dependencies: RouterDependencies,
@@ -78,14 +110,24 @@ class MessengerRouter:
         state = self.sessions.get(event.platform, event.user_id, event.chat_id)
         stale = state is not None and not product_available(state.product, state.params)
         blocked = disabled_input(event.text or ("/" + event.command if event.command else ""), event.callback_payload or "")
+        navigation = event.event_type.upper() == "CALLBACK" and event.callback_payload in {
+            encode_callback("flow", "home"), encode_callback("flow", "help"),
+        }
         if stale:
             self.sessions.clear(event.platform, event.user_id, event.chat_id)
-        if blocked or (stale and not event.command):
+        if blocked or (stale and not event.command and not navigation):
             if event.event_type.upper() == 'CALLBACK':
                 await gateway.answer_callback(event)
             await gateway.send_text(event.chat_id, DISABLED_SOURCE_MESSAGE)
             return
         kind = event.event_type.upper()
+        if navigation:
+            await gateway.answer_callback(event)
+            if event.callback_payload == encode_callback("flow", "home"):
+                await self._start(event, gateway)
+            else:
+                await gateway.send_text(event.chat_id, self._help_text(), keyboard=UiKeyboard.from_rows([[home_button()]]))
+            return
         if kind == "START":
             await self._start(event, gateway)
         elif kind == "CALLBACK":
@@ -97,14 +139,38 @@ class MessengerRouter:
 
     async def _start(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
         self.sessions.clear(event.platform, event.user_id, event.chat_id)
-        await gateway.send_text(
-            event.chat_id,
-            START_TEXT,
-            keyboard=UiKeyboard.from_rows([
-                [UiButton("📈 Профиль", "callback", encode_callback("product", "open", "profile"))],
-                [UiButton("📍 Геолокация", "request_location")],
-            ]),
-        )
+        enabled = tuple(product for product in self.home_products if product_available(product))
+        rows = self._home_quick_rows(event, enabled)
+        rows.extend([
+            [UiButton(PRODUCT_LABELS[product], "callback", encode_callback("product", "open", product)) for product in row]
+            for row in product_rows(enabled)
+        ])
+        utility = []
+        if self.home_settings:
+            utility.append(UiButton("Настройки", "callback", encode_callback("settings", "open")))
+        if self.home_schedule:
+            utility.append(UiButton("Расписания", "callback", encode_callback("schedule", "open")))
+        if utility:
+            rows.append(utility)
+        rows.append([UiButton("Геолокация", "request_location"), UiButton("Справка", "callback", encode_callback("flow", "help"))])
+        text = HOME_TEXT
+        point_label = self._home_point_label(event)
+        if point_label:
+            text += f"\n\nОсновная точка: {point_label}"
+        if "weathernext3" in enabled:
+            text += "\nWeatherNext 3 — дополнительный источник."
+        await gateway.send_text(event.chat_id, text, keyboard=UiKeyboard.from_rows(rows))
+
+    def _home_quick_rows(self, event: NormalizedEvent, enabled: tuple[str, ...]) -> list[list[UiButton]]:
+        return []
+
+    def _home_point_label(self, event: NormalizedEvent) -> str | None:
+        return None
+
+    def _help_text(self) -> str:
+        if "weathernext3" in self.home_products and product_available("weathernext3"):
+            return HELP_TEXT + "\n/wn3 — WeatherNext 3"
+        return HELP_TEXT
 
     async def _text(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
         command = (event.command or "").lower().lstrip("/")
@@ -115,11 +181,11 @@ class MessengerRouter:
                 await self._start(event, gateway)
                 return
             if command == "help":
-                await gateway.send_text(event.chat_id, HELP_TEXT)
+                await gateway.send_text(event.chat_id, self._help_text(), keyboard=UiKeyboard.from_rows([[home_button()]]))
                 return
             if command == "cancel":
                 self.sessions.clear(event.platform, event.user_id, event.chat_id)
-                await gateway.send_text(event.chat_id, "Выбор сброшен. Укажите город, координаты или геолокацию.")
+                await gateway.send_text(event.chat_id, "Выбор сброшен.", keyboard=UiKeyboard.from_rows([[home_button()]]))
                 return
             if command == "status":
                 await self._status(event, gateway)
@@ -133,7 +199,7 @@ class MessengerRouter:
             if command in {"aero", "windgram", "cloudgram", "meteogram", "map"}:
                 await gateway.send_text(
                     event.chat_id,
-                    f"/{command} будет подключён к общему service после profile vertical slice.",
+                    f"/{command} недоступен в этой конфигурации. Откройте /start.",
                 )
                 return
         if text:
@@ -143,8 +209,8 @@ class MessengerRouter:
         self.sessions.set(event.platform, event.user_id, event.chat_id, FlowState(step="await_point"))
         await gateway.send_text(
             event.chat_id,
-            "Профиль GFS · шаг 1/2. Укажите город, координаты или отправьте геолокацию.",
-            keyboard=UiKeyboard.from_rows([[UiButton("📍 Отправить геолокацию", "request_location")]]),
+            "Профиль · GFS data\nУкажите город, координаты или отправьте геолокацию.",
+            keyboard=UiKeyboard.from_rows([[UiButton("Геолокация", "request_location"), home_button()]]),
         )
 
     async def _resolve_profile_text(self, event: NormalizedEvent, gateway: MessengerGateway, raw: str) -> None:
@@ -204,7 +270,7 @@ class MessengerRouter:
         await gateway.answer_callback(event)
         if data.scope == "flow" and data.action == "cancel":
             self.sessions.clear(event.platform, event.user_id, event.chat_id)
-            await gateway.send_text(event.chat_id, "Выбор отменён. Укажите город, координаты или геолокацию.")
+            await gateway.send_text(event.chat_id, "Выбор отменён.", keyboard=UiKeyboard.from_rows([[home_button()]]))
             return
         if data.scope == "product" and data.action == "open" and data.value == "profile":
             await self._ask_point(event, gateway)
@@ -277,6 +343,7 @@ class MessengerRouter:
         state.lead_page = page
         state.step = "choose_lead"
         self.sessions.set(event.platform, event.user_id, event.chat_id, state)
+        rows.append([UiButton("Другая точка", "callback", encode_callback("product", "open", "profile")), home_button()])
         await gateway.send_text(
             event.chat_id,
             f"📍 {getattr(state.point, 'label', 'выбранная точка')}\nВыберите срок GFS ({page_text}):",
@@ -352,7 +419,7 @@ class MessengerRouter:
                 lines.append(f"+{lead:03d} ч → {run.date} {run.cycle}Z")
             except Exception:
                 lines.append(f"+{lead:03d} ч → недоступно")
-        lines.append("GFS — модель, не наблюдение.")
+        lines.append("GFS data")
         await gateway.send_text(event.chat_id, "\n".join(lines))
 
 

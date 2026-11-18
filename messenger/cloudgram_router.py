@@ -17,7 +17,7 @@ from .cloudgram_service import (
 )
 from .contracts import MessengerGateway, NormalizedEvent, ProgressEvent, UiButton, UiKeyboard
 from .profile_service import cleanup_product_result
-from .router import RouterDependencies, _command_args, _short_label
+from .router import RouterDependencies, _command_args, _short_label, menu_keyboard
 from .state import FlowState
 from .user_recipes import RecipeLimitError, UserRecipe
 from .windgram_router import WindgramMessengerRouter
@@ -26,13 +26,6 @@ CLOUDGRAM_TO_HOURS = (24, 48, 72, 120)
 CLOUDGRAM_STEPS = (3, 6)
 CLOUDGRAM_MODES = (("pro", "Подробно"), ("simple", "Кратко"))
 DEFAULT_CLOUDGRAM_PARAMS = {"from": 0, "to": 72, "step": 3, "mode": "pro"}
-
-START_TEXT = (
-    "🌦 GFS 0.25 — модельный прогноз\n"
-    "Укажите город, координаты или геолокацию. Быстрый запрос: Москва +24.\n\n"
-    "Продукты: /profile, /aero, /windgram, /cloudgram. Остальные подключаются поэтапно.\n"
-    "GFS — модель, не наблюдение и не радиозонд."
-)
 
 
 def _recipe_point(recipe: UserRecipe) -> GeoPoint | None:
@@ -67,25 +60,6 @@ def _params_from_parsed(parsed: ParsedCloudgramInput) -> dict[str, Any]:
         "step": int(parsed.step),
         "mode": str(parsed.mode),
     }
-
-
-def _quick_recipe_label(recipe: UserRecipe) -> str:
-    point = recipe.point or {}
-    marker = "★" if recipe.pinned else "▶"
-    if recipe.product == "profile":
-        return f"{marker} Профиль · {point.get('label', 'точка')} · +{int(recipe.params.get('lead', 24))} ч"[:62]
-    if recipe.product == "aero":
-        return f"{marker} Аэродиаграмма · {point.get('label', 'точка')} · +{int(recipe.params.get('lead', 24))} ч"[:62]
-    if recipe.product == "windgram":
-        return (
-            f"{marker} Срок × уровень · {point.get('label', 'точка')} · "
-            f"+{int(recipe.params.get('from', 0))}…+{int(recipe.params.get('to', 120))}"
-        )[:62]
-    params = _cloudgram_params(recipe.params)
-    return (
-        f"{marker} Облака · {point.get('label', 'точка')} · "
-        f"+{params['from']}…+{params['to']} · {MODE_TITLES[params['mode']]}"
-    )[:62]
 
 
 def _cloudgram_progress_text(point: Any, params: dict[str, Any], event: ProgressEvent) -> str:
@@ -124,7 +98,7 @@ def _params_text(point: Any, params: dict[str, Any]) -> str:
         f"Период: +{params['from']}…+{params['to']} ч\n"
         f"Шаг: {params['step']} ч\n\n"
         "Подробно — облачность H/M/L, осадки, видимость, ВНГО и конвективная диагностика.\n"
-        "Кратко — компактное представление тех же модельных данных."
+        "Кратко — основные параметры по срокам."
     )
 
 
@@ -132,7 +106,7 @@ def _params_keyboard(params: dict[str, Any]) -> UiKeyboard:
     mode = str(params["mode"])
     lead_to = int(params["to"])
     step = int(params["step"])
-    return UiKeyboard.from_rows(
+    return menu_keyboard(
         [
             [UiButton("▶ Построить", "callback", encode_callback("cloudgram", "run"))],
             [
@@ -157,6 +131,8 @@ def _params_keyboard(params: dict[str, Any]) -> UiKeyboard:
 
 class CloudgramMessengerRouter(WindgramMessengerRouter):
     """Messenger-neutral profile/aero/windgram/cloudgram UX for MAX and VK."""
+
+    home_products = WindgramMessengerRouter.home_products + ("cloudgram",)
 
     def __init__(
         self,
@@ -183,26 +159,6 @@ class CloudgramMessengerRouter(WindgramMessengerRouter):
             "cloudgram",
         )
 
-    async def _start(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
-        self.sessions.clear(event.platform, event.user_id, event.chat_id)
-        rows: list[list[UiButton]] = []
-        for recipe in self.recipes.quick(event.platform, event.user_id, limit=2):
-            if recipe.product in {"profile", "aero", "windgram", "cloudgram"}:
-                rows.append([UiButton(_quick_recipe_label(recipe), "callback", encode_callback("recipe", "run", recipe.recipe_id))])
-        rows.extend(
-            [
-                [
-                    UiButton("📈 Профиль", "callback", encode_callback("product", "open", "profile")),
-                    UiButton("🧾 Аэродиаграмма", "callback", encode_callback("product", "open", "aero")),
-                ],
-                [
-                    UiButton("🟦 Срок × уровень", "callback", encode_callback("product", "open", "windgram")),
-                    UiButton("☁️ Облака", "callback", encode_callback("product", "open", "cloudgram")),
-                ],
-                [UiButton("📍 Геолокация", "request_location")],
-            ]
-        )
-        await gateway.send_text(event.chat_id, START_TEXT, keyboard=UiKeyboard.from_rows(rows))
 
     async def _text(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
         command = (event.command or "").lower().lstrip("/")
@@ -371,7 +327,7 @@ class CloudgramMessengerRouter(WindgramMessengerRouter):
             return
         if data.action == "cancel":
             self.sessions.clear(event.platform, event.user_id, event.chat_id)
-            await gateway.send_text(event.chat_id, "Выбор cloudgram отменён. Откройте /start.")
+            await gateway.send_text(event.chat_id, "Выбор отменён.", keyboard=menu_keyboard([]))
             return
         await gateway.send_text(event.chat_id, "Кнопка cloudgram больше не поддерживается. Начните заново: /cloudgram")
 
@@ -389,8 +345,8 @@ class CloudgramMessengerRouter(WindgramMessengerRouter):
         )
         await gateway.send_text(
             event.chat_id,
-            "☁️ Облака и явления GFS · шаг 1/2. Укажите город, координаты или отправьте геолокацию.",
-            keyboard=UiKeyboard.from_rows([[UiButton("📍 Отправить геолокацию", "request_location")]]),
+            "Облака и осадки · GFS data\nУкажите город, координаты или геолокацию.",
+            keyboard=menu_keyboard([[UiButton("Геолокация", "request_location")]]),
         )
 
     async def _resolve_cloudgram_point_text(
@@ -418,7 +374,7 @@ class CloudgramMessengerRouter(WindgramMessengerRouter):
             self.sessions.set(event.platform, event.user_id, event.chat_id, state)
             rows = [[UiButton(_short_label(point), "callback", encode_callback("cloudgram", "place", index))] for index, point in enumerate(state.candidates)]
             rows.append([UiButton("Отмена", "callback", encode_callback("cloudgram", "cancel"))])
-            await gateway.send_text(event.chat_id, "Найдено несколько точек. Выберите нужную:", keyboard=UiKeyboard.from_rows(rows))
+            await gateway.send_text(event.chat_id, "Найдено несколько точек. Выберите нужную:", keyboard=menu_keyboard(rows))
             return
         await self._send_cloudgram_params_card(
             event,
@@ -448,7 +404,7 @@ class CloudgramMessengerRouter(WindgramMessengerRouter):
             self.sessions.set(event.platform, event.user_id, event.chat_id, state)
             rows = [[UiButton(_short_label(point), "callback", encode_callback("cloudgram", "place", index))] for index, point in enumerate(state.candidates)]
             rows.append([UiButton("Отмена", "callback", encode_callback("cloudgram", "cancel"))])
-            await gateway.send_text(event.chat_id, "Найдено несколько точек. Выберите нужную:", keyboard=UiKeyboard.from_rows(rows))
+            await gateway.send_text(event.chat_id, "Найдено несколько точек. Выберите нужную:", keyboard=menu_keyboard(rows))
             return
         await self._run_cloudgram(event, gateway, candidates[0], params, parsed.run)
 
@@ -468,7 +424,7 @@ class CloudgramMessengerRouter(WindgramMessengerRouter):
             "☁️ Облака и явления GFS\n"
             f"📍 {point.get('label', 'точка')}\n"
             f"{MODE_TITLES[params['mode']]} · +{params['from']}…+{params['to']} ч · шаг {params['step']} ч",
-            keyboard=UiKeyboard.from_rows(
+            keyboard=menu_keyboard(
                 [
                     [UiButton("▶ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],
                     [
