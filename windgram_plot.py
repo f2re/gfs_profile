@@ -181,7 +181,7 @@ def write_windgram_png(data: WindgramData, param: str | None = None) -> Path:
         ax.set_xlabel("Срок прогноза и UTC-время")
         ax.set_ylabel("Изобарический уровень p, гПа / средняя Zg MSL по срокам, км")
         ax.set_title(
-            f"GFS 0.25 · windgram: {PARAM_TITLES[selected_param]} по срокам и уровням · {data.run.date} {data.run.cycle}Z · "
+            f"{data.model_label} · windgram: {PARAM_TITLES[selected_param]} по срокам и уровням · {data.run.date} {data.run.cycle}Z · "
             f"+{data.leads[0]}…+{data.leads[-1]} ч · узел {data.grid_lat:.2f}, {data.grid_lon:.2f}",
             fontsize=10.5,
             fontweight="bold",
@@ -215,7 +215,7 @@ def write_windgram_png(data: WindgramData, param: str | None = None) -> Path:
         add_footer(
             fig,
             PARAM_FOOTERS[selected_param]
-            + " Zgср слева — средняя геопотенциальная высота уровня над MSL по всем срокам. Данные: модельный профиль GFS.",
+            + f" Zgср слева — геопотенциальная высота MSL. {data.model_label} · модельный прогноз.",
             y=0.012,
         )
         fig.tight_layout(rect=(0, 0.052, 1, 1))

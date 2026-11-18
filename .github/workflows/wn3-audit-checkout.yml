@@ -1,0 +1,28 @@
+name: WN3 audit checkout
+on:
+  push:
+    branches: [telegram-bot]
+    paths: ['.github/workflows/wn3-audit-checkout.yml']
+permissions:
+  contents: read
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.13'
+      - name: Prepare reproducible local test dependencies
+        run: |
+          mkdir -p /tmp/wn3-runtime/wheels
+          python -m pip download --only-binary=:all: --dest /tmp/wn3-runtime/wheels -r requirements.txt 'zarr>=3.1.3,<3.2' 'obstore>=0.8,<1'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wn3-runtime-dependencies
+          path: /tmp/wn3-runtime/
+          retention-days: 1
+          if-no-files-found: error

@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+INSTALL_DIR="${INSTALL_DIR:-/opt/gfs_profile}"
+SERVICE_NAME="${SERVICE_NAME:-gfs-profile-bot}"
+SERVICE_USER="${SERVICE_USER:-gfsbot}"
+ENV_FILE="$INSTALL_DIR/.env"
+VENV_DIR="$INSTALL_DIR/.venv"
+DROPIN_DIR="/etc/systemd/system/${SERVICE_NAME}.service.d"
+DROPIN_PATH="$DROPIN_DIR/10-messenger-runtime.conf"
+ACTION="status"
+NO_RESTART=0
+REGISTER=1
+
+log() { printf '[messenger-runtime] %s\n' "$*" >&2; }
+fail() { log "ERROR: $*"; exit 1; }
+
+usage() {
+  cat <<'USAGE'
+Использование:
+  sudo bash install_messenger_runtime.sh --status
+  sudo bash install_messenger_runtime.sh --enable
+  sudo bash install_messenger_runtime.sh --disable
+
+Опции:
+  --enable       включить single-process Telegram+MAX+VK runtime
+  --disable      оставить launcher, но вернуть Telegram-only polling
+  --status       показать состояние
+  --no-register  не обновлять меню Telegram/MAX и MAX/VK webhook после запуска
+  --no-restart   не перезапускать systemd service
+USAGE
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --enable) ACTION="enable"; shift ;;
+    --disable) ACTION="disable"; shift ;;
+    --status) ACTION="status"; shift ;;
+    --no-register) REGISTER=0; shift ;;
+    --no-restart) NO_RESTART=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) fail "Неизвестная опция: $1" ;;
+  esac
+done
+
+if [[ "$NO_RESTART" -eq 1 && "$REGISTER" -eq 1 && "$ACTION" == "enable" ]]; then
+  fail "--no-restart при --enable требует --no-register: регистрировать webhook до запуска endpoint нельзя"
+fi
+
+[[ "$(id -u)" -eq 0 ]] || fail "Нужен root: sudo bash install_messenger_runtime.sh ..."
+
+read_env() {
+  local key="$1"
+  [[ -f "$ENV_FILE" ]] || return 0
+  grep -E "^[[:space:]]*${key}[[:space:]]*=" "$ENV_FILE" | tail -n 1 | cut -d= -f2- | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//" || true
+}
+set_env() {
+  local key="$1" value="$2" tmp
+  tmp="$(mktemp)"
+  grep -Ev "^[[:space:]]*${key}[[:space:]]*=" "$ENV_FILE" >"$tmp" || true
+  printf '%s=%s\n' "$key" "$value" >>"$tmp"
+  install -m 0640 -o root -g "$SERVICE_USER" "$tmp" "$ENV_FILE"
+  rm -f "$tmp"
+}
+
+validate_install() {
+  [[ -f "$ENV_FILE" ]] || fail "Нет $ENV_FILE"
+  [[ -x "$VENV_DIR/bin/python" ]] || fail "Нет $VENV_DIR/bin/python"
+  [[ -f "$INSTALL_DIR/messenger_launcher.py" ]] || fail "Нет messenger_launcher.py — сначала обновите приложение из main"
+  [[ -f "$INSTALL_DIR/messenger_config_check.py" ]] || fail "Нет messenger_config_check.py — сначала обновите приложение из main"
+  [[ -f "$INSTALL_DIR/messenger_readiness.py" ]] || fail "Нет messenger_readiness.py — сначала обновите приложение из main"
+  [[ -f "$INSTALL_DIR/register_messenger_commands.py" ]] || fail "Нет register_messenger_commands.py — сначала обновите приложение из main"
+  [[ -f "$INSTALL_DIR/register_messenger_webhooks.py" ]] || fail "Нет register_messenger_webhooks.py — сначала обновите приложение из main"
+  id "$SERVICE_USER" >/dev/null 2>&1 || fail "Нет пользователя $SERVICE_USER"
+}
+
+install_dropin() {
+  mkdir -p "$DROPIN_DIR"
+  cat >"$DROPIN_PATH" <<EOF2
+[Service]
+ExecStart=
+ExecStart=$VENV_DIR/bin/python $INSTALL_DIR/messenger_launcher.py
+EOF2
+  chmod 0644 "$DROPIN_PATH"
+}
+
+restart_service() {
+  systemctl daemon-reload || return 1
+  [[ "$NO_RESTART" -eq 0 ]] || return 0
+  systemctl restart "${SERVICE_NAME}.service" || return 1
+  if ! systemctl is-active --quiet "${SERVICE_NAME}.service"; then
+    journalctl -u "${SERVICE_NAME}.service" -n 80 --no-pager || true
+    return 1
+  fi
+}
+
+run_python_env() {
+  runuser -u "$SERVICE_USER" -- env HOME="$INSTALL_DIR" bash -c '
+    set -e
+    set -a
+    source "$1"
+    set +a
+    cd "$2"
+    shift 2
+    exec "$@"
+  ' _ "$ENV_FILE" "$INSTALL_DIR" "$@"
+}
+
+wait_ready() {
+  [[ "$NO_RESTART" -eq 0 ]] || return 0
+  local host port url attempt
+  host="$(read_env MESSENGER_RUNTIME_HOST)"; host="${host:-127.0.0.1}"
+  port="$(read_env MESSENGER_RUNTIME_PORT)"; port="${port:-8081}"
+  [[ "$host" == "0.0.0.0" || "$host" == "::" ]] && host="127.0.0.1"
+  url="http://${host}:${port}/ready"
+  for attempt in {1..20}; do
+    if run_python_env "$VENV_DIR/bin/python" "$INSTALL_DIR/messenger_readiness.py" "$url" --timeout 2 >/dev/null 2>&1; then
+      log "runtime и все включённые мессенджеры готовы: $url"
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+run_registration() {
+  [[ "$REGISTER" -eq 1 ]] || return 0
+  run_python_env "$VENV_DIR/bin/python" "$INSTALL_DIR/register_messenger_commands.py" || return 1
+  run_python_env "$VENV_DIR/bin/python" "$INSTALL_DIR/register_messenger_webhooks.py" --strict
+}
+
+show_status() {
+  echo "service=$SERVICE_NAME"
+  echo "dropin=$([[ -f "$DROPIN_PATH" ]] && echo installed || echo absent)"
+  echo "runtime_enabled=${MESSENGER_RUNTIME_ENABLED:-$(read_env MESSENGER_RUNTIME_ENABLED)}"
+  echo "max_configured=$([[ -n "$(read_env MAX_BOT_TOKEN)" ]] && echo yes || echo no)"
+  echo "vk_configured=$([[ -n "$(read_env VK_BOT_TOKEN)" ]] && echo yes || echo no)"
+  systemctl is-active "${SERVICE_NAME}.service" 2>/dev/null || true
+}
+
+validate_install
+case "$ACTION" in
+  status)
+    show_status
+    ;;
+  disable)
+    install_dropin
+    set_env MESSENGER_RUNTIME_ENABLED 0
+    restart_service || fail "Сервис не стартовал в Telegram-only режиме"
+    show_status
+    ;;
+  enable)
+    install_dropin
+    set_env MESSENGER_RUNTIME_ENABLED 1
+    if ! run_python_env "$VENV_DIR/bin/python" "$INSTALL_DIR/runtime_check.py"; then
+      set_env MESSENGER_RUNTIME_ENABLED 0
+      fail "runtime_check не пройден; multi-messenger runtime отключён"
+    fi
+    if ! run_python_env "$VENV_DIR/bin/python" "$INSTALL_DIR/messenger_config_check.py"; then
+      set_env MESSENGER_RUNTIME_ENABLED 0
+      fail "messenger env не прошёл preflight; multi-messenger runtime отключён"
+    fi
+    if ! restart_service; then
+      set_env MESSENGER_RUNTIME_ENABLED 0
+      systemctl restart "${SERVICE_NAME}.service" || true
+      fail "Не удалось включить runtime; возвращён Telegram-only режим"
+    fi
+    if ! wait_ready; then
+      set_env MESSENGER_RUNTIME_ENABLED 0
+      systemctl restart "${SERVICE_NAME}.service" || true
+      fail "Runtime не прошёл /ready; возвращён Telegram-only режим"
+    fi
+    if ! run_registration; then
+      fail "Runtime запущен, но регистрация меню или webhook не прошла. Исправьте HTTPS/env и повторите регистрацию; endpoint оставлен активным, чтобы не создавать недоступные частичные подписки."
+    fi
+    show_status
+    ;;
+esac

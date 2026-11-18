@@ -122,9 +122,9 @@ def format_profile_summary(result: ProfileResult) -> str:
     valid_time = result.valid_time_utc.strftime("%d.%m %H:%M UTC")
 
     lines = [
-        "🌦 <b>GFS 0.25</b> • профиль",
+        f"🌦 <b>{html.escape(result.model_label)}</b> • профиль",
         f"🕓 {run_time} +{result.lead_hour}ч → {valid_time}",
-        f"📍 {result.requested_lat:.3f},{result.requested_lon:.3f} → ⊞GFS {result.grid_lat:.3f},{result.grid_lon:.3f}",
+        f"📍 {result.requested_lat:.3f},{result.requested_lon:.3f} → ⊞{'GFS' if result.model_label.startswith('GFS') else 'WN3'} {result.grid_lat:.3f},{result.grid_lon:.3f}",
         f"<pre>{html.escape(_compact_table(result))}</pre>",
     ]
 
@@ -141,7 +141,8 @@ def format_profile_summary(result: ProfileResult) -> str:
             ]
         )
 
-    lines.append("ℹ NOMADS subset • Zg — геопотенциальная высота MSL • ветер — откуда°/м/с • GFS grid, не радиозонд")
+    source = "NOMADS subset" if result.model_label.startswith("GFS") else result.source_label
+    lines.append(f"ℹ {source} • Zg — геопотенциальная высота MSL • ветер — откуда°/м/с • {result.model_label}, не радиозонд")
     return "\n".join(lines)
 
 

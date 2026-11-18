@@ -89,6 +89,9 @@ class ProfileResult:
     grid_lon: float
     grib_path: Path
     dataframe: pd.DataFrame
+    model_label: str = "GFS 0.25"
+    source_label: str = "NOMADS GRIB Filter"
+    diagnostics_note: str = ""
 
     @property
     def valid_time_utc(self) -> datetime:
@@ -104,9 +107,13 @@ class ProfileResult:
                 "lead_hour": self.lead_hour,
                 "valid_time_utc": self.valid_time_utc.strftime("%Y-%m-%d %H:%M"),
                 "requested_point": {"lat": self.requested_lat, "lon": self.requested_lon},
-                "gfs_grid_point": {"lat": self.grid_lat, "lon": self.grid_lon},
+                ("gfs_grid_point" if self.model_label.startswith("GFS") else "model_grid_point"): {"lat": self.grid_lat, "lon": self.grid_lon},
                 "max_height_m": float(df["geopotential_height_m"].max()) if not df.empty else 0.0,
-                "source": "NOMADS GRIB Filter + disk cache",
+                "source": self.source_label,
+                "model": self.model_label,
+                "data_kind": "model",
+                "grid_point": {"lat": self.grid_lat, "lon": self.grid_lon},
+                "diagnostics_note": self.diagnostics_note,
                 "rows": int(len(df)),
                 "cache_file": self.grib_path.name,
                 "freezing_level": freezing_level_diagnostic(df),

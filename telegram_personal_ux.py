@@ -279,6 +279,7 @@ def home_keyboard(user_id: int) -> InlineKeyboardMarkup:
                 InlineKeyboardButton("📈 Профиль", callback_data="home:profile"),
                 InlineKeyboardButton("🗺 Карта", callback_data="home:map"),
             ],
+            [InlineKeyboardButton("❄ Обледенение", callback_data="home:icing")],
             [
                 InlineKeyboardButton("☁️ Облака", callback_data="home:cloudgram"),
                 InlineKeyboardButton("🟦 Срок × уровень", callback_data="home:windgram"),

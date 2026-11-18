@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from feature_flags import weathernext3_enabled
+
 """Expose one aerological product and remove historical diagram aliases."""
 
 from typing import Any
@@ -9,19 +11,20 @@ from telegram.ext import CommandHandler
 
 def _human_home_text() -> str:
     return (
-        "🌦 Метеобот GFS\n\n"
-        "Прогноз атмосферы по точке или маршруту.\n\n"
-        "📈 /profile — вертикальный профиль\n"
-        "✈️ /route — профиль вдоль маршрута\n"
-        "🧾 /aero — аэродиаграмма с годографом\n"
-        "🟦 /windgram — ветер, температура и влажность\n"
-        "☁️ /cloudgram — облака, осадки и грозы\n"
-        "📊 /meteogram — прогноз по времени и ансамбль\n"
-        "🗺️ /map — карта, серия или анимация\n"
-        "🕒 /schedule — автоматическая отправка\n"
-        "🕒 /cycle — последний цикл GFS\n"
-        "⚙️ /status — данные и кэш\n"
-        "✖ /cancel — сброс выбора\n\n"
+        ("🌦 GFS + WeatherNext 3\n\n" if weathernext3_enabled() else "🌦 GFS 0.25\n\n")
+        +
+        "📈 /profile — профиль\n"
+        "✈️ /route — маршрут\n"
+        "🧾 /aero — аэродиаграмма\n"
+        "🟦 /windgram — срок × уровень\n"
+        "☁️ /cloudgram — облака и осадки\n"
+        "📊 /meteogram — метеограмма/ансамбль\n"
+        "🗺️ /map — карты GFS\n"
+        "❄ /icing — обледенение по району\n"
+        + ("🛰 /wn3 — WeatherNext 3\n" if weathernext3_enabled() else "")
+        +
+        "🕒 /schedule — автоотправка\n"
+        "🕒 /cycle — цикл GFS · ⚙️ /status — данные · ✖ /cancel — сброс\n\n"
         "Выберите продукт."
     )
 
@@ -30,7 +33,7 @@ def _human_help_text() -> str:
     return (
         "Как пользоваться\n\n"
         "1. Выберите продукт.\n"
-        "2. Укажите город, координаты или геолокацию.\n"
+        "2. Для продукта по точке укажите город, координаты или геолокацию.\n"
         "3. Выберите срок и параметры.\n\n"
         "Примеры:\n"
         "<code>/profile Москва +24</code>\n"
@@ -39,6 +42,10 @@ def _human_help_text() -> str:
         "<code>/cloudgram Москва to=72 mode=simple</code>\n"
         "<code>/meteogram Москва ensemble=gefs days=5 format=pdf</code>\n"
         "<code>/map Москва from=0 to=24 step=3 mode=gif</code>\n"
+        "<code>/icing</code> — карты обледенения; район уже задан\n"
+        + ("<code>/wn3 Москва +24</code>\n"
+           "<code>/wn3 Москва kind=clouds to=48 step=3</code>\n" if weathernext3_enabled() else "")
+        +
         "<code>/schedule</code> — менеджер автоматических отправок"
     )
 

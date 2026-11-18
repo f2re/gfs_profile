@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Установка systemd timer для безопасного автообновления ветки telegram-bot.
+# Установка systemd timer для безопасного автообновления production-ветки main.
 
 set -Eeuo pipefail
 
-DEFAULT_BRANCH="telegram-bot"
+DEFAULT_BRANCH="main"
 DEFAULT_REMOTE="origin"
 DEFAULT_INTERVAL="60"
 DEFAULT_SERVICE_NAME="gfs-profile-bot"
@@ -12,6 +12,7 @@ DEFAULT_INSTALL_DIR="/opt/gfs_profile"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$SCRIPT_DIR"
 BRANCH="$DEFAULT_BRANCH"
+BRANCH_PINNED=0
 REMOTE="$DEFAULT_REMOTE"
 INTERVAL="$DEFAULT_INTERVAL"
 SERVICE_NAME="$DEFAULT_SERVICE_NAME"
@@ -29,7 +30,7 @@ usage() {
 
 Опции:
   --repo-root DIR       checkout репозитория
-  --branch NAME         ветка, по умолчанию telegram-bot
+  --branch NAME         явно закрепить ветку; по умолчанию main
   --remote NAME         git remote, по умолчанию origin
   --interval SEC        интервал проверки, по умолчанию 60
   --service-name NAME   основной systemd service
@@ -44,7 +45,7 @@ EOF2
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --repo-root) REPO_ROOT="$(readlink -f "$2")"; shift 2 ;;
-    --branch) BRANCH="$2"; shift 2 ;;
+    --branch) BRANCH="$2"; BRANCH_PINNED=1; shift 2 ;;
     --remote) REMOTE="$2"; shift 2 ;;
     --interval) INTERVAL="$2"; shift 2 ;;
     --service-name) SERVICE_NAME="$2"; shift 2 ;;
@@ -100,7 +101,10 @@ REPO_USER="$(stat -c '%U' "$REPO_ROOT/.git")"
 REPO_HOME="$(getent passwd "$REPO_USER" 2>/dev/null | cut -d: -f6 || true)"
 REPO_HOME="${REPO_HOME:-/root}"
 CURRENT_BRANCH="$(runuser -u "$REPO_USER" -- env HOME="$REPO_HOME" git -C "$REPO_ROOT" symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
-[[ "$CURRENT_BRANCH" == "$BRANCH" ]] || { echo "Checkout должен быть в ветке $BRANCH, сейчас: $CURRENT_BRANCH" >&2; exit 1; }
+if [[ "$CURRENT_BRANCH" != "$BRANCH" && !( "$BRANCH" == "main" && "$BRANCH_PINNED" -eq 0 && "$CURRENT_BRANCH" == "telegram-bot" ) ]]; then
+  echo "Checkout должен быть в ветке $BRANCH, сейчас: $CURRENT_BRANCH" >&2
+  exit 1
+fi
 REMOTE_URL="$(runuser -u "$REPO_USER" -- env HOME="$REPO_HOME" git -C "$REPO_ROOT" remote get-url "$REMOTE" 2>/dev/null || true)"
 [[ -n "$REMOTE_URL" ]] || { echo "Не найден git remote '$REMOTE'" >&2; exit 1; }
 
@@ -110,6 +114,16 @@ if ! runuser -u "$REPO_USER" -- env HOME="$REPO_HOME" git -C "$REPO_ROOT" ls-rem
   echo "Remote: $REMOTE_URL" >&2
   echo "Если SSH использует только ssh-agent, настройте постоянный deploy key или HTTPS fetch URL." >&2
   exit 1
+fi
+
+if [[ "$CURRENT_BRANCH" != "$BRANCH" ]]; then
+  # При установке default main из прежнего deployment-checkout переход
+  # допустим только после публикации его текущего релиза в main.
+  runuser -u "$REPO_USER" -- env HOME="$REPO_HOME" git -C "$REPO_ROOT" fetch "$REMOTE" "+refs/heads/main:refs/remotes/$REMOTE/main"
+  if ! runuser -u "$REPO_USER" -- env HOME="$REPO_HOME" git -C "$REPO_ROOT" merge-base --is-ancestor HEAD "refs/remotes/$REMOTE/main"; then
+    echo "main ещё не содержит текущий checkout; сначала опубликуйте проверенный релиз в main" >&2
+    exit 1
+  fi
 fi
 
 if [[ "$ASSUME_YES" -ne 1 ]]; then
@@ -140,6 +154,7 @@ Group=root
 Environment="AUTO_UPDATE_REPO_ROOT=$REPO_ROOT"
 Environment="AUTO_UPDATE_REPO_USER=$REPO_USER"
 Environment="AUTO_UPDATE_BRANCH=$BRANCH"
+Environment="AUTO_UPDATE_BRANCH_PINNED=$BRANCH_PINNED"
 Environment="AUTO_UPDATE_REMOTE=$REMOTE"
 Environment="AUTO_UPDATE_STATE_DIR=$STATE_DIR"
 Environment="INSTALL_DIR=$INSTALL_DIR"

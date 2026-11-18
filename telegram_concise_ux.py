@@ -31,6 +31,7 @@ def home_text() -> str:
         "/cloudgram — облака, осадки и грозы\n"
         "/meteogram — прогноз по времени и ансамбль\n"
         "/map — карта, серия или анимация\n"
+        "/icing — обледенение по заданному району\n"
         "/schedule — автоматическая отправка\n\n"
         "Выберите продукт."
     )
@@ -39,7 +40,7 @@ def help_text() -> str:
     return (
         "Как пользоваться\n\n"
         "1. Выберите продукт.\n"
-        "2. Укажите город, координаты или геолокацию.\n"
+        "2. Для продукта по точке укажите город, координаты или геолокацию.\n"
         "3. Настройте срок и параметры кнопками.\n\n"
         "Быстрые примеры:\n"
         "<code>/profile Москва +24</code>\n"
@@ -47,6 +48,7 @@ def help_text() -> str:
         "<code>/cloudgram Москва to=72 mode=simple</code>\n"
         "<code>/meteogram Москва ensemble=gefs days=5 format=pdf</code>\n"
         "<code>/map Москва from=0 to=24 step=3 mode=gif</code>\n\n"
+        "<code>/icing</code> — карты обледенения; район уже задан\n\n"
         "/schedule — до 2 автоматических отправок на пользователя\n"
         "/cycle — последний цикл · /status — доступность · /cancel — сброс"
     )
@@ -71,6 +73,7 @@ def home_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("❓ Как пользоваться", callback_data="home:help"),
             ],
             [InlineKeyboardButton("🕒 Расписания", callback_data="home:schedule")],
+            [InlineKeyboardButton("❄ Обледенение", callback_data="home:icing")],
         ]
     )
 

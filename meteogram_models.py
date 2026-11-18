@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from feature_flags import DISABLED_SOURCE_MESSAGE, is_weathernext3, weathernext3_enabled
+
 import math
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -25,7 +27,7 @@ class MeteogramSource:
     resolution: str | None = None
 
 
-SOURCES = (
+_ALL_SOURCES = (
     # The Telegram meteogram needs a complete, continuous surface series.
     # Open-Meteo's /v1/gfs route defaults to gfs_seamless; using the legacy
     # gfs025 selector has produced incomplete current responses in operation.
@@ -52,13 +54,35 @@ SOURCES = (
     # Native ICON Global EPS horizon is 7.5 days. Offer only complete days.
     MeteogramSource("icon_eps", "ICON-EPS", "DWD ICON Global EPS", "DWD через Open-Meteo", "https://ensemble-api.open-meteo.com/v1/ensemble", "icon_global_eps", 7, True, 40),
     MeteogramSource("geps", "GEPS · ECCC", "ECCC Global Ensemble Prediction System", "ECCC через Open-Meteo", "https://ensemble-api.open-meteo.com/v1/ensemble", "gem_global_ensemble", 16, True, 21),
+    MeteogramSource(
+        "weathernext3_mean", "WeatherNext 3 · средний прогноз",
+        "Google WeatherNext 3 · среднее ансамбля", "Google BigQuery Analytics Hub",
+        "bigquery://weathernext3", "weathernext_3_0_0", 15,
+        ensemble=False, resolution="0.05° station head / 0.1° surface",
+    ),
+    MeteogramSource(
+        "weathernext3",
+        "WeatherNext 3 · Google",
+        "Google WeatherNext 3",
+        "Google BigQuery Analytics Hub",
+        "bigquery://weathernext3",
+        "weathernext_3_0_0",
+        15,
+        True,
+        64,
+        "0.05° station head / 0.1° surface",
+    ),
 )
-SOURCE_BY_ID = {source.source_id: source for source in SOURCES}
+SOURCES = tuple(s for s in _ALL_SOURCES if not is_weathernext3(s.source_id) or weathernext3_enabled())
+SOURCE_BY_ID = {source.source_id: source for source in _ALL_SOURCES}
 ALIASES = {
     "noaa": "gfs", "gfs025": "gfs", "ecmwf": "ecmwf_ifs", "ifs": "ecmwf_ifs",
     "aifs": "ecmwf_aifs", "icon": "icon_global", "gem": "gem_gdps",
     "ens": "ecmwf_ens", "ecmwf_ensemble": "ecmwf_ens", "gefs025": "gefs",
     "aifs_ensemble": "aifs_ens", "icon-eps": "icon_eps", "gem_ensemble": "geps",
+    "wn3_mean": "weathernext3_mean", "wn3_ensemble": "weathernext3",
+    "wn3": "weathernext3", "weather_next3": "weathernext3", "weathernext": "weathernext3",
+    "weather_next_3": "weathernext3",
 }
 
 
@@ -78,6 +102,8 @@ class MeteogramSeries:
     member_count: int | None = None
     expected_member_count: int | None = None
     warnings: list[str] = field(default_factory=list)
+    init_time_utc: datetime | None = None
+    ensemble_statistics_only: bool = False
 
     def values(self, name: str) -> np.ndarray:
         return self.fields.get(name, np.full(len(self.times), np.nan, dtype=float))
@@ -89,6 +115,8 @@ class MeteogramSeries:
 def source_for_id(value: str) -> MeteogramSource:
     key = str(value or "gfs").strip().lower().replace("-", "_")
     key = ALIASES.get(key, key)
+    if is_weathernext3(key) and not weathernext3_enabled():
+        raise MeteogramError(DISABLED_SOURCE_MESSAGE)
     try:
         return SOURCE_BY_ID[key]
     except KeyError as exc:
@@ -96,7 +124,8 @@ def source_for_id(value: str) -> MeteogramSource:
 
 
 def sources_by_kind(ensemble: bool) -> tuple[MeteogramSource, ...]:
-    return tuple(source for source in SOURCES if source.ensemble is ensemble)
+    return tuple(source for source in _ALL_SOURCES if source.ensemble is ensemble
+                 and (not is_weathernext3(source.source_id) or weathernext3_enabled()))
 
 
 def available_periods(source: MeteogramSource) -> tuple[int, ...]:

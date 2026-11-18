@@ -4,9 +4,10 @@ import asyncio
 import os
 from pathlib import Path
 
-from telegram import Bot, BotCommandScopeAllPrivateChats, BotCommandScopeDefault
+from telegram import Bot
 
-from telegram_commands import BOT_COMMAND_LINES, BOT_COMMANDS
+from messenger.commands import public_command_specs
+from telegram_commands import synchronize_bot_commands, verify_bot_commands
 
 
 def _load_env_file(path: Path) -> None:
@@ -32,27 +33,19 @@ def _token_from_env() -> str:
     return token
 
 
-async def _register() -> None:
-    bot = Bot(_token_from_env())
-    scopes = (BotCommandScopeDefault(), BotCommandScopeAllPrivateChats())
-
-    # Remove stale scope/language variants first. Telegram prefers a more
-    # specific old list over the default one, which otherwise leaves users with
-    # an outdated menu after deploy.
-    for scope in scopes:
-        for language in (None, "ru", "en"):
-            await bot.delete_my_commands(scope=scope, language_code=language)
-
-    for scope in scopes:
-        await bot.set_my_commands(list(BOT_COMMANDS), scope=scope)
-        await bot.set_my_commands(list(BOT_COMMANDS), scope=scope, language_code="ru")
+async def _register(*, status_only: bool = False) -> None:
+    async with Bot(_token_from_env()) as bot:
+        if status_only:
+            await verify_bot_commands(bot)
+        else:
+            await synchronize_bot_commands(bot, verify=True)
 
 
 def main() -> None:
     asyncio.run(_register())
-    print("Telegram commands synchronized:")
-    for line in BOT_COMMAND_LINES:
-        print(f"  {line}")
+    print("Telegram: команды обновлены и проверены")
+    for name, description in public_command_specs("telegram"):
+        print(f"  /{name} — {description}")
 
 
 if __name__ == "__main__":

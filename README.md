@@ -1,271 +1,407 @@
-# 🌦️ Профиль атмосферы GFS 0.25
+# 🌦️ GFS Profile 0.25 + WeatherNext 3
 
-Telegram-бот и веб-интерфейс для вертикальных, временных и маршрутных продуктов GFS 0.25. Это профессиональный модельный инструмент, а не наблюдение.
+## WeatherNext временно отключён
 
-## Что умеет
+По умолчанию `WEATHERNEXT3_ENABLED=0` (отсутствующее или неизвестное значение также
+означает отключение). Наличие старых Google credentials не включает источник.
+WeatherNext не показывается в меню, справке, обычных и ансамблевых моделях Telegram,
+MAX и VK. Старые команды, кнопки и прямые запросы не запускают расчёт. API WN3
+не регистрируется; нет импорта его провайдеров, обработки кэша или задач WN3 при
+старте службы. Обычные GFS-продукты и другие источники остаются доступны.
 
-- 📍 Точка по координатам, городу или Telegram-геолокации.
-- 🇷🇺 DaData Suggestions — основной геокодер; локальный справочник и Nominatim — резерв.
-- ⏱️ Сроки GFS до `+384 ч`.
-- 🔄 Progress для загрузки GRIB2, чтения `cfgrib/eccodes` и построения продукции.
-- ⚡ NOMADS GRIB Filter: скачивается subset, а не глобальный GRIB.
-- 💾 Файловый кэш по циклу, сроку, точке, уровням и продукту.
-- 📈 `/profile` — вертикальный профиль T/Td/RH/ветер/изотермы.
-- ✈️ `/route` — разрез вдоль маршрута до 500 гПа.
-- 🧾 `/aero` — единая аэрологическая диаграмма Skew-T log-P с годографом.
-- 🟦 `/windgram` — срок × уровень: ветер, температура или влажность.
-- ☁️ `/cloudgram` — облачность, осадки, видимость и конвективный потенциал.
-- 📊 `/meteogram` — полноценная временная метеограмма одной модели или ансамбля с PNG/DOCX/PDF.
-- 🗺️ `/map` — одна карта, серия PNG или MP4-анимация.
-- 🕒 `/schedule` — автоматическая отправка продукции по расписанию.
-- ⚙️ `/settings` — основная точка, сохранённые параметры и быстрые действия.
+Сохранённые сценарии и расписания WN3 (включая `meteogram` с `source/source_id=wn3`)
+скрыты и не исполняются. Записи, `.env`, `.venv` и кэш не удаляются. После обычного
+обновления выполните `bash deploy_telegram_bot.sh`; одного `git pull` для копии в
+`/opt/gfs_profile` недостаточно. Из старых сообщений кнопки нельзя убрать массово,
+но нажатия блокируются; `/start` открывает чистое меню.
 
-## Методика и аудит параметров
+`requirements.txt` больше не устанавливает Google BigQuery, Zarr и obstore.
+Ранее установленные пакеты могут оставаться на диске, но не импортируются этим
+источником. Повторное включение — только администратором после получения доступа:
+установить `requirements-weathernext3.txt`, настроить Google, явно задать
+`WEATHERNEXT3_ENABLED=1` и перезапустить службу. Для текущей работы бота этого не нужно.
 
-- [`docs/METEOROLOGICAL_METHODS.md`](docs/METEOROLOGICAL_METHODS.md) — действующая реализация: точные поля GFS, формулы, единицы, пороги, тесты и ограничения.
-- [`docs/METEOROLOGICAL_PARAMETERS_AUDIT.md`](docs/METEOROLOGICAL_PARAMETERS_AUDIT.md) — исходный аудит, на основании которого исправлены P0/P1-дефекты.
-- [`docs/METEOGRAM.md`](docs/METEOGRAM.md) — модели, ансамблевая статистика, компоновка и ограничения `/meteogram`.
-- [`docs/AUTO_UPDATE.md`](docs/AUTO_UPDATE.md) — автообновление `telegram-bot`, резервирование локальных расхождений, rollback и эксплуатация systemd timer.
-- [`docs/TELEGRAM_PERSONAL_UX.md`](docs/TELEGRAM_PERSONAL_UX.md) — сохранение точек, параметров, быстрые действия и default карты 48 часов.
 
-Критические изменения реализации: `VIS` всегда переводится из метров в километры; GRIB-поля выбираются по shortName/слою/stepType/интервалу; CAPE/CIN берутся с 180–0 гПа AGL; `HGT cloud ceiling` используется как нативная высота AGL, а 20 000 м трактуется как «потолка нет»; общие и конвективные облака/осадки не смешиваются; Aero и Route загружают изобарические гидрометеоры GFS.
+Профессиональный multi-messenger бот и web/API для модельной продукции GFS 0.25° и WeatherNext 3. Один метеорологический слой обслуживает **Telegram, MAX и VK**: платформы различаются транспортом и native UI, но не расчётами, параметрами или результатами.
 
-Обледенение и болтанка явно называются **модельными прокси**, поскольку GFS без наблюдений, PIREP, радара и спутника не заменяет CIP/FIP и GTG/EDR.
+> GFS и WeatherNext 3 всегда обозначаются как модели. Это не наблюдение, не радар и не радиозонд.
 
-## Быстрая установка
+## Продукция
+
+| Продукт | Telegram | MAX | VK |
+|---|:---:|:---:|:---:|
+| 📈 `/profile` — вертикальный профиль GFS | ✅ | ✅ | ✅ |
+| 🧾 `/aero` — Skew-T + годограф GFS | ✅ | ✅ | ✅ |
+| 🟦 `/windgram` — срок × уровень GFS | ✅ | ✅ | ✅ |
+| ☁️ `/cloudgram` — облака/осадки/риски GFS | ✅ | ✅ | ✅ |
+| 🗺️ `/map` — PNG/серия/MP4 GFS | ✅ | ✅ | ✅ |
+| ❄ `/icing` — региональные карты условий обледенения, PNG/CSV | ✅ | ✅ | ✅ |
+| 📊 `/meteogram` — модели/ансамбли, PNG/DOCX/PDF | ✅ | ✅ | ✅ |
+| 🛰 `/wn3` — WeatherNext 3: point/meteogram/cloud/precip maps | ✅ | ✅ | ✅ |
+| ✈️ `/route` — маршрутный разрез GFS PNG/CSV | ✅ | ✅ | ✅ |
+| ⚙️ `/settings` | ✅ | ✅ | ✅ |
+| 🕒 `/schedule` | ✅ | ✅ | ✅ |
+
+Подробная итоговая матрица: [`docs/MESSENGER_PARITY.md`](docs/MESSENGER_PARITY.md). WeatherNext 3: [`docs/WEATHERNEXT3.md`](docs/WEATHERNEXT3.md).
+
+## Архитектура
+
+```text
+Telegram polling ─┐
+MAX webhook ──────┼→ normalized action
+VK Callback API ──┘
+                       ↓
+               common router/use-case
+                       ↓
+       GFS services + WeatherNext 3 service
+                       ↓
+              CommonProductResult
+                       ↓
+           native platform gateway
+```
+
+Расчёты GFS, WeatherNext 3 provider/query logic, geocoder, выбор run, formatter, saved recipes и schedule snapshots не копируются между мессенджерами.
+
+Production entrypoint:
+
+```text
+systemd → messenger_launcher.py
+           ├─ Telegram polling
+           ├─ FastAPI /webhooks/max
+           ├─ FastAPI /webhooks/vk
+           └─ web/API
+```
+
+Runtime остаётся single-process (`workers=1`), без Redis/Celery/внешней БД.
+
+## Независимость платформ
+
+```env
+TELEGRAM_ENABLED=auto
+MAX_ENABLED=auto
+VK_ENABLED=auto
+```
+
+`auto` включает платформу при корректной конфигурации, `1` явно запрашивает её, `0` карантинирует только эту платформу.
+
+Пример:
+
+```text
+Telegram ready
+MAX      ready
+VK       degraded
+```
+
+Telegram и MAX продолжают работать. `/ready` относится к общей runtime-инфраструктуре, а `/health` показывает `ready/degraded/off` по каждой платформе. Ошибка webhook/token/polling одного провайдера не должна выключать соседние.
+
+## GFS/NOMADS
+
+Нативные GFS-продукты используют subset, а не глобальный GRIB:
+
+```text
+NOMADS GRIB Filter
+→ gfs.tHHz.pgrb2.0p25.fXXX
+→ необходимые поля/уровни
+→ bbox вокруг точки/маршрута
+```
+
+Перед выбором цикла проверяется публикация **максимального реально требуемого lead**. Если новый цикл содержит `f000`, но не содержит нужный `fXXX`, выбирается предыдущий опубликованный run.
+
+Пользовательский результат показывает фактический run/cycle UTC, valid UTC, requested point и GFS grid point.
+
+Метеорологические методы: [`docs/METEOROLOGICAL_METHODS.md`](docs/METEOROLOGICAL_METHODS.md).
+
+## Карты условий обледенения
+
+`/icing` открывает общий для Telegram/MAX/VK раздел без запроса города. Район
+по умолчанию — **15° з.д. — 100° в.д., 34–80° с.ш.**, срок +24 ч. Доступны вода
+при T < 0 °C на уровне, сумма и максимум мощностей по Годске, границы и число
+слоёв, максимальная водность и её высота, интегральный запас воды и сравнение
+методов. Выход: PNG и CSV, фактические run/valid UTC и признаки качества данных.
+
+```text
+/icing
+/icing product=godske_sum +24 contours=100
+/icing product=slw_level +12 level=850
+/icing product=slwp +48
+```
+
+Район задаётся `ICING_BBOX=-15,100,34,80` или явным `bbox=west,east,south,north`.
+Профильная точка при выборе района не меняется. Диагностика Годске использует
+вариант M8D20 и Td над водой, восстановленную из SPFH. Мощность слоя выражена
+в гп.м и не называется интенсивностью обледенения. Шаг изолиний 100/500 гп.м
+не обозначает разрешение или точность по высоте. WAFS, переохлаждённые осадки
+и временные/маршрутные продукты обледенения в этот выпуск не входят.
+
+Методика, меню, команды и ограничения:
+[`docs/specs/ICING_MAPS_SPEC.md`](docs/specs/ICING_MAPS_SPEC.md).
+Протокол численной, интерфейсной и визуальной проверки:
+[`docs/ICING_ACCEPTANCE.md`](docs/ICING_ACCEPTANCE.md).
+
+## WeatherNext 3 / BigQuery
+
+`/wn3` использует WeatherNext 3 surface ensemble statistics из Google BigQuery Analytics Hub. Отдельный provider ищет последний **реально опубликованный** init с требуемым горизонтом и запрашивает только нужную точку/регион.
+
+Реализованы:
+
+```text
+point forecast       T/Td, RH, wind, pressure, cloud, 3 precipitation products
+meteogram            mean + p10/p25/p50/p75/p90
+cloud maps           total + low/mid/high
+precip maps          native / IMERG / experimental
+combo                cloud + native precip
+animation            H.264 MP4, GIF fallback
+```
+
+T/Td используют station head 0.05° при наличии; остальные surface fields — 0.1°. BigQuery `forecast.hours` начинается с +1 ч, поэтому WN3 map default — `+1…+48`.
+
+Вертикальная продукция подключена через `/wn3 kind=profile|aero|windgram`: GCS Full Ensemble Zarr, 13 уровней 0.25°, только 00/06/12/18 UTC, без подмены BigQuery-полями. Подробно: [`docs/WEATHERNEXT3.md`](docs/WEATHERNEXT3.md).
+
+## Defaults
+
+```text
+/profile     +24 ч
+/aero        Skew-T, +24 ч
+/windgram    ветер, +0…+120 ч, шаг 6 ч, до 500 гПа
+/cloudgram   Подробно, +0…+72 ч, шаг 3 ч
+/map         Анимация +0…+48 ч, шаг 3 ч, 17 кадров, radius 100 км, places
+/icing       мощность по Годске, +24 ч, заданный район, изолинии 500 гп.м
+/meteogram   GFS, 5 суток, PNG
+/wn3         point +24 ч; карты: +1…+48 ч, шаг 3 ч, radius 150 км
+/route       +24 ч, 300 км/ч, simple, сетка 50 км
+```
+
+Явные параметры команды всегда имеют приоритет над saved defaults.
+
+## Saved recipes и настройки
+
+MAX/VK используют:
+
+```env
+MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
+```
+
+Ключ состояния:
+
+```text
+platform + user_id
+```
+
+В SQLite хранятся active/recent locations, successful recipes и common schedules. `run/cycle`, callback/message ids и process-local wizard state не сохраняются.
+
+Route endpoints записываются в историю, но **не заменяют active point**.
+
+Telegram сохраняет совместимый native personal UX/storage, но все product results строятся теми же common services.
+
+Документация: [`docs/MESSENGER_SETTINGS.md`](docs/MESSENGER_SETTINGS.md), [`docs/MESSENGER_SAVED_RECIPES.md`](docs/MESSENGER_SAVED_RECIPES.md).
+
+## Расписания
+
+Семь исходных продуктов и WN3 поддерживают автоматическую отправку; `run/cycle` выбирается заново. Telegram WN3 использует common scheduler; прежние GFS-расписания сохранены отдельно.
+
+MAX/VK flow:
+
+```text
+/schedule
+→ сохранённый успешный recipe
+→ 1/2/3/7 дней или 1–30
+→ местное время
+→ IANA timezone точки
+→ подтверждение
+```
+
+Snapshot не содержит старый `run/cycle`. Каждый запуск использует актуальный common service. Недоступный VK gateway помечает только VK schedule ошибкой и не блокирует MAX/Telegram.
+
+Telegram сохраняет проверенный native scheduler UI; `/route` также поддержан через adapter к common route runner.
+
+Подробно: [`docs/MESSENGER_SCHEDULES.md`](docs/MESSENGER_SCHEDULES.md).
+
+## Shared runtime resources
+
+Один process-wide pool ограничивает реальную нагрузку сервера:
+
+```env
+MAX_CONCURRENT_GFS=2
+MAX_CONCURRENT_GEOCODE=2
+MAX_CONCURRENT_METEOGRAM=2
+MAX_CONCURRENT_WEATHERNEXT3=2
+MAX_CONCURRENT_SCHEDULED=1
+```
+
+Например `MAX_CONCURRENT_GFS=2` означает суммарно два GFS-расчёта для Telegram+MAX+VK+web/API, а `MAX_CONCURRENT_WEATHERNEXT3=2` — суммарно два WN3 BigQuery/render job для всех мессенджеров.
+
+## Установка
 
 ```bash
 bash install_telegram_bot.sh
 ```
 
-Установщик запросит `TELEGRAM_BOT_TOKEN` и `DADATA_API_KEY`. Для DaData Suggestions нужен только API-ключ; Secret Key не требуется.
+Базово нужны `TELEGRAM_BOT_TOKEN` и `DADATA_API_KEY`, если в `GEOCODER_PROVIDERS` включена DaData.
 
 Неинтерактивно:
 
 ```bash
 TELEGRAM_BOT_TOKEN='<BOT_TOKEN>' \
 DADATA_API_KEY='<DADATA_API_KEY>' \
-TELEGRAM_ADMIN_IDS='<TELEGRAM_USER_ID>' \
 bash install_telegram_bot.sh --yes
 ```
 
-Ручное обновление:
+### WeatherNext 3
 
-```bash
-git checkout telegram-bot
-git pull
-sudo bash deploy_telegram_bot.sh --yes
+После получения доступа к WeatherNext 3 Analytics Hub задайте linked dataset и ADC:
+
+```env
+WEATHERNEXT3_BIGQUERY_PROJECT=<project-with-linked-dataset>
+WEATHERNEXT3_BIGQUERY_DATASET=<linked-dataset>
+WEATHERNEXT3_BIGQUERY_BILLING_PROJECT=<billing-project-optional>
+GOOGLE_APPLICATION_CREDENTIALS=/etc/gfs-profile/google-service-account.json
 ```
 
-Рекомендуемое автоматическое обновление рабочей ветки:
+Зависимость `google-cloud-bigquery` устанавливается из `requirements.txt`. Секретный JSON credential в репозиторий не добавлять.
+
+### MAX и VK
+
+Пошагово, включая создание бота/сообщества и поля `.env`: [`docs/MESSENGER_REGISTRATION.md`](docs/MESSENGER_REGISTRATION.md).
+
+После получения токенов:
 
 ```bash
-sudo bash install_auto_update.sh --yes
-sudo bash install_auto_update.sh --status
+sudo bash setup_messenger_bots.sh --max
+sudo bash setup_messenger_bots.sh --vk
+# или:
+sudo bash setup_messenger_bots.sh --max --vk
 ```
 
-Сервер сам проверяет `origin/telegram-bot`. Для deployment-checkout удалённая ветка является источником истины: локальное расхождение предварительно сохраняется в backup ref/stash, checkout синхронизируется с remote, затем запускается штатный deploy. При неудачном deploy возвращается предыдущая установленная версия. Входящий webhook и GitHub token не требуются.
+Для MAX вручную нужны token + public HTTPS webhook URL. Для VK — community token + positive group id + public HTTPS Callback URL. Secrets генерируются локально; VK confirmation code получается через API.
 
 Проверка:
 
 ```bash
-python -m unittest discover -s tests
-python runtime_check.py
-sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
+curl -fsS http://127.0.0.1:8081/ready
+curl -fsS http://127.0.0.1:8081/health
+sudo bash setup_messenger_bots.sh --status
+sudo systemctl status gfs-profile-bot.service
 ```
 
-## Telegram UX
+## Обновление и автоматический деплой
 
-`/start` показывает стабильное меню продуктов, основную точку и до двух быстрых действий из последних успешных расчётов. Кнопка отправки геолокации появляется только при выборе точки и удаляется после ввода. Выбранные точки и параметры переживают перезапуск и deploy.
+```bash
+git fetch origin refs/heads/main:refs/remotes/origin/main
+git checkout main
+git pull --ff-only origin main
+sudo bash deploy_telegram_bot.sh --yes
+```
 
-Карта нового пользователя по умолчанию — анимация `+0…+48 ч` с шагом 3 часа. Команда `/map Москва +24` по-прежнему означает одну карту, а `/map Москва` использует сохранённый вариант или default 48 часов.
-
-Подробно:
-
-- [`docs/TELEGRAM_UX_MESSAGES.md`](docs/TELEGRAM_UX_MESSAGES.md)
-- [`docs/TELEGRAM_PERSONAL_UX.md`](docs/TELEGRAM_PERSONAL_UX.md)
-
-## Геокодирование
+Deploy сохраняет:
 
 ```text
-координаты из строки
-→ кэш DaData
-→ DaData
-→ локальный справочник
-→ Nominatim fallback
+.env
+.install-state
+.venv/
+.cache_gfs/
+data/basemap/
 ```
 
-```env
-GEOCODER_PROVIDERS=dadata,local,nominatim
-DADATA_API_KEY=
-DADATA_SUGGEST_URL=https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest/address
-```
+Разработка ведётся в `telegram-bot`, production-обновления публикуются в `main`.
+Установленный через `sudo bash install_auto_update.sh --yes` таймер опрашивает
+`origin/main` и запускает тот же деплой. Legacy-таймер, следивший за
+`telegram-bot`, переходит на `main` после получения нового скрипта и проверки,
+что выпуск слит. Явно закреплённые тестовые ветки сохраняются.
 
-Подробно: [`docs/DADATA_GEOCODER.md`](docs/DADATA_GEOCODER.md).
+После перезапуска проверяется `/ready`, затем обновляются команды Telegram/MAX
+с проверкой чтением через API и регистрации webhook MAX/VK. Только завершённая
+цепочка записывает успешный `source_rev`. При ошибке автообновлятор выполняет
+откат; отключённые платформы не мешают работе включённых. `/start` после
+обновления открывает новое меню, включая «Обледенение».
 
-## Telegram-команды
+Состояние: `sudo bash install_auto_update.sh --status`.
+Переход старой установки, ограничения и проверки описаны в [DEPLOY.md](DEPLOY.md).
+
+Автообновление: [`docs/AUTO_UPDATE.md`](docs/AUTO_UPDATE.md).
+
+## Карта `/map`
 
 ```text
-/start       главное меню
-/help        краткая инструкция
-/profile     вертикальный профиль
-/route       профиль по маршруту
-/aero        аэрологическая диаграмма с годографом
-/windgram    срок × уровень
-/cloudgram   облака, осадки и конвективный потенциал
-/meteogram   временной прогноз модели или ансамбля
-/map         карта, серия или анимация
-/schedule    автоматическая отправка
-/settings    точки и сохранённые параметры
-/cycle       последний цикл
-/status      доступность и кэш
-/cancel      сброс сценария
+/map Москва              сохранённый/default вариант
+/map Москва +24          одна карта
+/map Москва from=0 to=96 step=6 mode=gif
 ```
 
-Команда `/skewt` и выбор нескольких видов аэрологических диаграмм удалены. `/aero` всегда строит один согласованный Skew-T log-P.
+Длинная animation автоматически получает совместимый step, чтобы не превышать лимит кадров. MAX отправляет MP4 native video. VK использует native video upload с document fallback, если video API недоступен.
 
-## Вертикальный профиль `/profile`
-
-```text
-/profile Москва +24
-/profile 59.939 30.316 run=20260714/00 +12
-```
-
-Telegram-сводка показывает T/Td только в °C, RH в %, геопотенциальную высоту `Zg` относительно MSL и ветер в метеорологическом направлении «откуда»/м/с. Исходное поле `TMP` в GRIB2 хранится в K, но пользовательский отчёт не выводит этот технический столбец.
-
-CSV из Telegram — компактный человекочитаемый отчёт, а не дамп внутреннего `DataFrame`. Порядок столбцов фиксирован:
-
-```text
-p_hPa,Zg_m_MSL,T_C,Td_C,RH_pct,wind_from_deg,wind_speed_ms
-```
-
-Температура и точка росы — °C; `Zg_m_MSL` — метры MSL; `wind_from_deg` — направление, откуда дует ветер; скорость — м/с. Сырые `temperature_k`, компоненты `u/v`, дубли высоты в км и `theta_k` в Telegram-CSV не включаются. Файл записывается UTF-8 с BOM для корректного открытия в Excel/мобильных таблицах.
+Подробно: [`docs/MESSENGER_MAP_SERVICE.md`](docs/MESSENGER_MAP_SERVICE.md).
 
 ## Метеограмма `/meteogram`
 
+Детерминированные источники: GFS, ECMWF IFS/AIFS, ICON Global, GEM/GDPS. Ансамбли: GEFS, ECMWF ENS/AIFS ENS, ICON-EPS, GEPS и WeatherNext 3 statistics.
+
 ```text
 /meteogram Москва source=gfs days=5
+/meteogram Москва source=weathernext3 days=5
 /meteogram Москва source=gfs days=5 format=pdf
-/meteogram Москва source=ecmwf_ifs days=10
 /meteogram Москва ensemble=gefs days=10 format=docx
-/meteogram 55.75 37.62 ensemble=ecmwf days=5
 ```
 
-Без параметров запускается мастер: `точка → одна модель/ансамбль → модель → период → PNG/DOCX/PDF → подтверждение`.
+Open-Meteo не всегда сообщает исходный model cycle; бот в этом случае честно не указывает его, а не подставляет предполагаемый запуск. В разделе `/wn3` фактический WN3 init выводится явно.
 
-Доступны GFS, ECMWF IFS/AIFS, ICON Global, GEM/GDPS, а также GEFS, ECMWF ENS/AIFS ENS, ICON-EPS и GEPS. Модель всегда выбирается явно; `best_match`, скрытое смешивание моделей и межмодельный «суперансамбль» не используются.
-
-Для временной приземной GFS-метеограммы используется Open-Meteo `gfs_seamless` на `/v1/gfs`, то есть непрерывный поверхностный ряд из доступных глобальных сеток NOAA/NCEP 0.11°/0.25°. Это не меняет нативные вертикальные продукты проекта: `/profile`, `/aero`, `/windgram` и `/cloudgram` продолжают работать с GFS 0.25° через NOMADS/GRIB2.
-
-PNG содержит название пункта, модель и центр, период действия, местное время, время получения и генерации, расчётную точку, температуру/точку росы, влажность, облачность, осадки, ветер, порывы и давление. Для ансамбля показываются средние T/Td/p, медианы остальных полей, q25–q75, q10–q90, послойная облачность, полнота по срокам и вероятности осадков с явным указанием исходного интервала.
-
-Компоновка синхронизирована с проверенным рендером `weather-to-docx`: легенды вынесены над панелями, осадки приведены к мм/ч, следы показаны отдельными маркерами, обычные столбики не имеют чёрной обводки, а термины «сильный ветер» и «сильные порывы» не смешиваются. Основные осадки рисуются заполненными полупрозрачными столбиками без сглаживания. Для детерминированной модели более узкая лёгкая штриховка показывает фактический интервал максимальной интенсивности каждого местного дня (`макс. за сутки`). Для ансамбля аналогичный верхний слой — `P90`, а не фиктивный «максимум»; ансамблевые вероятности остаются тонкими пунктирными линиями.
-
-Для температуры подписываются русские суточные `мин.`/`макс.`, для T/RH/ветра/давления проводится 24-часовое среднее, а красный ромб отмечает один экстремум каждого непрерывного диагностического порогового эпизода.
-
-Open-Meteo не сообщает надёжный исходный цикл перечисленных временных рядов, поэтому изображение честно пишет «цикл не передан поставщиком», а не подставляет предполагаемый запуск.
-
-## Аэрологическая диаграмма `/aero`
-
-```text
-/aero Москва +24
-/aero 59.939 30.316 run=20260714/00 +12
-```
-
-Продукт содержит:
-
-- красную кривую температуры среды;
-- зелёную точку росы;
-- чёрную кривую частицы;
-- синюю кривую насыщения надо льдом;
-- CAPE/CIN и ключевые индексы;
-- уровень конденсации и изотермы в Zg MSL;
-- гидрометеорные облачные слои;
-- модельный icing proxy по SLWC;
-- модельный CAT proxy по вертикальному сдвигу и Ri;
-- ветер и годограф 0–8 км.
-
-Подробно:
-
-- [`docs/AERO_DIAGRAM.md`](docs/AERO_DIAGRAM.md)
-- [`docs/METEOROLOGICAL_METHODS.md`](docs/METEOROLOGICAL_METHODS.md)
-
-## Маршрутный профиль `/route`
+## Маршрут `/route`
 
 ```text
 /route Москва -> Санкт-Петербург +24 speed=300 step=50 mode=pro
-/route Москва -> Новосибирск +6 speed=300 step=25 mode=simple
 ```
 
-Детализация:
+Run выбирается по максимальному ETA lead, а не только по departure lead. `simple/pro` используют одинаковые данные и risk contract; различается presentation.
 
-```text
-25 км  — максимум деталей
-50 км  — баланс качества и времени
-100 км — быстрый обзор длинного маршрута
+Подробно: [`docs/MESSENGER_ROUTE_SERVICE.md`](docs/MESSENGER_ROUTE_SERVICE.md).
+
+## Документация
+
+- [`docs/WEATHERNEXT3.md`](docs/WEATHERNEXT3.md) — BigQuery provider, продукты, env и ограничения WeatherNext 3.
+- [`docs/MESSENGER_PARITY.md`](docs/MESSENGER_PARITY.md) — итоговый паритет Telegram/MAX/VK.
+- [`docs/MESSENGER_RUNTIME.md`](docs/MESSENGER_RUNTIME.md) — production runtime и fault isolation.
+- [`docs/MESSENGER_REGISTRATION.md`](docs/MESSENGER_REGISTRATION.md) — регистрация MAX/VK.
+- [`docs/MESSENGER_SETTINGS.md`](docs/MESSENGER_SETTINGS.md) — locations/settings.
+- [`docs/MESSENGER_SAVED_RECIPES.md`](docs/MESSENGER_SAVED_RECIPES.md) — recipes.
+- [`docs/MESSENGER_SCHEDULES.md`](docs/MESSENGER_SCHEDULES.md) — schedules.
+- [`docs/MESSENGER_MAP_SERVICE.md`](docs/MESSENGER_MAP_SERVICE.md) — `/map`.
+- [`docs/MESSENGER_METEOGRAM_SERVICE.md`](docs/MESSENGER_METEOGRAM_SERVICE.md) — `/meteogram`.
+- [`docs/MESSENGER_ROUTE_SERVICE.md`](docs/MESSENGER_ROUTE_SERVICE.md) — `/route`.
+- [`docs/METEOROLOGICAL_METHODS.md`](docs/METEOROLOGICAL_METHODS.md) — поля, формулы, единицы и ограничения.
+- [`TELEGRAM_BOT.md`](TELEGRAM_BOT.md), [`MAX_BOT.md`](MAX_BOT.md), [`VK_BOT.md`](VK_BOT.md) — платформенные инструкции.
+
+## Проверка перед push/deploy
+
+```bash
+python -m unittest discover -s tests
+python runtime_check.py
+python -m gfs_core --lat 45.0355 --lon 38.9753 --lead 24
+python -m gfs_core --lat 55.75 --lon 37.62 --lead 384
 ```
 
-Если сетка создаёт 60 и более точек, бот предупреждает о длительном расчёте и предлагает выбрать шаг.
+WN3 проверяется на fake BigQuery, настоящем локальном Zarr и рендерерах. Приёмка Google-проекта: `python weathernext3_check.py --live`; эта операция может тарифицироваться.
 
-`simple` и `pro` используют одинаковые исходные данные, `point_risk` и карточки. Сглаживание применяется только к display-сетке PNG.
-
-Подробности:
-
-- [`docs/ROUTE_PROFILE.md`](docs/ROUTE_PROFILE.md)
-- [`docs/ROUTE_PROFILE_RENDERING.md`](docs/ROUTE_PROFILE_RENDERING.md)
-- [`docs/ROUTE_PROFILE_VISUAL_REQUIREMENTS.md`](docs/ROUTE_PROFILE_VISUAL_REQUIREMENTS.md)
-- [`docs/ROUTE_RISK_CONTRACT.md`](docs/ROUTE_RISK_CONTRACT.md)
-
-## Персональные точки и параметры
-
-Состояние хранится в SQLite:
-
-```env
-TELEGRAM_PREFERENCES_DB=.cache_gfs/telegram_preferences.sqlite3
-```
-
-Сохраняются основная точка, последние точки и валидированные параметры каждого продукта. Временные `run/cycle`, кандидаты геокодинга и Telegram callback state не сохраняются. Автоматические расписания используют собственные снимки и не изменяют интерактивные defaults.
-
-`/cancel` не удаляет пользовательские параметры. Сброс отдельного продукта и полное удаление персональных данных выполняются через `/settings`.
-
-## Скрытая команда администратора
-
-Команда администратора не публикуется в пользовательском меню и BotFather-командах, но остаётся доступной по прямому вводу для `TELEGRAM_ADMIN_IDS`.
-
-```env
-TELEGRAM_ADMIN_IDS=123456789,987654321
-TELEGRAM_ADMIN_DB=.cache_gfs/admin_stats.sqlite3
-```
-
-Исторические запросы `skewt` объединяются со статистикой продукта `aero`.
+CI дополнительно выполняет live weather smoke.
 
 ## Важно
 
-Сглаженная картинка не повышает физическое разрешение модели. Метеограммы, маршрутный продукт и локальные шкалы риска не являются официальным прогнозом или разрешением на полёт; перед полётом обязательны актуальные METAR/TAF/SIGMET/GAMET, NOTAM и решение командира.
+Все продукты являются модельными. Диагностические icing/CAT/hazard layers — модельные прокси. WeatherNext 3 — экспериментальная AI-система Google и не является официальным warning source. Продукция проекта не заменяет официальные METAR/TAF/SIGMET/GAMET, NOTAM и эксплуатационное решение специалиста/командира.
 
-Для метеограмм основные осадки рисуются закрашенными полупрозрачными столбиками по исходным интервалам; слабые осадки не обнуляются. Детерминированный максимум каждого местного дня отмечается лёгкой штриховкой, ансамблевый верхний слой честно подписывается `P90`, а вероятности остаются тонкими пунктирными линиями.
 
-## Отчёты метеограммы DOCX/PDF
+## WN3 RC: расширение 8 сентября 2026
 
-После выбора модели и периода мастер `/meteogram` предлагает результат:
+Общий сценарий Telegram/MAX/VK: owner-bound кнопки после перезапуска, пагинация +1…+360, статус/отмена, защита от двойного запуска, сценарии/повтор/расписания. BigQuery: точка, метеограмма PNG/DOCX/PDF, облачность по времени, три варианта осадков, карты/MP4/GIF/CSV, T2, p90−p10, ветер 100 м и радиация. GCS: profile/aero/windgram на 13 уровнях, средний профиль или member=0..63.
 
-- `🖼 PNG` — только метеограмма;
-- `📄 DOCX` — редактируемый модельный отчёт;
-- `🧾 PDF` — тот же отчёт в фиксированном виде.
+Точные команды, подключение и ограничения: [WEATHERNEXT3.md](docs/WEATHERNEXT3.md). Google live-доступ и production-доставка не проверены этим RC. Маршрут WN3 и вероятности событий не заявляются реализованными.
 
-Отчёт строится из уже загруженного ряда без повторного запроса и содержит краткую текстовую оценку, таблицу по местным суткам, таблицу контрольных сроков, полноту ансамбля и PNG-метеограмму. Для ансамбля показываются q10–q90, доли членов по порогам осадков и фактическое `M/N`; разные ансамблевые системы не смешиваются. Прямой запуск:
+Для GCS-профиля, аэродиаграммы и ветровой матрицы WN3 требуется Python 3.11+. Python 3.10 поддерживает GFS и поверхностную WN3 через BigQuery; неподдерживаемые зависимости Zarr на нём не устанавливаются.
 
-```text
-/meteogram Москва ensemble=gefs days=5 format=pdf
-/meteogram 59.939 30.316 source=ecmwf_ens days=10 format=docx
-```
 
-По умолчанию `format=png`, поэтому старые команды сохраняют поведение. DOCX создаётся через `python-docx`; PDF конвертируется из того же DOCX через LibreOffice Writer. Если LibreOffice на сервере отсутствует, бот не теряет результат и отправляет DOCX с явным предупреждением.
+## WN3: два вида метеограммы (RC2)
 
-## Автоматическая отправка по расписанию
-
-Команда `/schedule` открывает менеджер до двух активных расписаний на пользователя. Сначала выбирается обычный продукт и его штатные параметры, затем частота и локальное время города. Поддержаны профиль, аэродиаграмма, windgram, cloudgram, карты/анимации и метеограммы PNG/DOCX/PDF. После каждой автоматической отправки доступны кнопки просмотра и быстрого удаления расписания.
-
-Расписания сохраняются в `.cache_gfs/telegram_schedules.json`, поэтому штатный deploy их не теряет. Подробности: `docs/SCHEDULES.md`.
-
-- PDF-метеограмма формируется нативно в Python/Matplotlib; LibreOffice для штатного PDF не нужен.
+В обычном выборе моделей доступен **WeatherNext 3 · средний прогноз**,
+в ансамблевом — среднее и квантили. В `/wn3` это отдельные кнопки
+«Метеограмма» (`kind=meteogram`) и «Ансамбль / разброс» (`kind=ensemble`).
+Это два представления одного ансамбля, не отдельная детерминированная модель.
+Старый `source=weathernext3` сохранён; среднее доступно как `source=weathernext3_mean`.
+Общий сценарий работает в Telegram, MAX и VK, включая PNG/DOCX/PDF/CSV.
+Подробности и ограничения: [WeatherNext 3](docs/WEATHERNEXT3.md).

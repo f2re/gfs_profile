@@ -1,0 +1,276 @@
+# VK Bot — регистрация, настройка и эксплуатация
+
+## WeatherNext временно отключён
+
+По умолчанию `WEATHERNEXT3_ENABLED=0` (отсутствующее или неизвестное значение также
+означает отключение). Наличие старых Google credentials не включает источник.
+WeatherNext не показывается в меню, справке, обычных и ансамблевых моделях Telegram,
+MAX и VK. Старые команды, кнопки и прямые запросы не запускают расчёт. API WN3
+не регистрируется; нет импорта его провайдеров, обработки кэша или задач WN3 при
+старте службы. Обычные GFS-продукты и другие источники остаются доступны.
+
+Сохранённые сценарии и расписания WN3 (включая `meteogram` с `source/source_id=wn3`)
+скрыты и не исполняются. Записи, `.env`, `.venv` и кэш не удаляются. После обычного
+обновления выполните `bash deploy_telegram_bot.sh`; одного `git pull` для копии в
+`/opt/gfs_profile` недостаточно. Из старых сообщений кнопки нельзя убрать массово,
+но нажатия блокируются; `/start` открывает чистое меню.
+
+`requirements.txt` больше не устанавливает Google BigQuery, Zarr и obstore.
+Ранее установленные пакеты могут оставаться на диске, но не импортируются этим
+источником. Повторное включение — только администратором после получения доступа:
+установить `requirements-weathernext3.txt`, настроить Google, явно задать
+`WEATHERNEXT3_ENABLED=1` и перезапустить службу. Для текущей работы бота этого не нужно.
+
+
+VK использует Community Bot + Callback API как platform adapter поверх общего messenger-neutral слоя. Все семь основных продуктов, saved recipes, `/settings` и `/schedule` доступны без копирования GFS/geocoder/product logic.
+
+Полная регистрация: [`docs/MESSENGER_REGISTRATION.md`](docs/MESSENGER_REGISTRATION.md). Итоговый паритет: [`docs/MESSENGER_PARITY.md`](docs/MESSENGER_PARITY.md).
+
+Production-обновления поступают из `main` через общий systemd-таймер и
+`deploy_telegram_bot.sh`; разработка остаётся в `telegram-bot`. После перезапуска
+проверяется готовность включённого VK, затем регистрация Callback API. Ошибка
+этого этапа не подтверждает установленный `source_rev`. Отключённый VK не
+блокирует обновление других платформ.
+
+Продуктовое меню VK, включая «Обледенение», формируется общим router при новом
+`/start`. Отдельная регистрация списка slash-команд Telegram/MAX к VK не
+применяется; существующие сообщения с клавиатурами в истории не переписываются.
+Переход старого таймера на `main` и проверка статуса: [DEPLOY.md](DEPLOY.md).
+
+## 1. Что создать в VK
+
+1. Создайте сообщество VK или используйте существующее с правами администратора.
+2. Включите сообщения сообщества.
+3. Откройте `Управление → Работа с API`.
+4. Создайте community access token с нужными правами сообщений/media/Callback API.
+5. Скопируйте token.
+6. Запишите положительный числовой ID сообщества без `-`.
+
+Проект использует community token, а не user token.
+
+Основные методы API:
+
+```text
+messages.send
+messages.edit
+messages.sendMessageEventAnswer
+photos.getMessagesUploadServer
+photos.saveMessagesPhoto
+docs.getMessagesUploadServer
+docs.save
+video.save
+groups.getCallbackConfirmationCode
+groups.getCallbackServers
+groups.addCallbackServer
+groups.getCallbackSettings
+groups.setCallbackSettings
+```
+
+## 2. Что вставить в проект
+
+```bash
+sudo bash setup_messenger_bots.sh --vk
+```
+
+Нужны:
+
+```env
+VK_BOT_TOKEN=<community access token>
+VK_GROUP_ID=123456789
+VK_CALLBACK_URL=https://bot.example.ru/webhooks/vk
+```
+
+Можно оставить пустыми:
+
+```env
+VK_CALLBACK_SECRET=
+VK_CONFIRMATION_CODE=
+```
+
+Мастер создаёт secret, получает confirmation code через VK API, сохраняет `.env` и после `/ready` создаёт/обновляет Callback API server.
+
+Неинтерактивно:
+
+```bash
+sudo env \
+  VK_BOT_TOKEN='<VK_COMMUNITY_TOKEN>' \
+  VK_GROUP_ID='123456789' \
+  VK_CALLBACK_URL='https://bot.example.ru/webhooks/vk' \
+  bash setup_messenger_bots.sh --vk --yes
+```
+
+## 3. Callback transport
+
+```text
+VK event
+→ POST /webhooks/vk
+→ group/secret validation
+→ NormalizedEvent
+→ common router/service
+→ CommonProductResult
+→ VkGateway
+```
+
+Поддерживаются:
+
+```text
+confirmation
+message_new
+message_event
+```
+
+Регистрационный скрипт сверяет confirmation code, проверяет публичный endpoint, создаёт/находит Callback API server и включает `message_new/message_event`.
+
+Проверка:
+
+```bash
+.venv/bin/python register_messenger_webhooks.py --vk --status
+```
+
+Ожидается `OK VK: callback server активен`.
+
+## 4. Продукты
+
+```text
+/profile
+/aero
+/windgram
+/cloudgram
+/map
+/icing
+/meteogram
+/route
+```
+
+Поддерживаются город/координаты, неоднозначный город, native location для point-products, callback flow, progress и saved recipes.
+
+### `/map`
+
+Default: MP4 animation `+0…+48 ч`, step 3, radius 100 км, places. VK gateway сначала использует native video upload (`video.save`). Если конкретный token/API не позволяет video upload, применяется document fallback; результат не теряется.
+
+### `/icing`
+
+Региональные карты условий обледенения используют тот же общий router и service,
+что Telegram/MAX. Команда `/icing` не запрашивает город: район задаёт `ICING_BBOX`
+(по умолчанию `-15,100,34,80`), первый срок +24 ч. Продукты: вода на уровне,
+мощность и границы слоёв по Годске, число слоёв, максимум водности и его высота,
+интегральный запас воды, сравнение методов. Доступны PNG/CSV, выбор срока до
++384 с пагинацией, уровень, изолинии 100/500 гп.м, статус и отмена.
+
+```text
+/icing product=godske_sum +24 contours=100
+/icing product=slw_level +12 level=850
+/icing product=slwp +48
+```
+
+Мощность слоя не является интенсивностью обледенения. Модель, фактический цикл
+и срок действия указаны в результате. Не реализованные WAFS, осадки и временные
+продукты не показываются как доступные. Методика и ограничения:
+[ICING_MAPS_SPEC.md](docs/specs/ICING_MAPS_SPEC.md).
+
+### `/meteogram`
+
+GFS/ECMWF/ICON/GEM и ансамбли, PNG/DOCX/PDF. Неизвестный upstream model cycle не выдумывается.
+
+### `/route`
+
+Одинаковый common PNG+CSV, run выбирается по max ETA lead.
+
+## 5. Settings / recipes
+
+```env
+MESSENGER_PREFERENCES_DB=.cache_gfs/messenger_preferences.sqlite3
+```
+
+State изолирован по:
+
+```text
+vk + user_id
+```
+
+`/settings` управляет active/recent points и recipes. Route endpoints не заменяют active point. `run/cycle` в recipes не сохраняются.
+
+## 6. Расписания
+
+`/schedule` поддерживает все семь продуктов:
+
+```text
+saved recipe → частота → local time → timezone → сохранить
+```
+
+Каждый automatic run использует свежие common services. До двух schedule на `vk + user_id`.
+
+Если VK gateway временно `degraded/off`, due VK schedule получает локальную ошибку и переносится на следующий срок. Scheduler/MAX/Telegram продолжают работать.
+
+## 7. Fault isolation
+
+```env
+VK_ENABLED=auto
+```
+
+Карантин только VK:
+
+```env
+VK_ENABLED=0
+```
+
+Telegram/MAX/web остаются доступны. `/health` показывает состояние платформ отдельно.
+
+## 8. Shared limits
+
+```env
+MAX_CONCURRENT_GFS=2
+MAX_CONCURRENT_GEOCODE=2
+MAX_CONCURRENT_METEOGRAM=2
+MAX_CONCURRENT_SCHEDULED=1
+```
+
+Они суммарные для всего процесса.
+
+## 9. Проверка
+
+```bash
+curl -fsS http://127.0.0.1:8081/ready
+curl -fsS http://127.0.0.1:8081/health
+sudo bash setup_messenger_bots.sh --status
+sudo systemctl status gfs-profile-bot.service
+sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
+```
+
+Ручной smoke:
+
+```text
+/start
+/profile Москва +24
+/aero Москва +24
+/windgram Москва
+/cloudgram Москва
+/map Москва
+/icing
+/icing product=slw_level +24 level=850
+/meteogram Москва source=gfs days=5
+/route Москва -> Санкт-Петербург
+/settings
+/schedule
+/status
+/cancel
+```
+
+Все GFS-продукты должны быть помечены как модель, не наблюдение/радиозонд.
+
+## WeatherNext 3
+
+`/wn3` и кнопка главного меню используют тот же сценарий и service, что Telegram/MAX. Доступны point, meteogram, cloudgram, precip_compare, десять картографических слоёв, profile/aero/windgram через GCS, PNG/CSV и MP4/GIF. Сценарии, расписания, отмена и пагинация до +360 — общие. Подключение Google, команды и ограничения RC: [docs/WEATHERNEXT3.md](docs/WEATHERNEXT3.md). VK transport не менялся. Доставку в рабочее сообщество необходимо проверить отдельно.
+
+Для GCS-профиля, аэродиаграммы и ветровой матрицы WN3 требуется Python 3.11+. Python 3.10 поддерживает GFS и поверхностную WN3 через BigQuery; неподдерживаемые зависимости Zarr на нём не устанавливаются.
+
+
+## WN3: два вида метеограммы (RC2)
+
+В обычном выборе моделей доступен **WeatherNext 3 · средний прогноз**,
+в ансамблевом — среднее и квантили. В `/wn3` это отдельные кнопки
+«Метеограмма» (`kind=meteogram`) и «Ансамбль / разброс» (`kind=ensemble`).
+Это два представления одного ансамбля, не отдельная детерминированная модель.
+Старый `source=weathernext3` сохранён; среднее доступно как `source=weathernext3_mean`.
+Общий сценарий работает в Telegram, MAX и VK, включая PNG/DOCX/PDF/CSV.
+Подробности и ограничения: [WeatherNext 3](docs/WEATHERNEXT3.md).

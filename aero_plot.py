@@ -62,12 +62,12 @@ def _safe_suffix(result: ProfileResult, diagram_type: str = DEFAULT_AERO_DIAGRAM
 
 
 def _diagram_title(result: ProfileResult) -> tuple[str, str]:
-    title = "GFS 0.25 · аэрологическая диаграмма Skew-T log-P"
+    title = f"{getattr(result, 'model_label', 'GFS 0.25')} · аэрологическая диаграмма Skew-T log-P"
     subtitle = (
         f"{result.run.date} {result.run.cycle}Z · +{result.lead_hour} ч · "
         f"{result.valid_time_utc:%d.%m.%Y %H:%M UTC} · "
         f"{result.requested_lat:.3f}, {result.requested_lon:.3f} → "
-        f"узел GFS {result.grid_lat:.3f}, {result.grid_lon:.3f}"
+        f"узел модели {result.grid_lat:.3f}, {result.grid_lon:.3f}"
     )
     return title, subtitle
 
@@ -291,7 +291,7 @@ def _diagnose_layers(df) -> list[dict[str, object]]:
     out += _layerize(d, icing, "icing", "Обледенение", 3, "влажно и 0…−20 °C")
     out += _layerize(d, turb, "turb", "Болтанка", 3, "Ri<0.25 или сдвиг≥10 м/с/км")
     out += _layerize(d, conv, "conv", "Конвективная неустойчивость", 3, "dθe/dz≤−3 K/км")
-    out += _layerize(d, precip, "precip", "Осадки", 2, "гидрометеоры GFS")
+    out += _layerize(d, precip, "precip", "Осадки", 2, "гидрометеоры модели")
     return out
 
 
@@ -692,7 +692,7 @@ def _plot_metpy_diagram(result: ProfileResult, out_path: Path) -> None:
 
         add_footer(
             fig,
-            "GFS grid, не радиозонд. Облачность, обледенение и болтанка — диагностические модельные слои.",
+            f"{getattr(result, 'model_label', 'GFS 0.25')} · модель, не радиозонд. {getattr(result, 'diagnostics_note', '')}",
             y=0.018,
         )
         fig.savefig(out_path, dpi=180, bbox_inches="tight", facecolor=METEO.figure_bg)

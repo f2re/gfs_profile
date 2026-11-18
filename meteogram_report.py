@@ -642,7 +642,7 @@ def _build_daily_rows(series: Any) -> list[ReportDay]:
         min_members = _nanmin(member_counts[indices]) if ensemble else None
         if ensemble:
             observed = int(round(min_members)) if min_members is not None else int(getattr(series, "member_count", 0) or 0)
-            member_text = f"{observed}/{expected or observed} членов"
+            member_text = "готовые статистики ансамбля" if getattr(series, "ensemble_statistics_only", False) else f"{observed}/{expected or observed} членов"
             signal_probability = _max_probability(series, indices)
             member_text += f"\n{_signal_label(signal_probability)}"
         else:
@@ -732,7 +732,7 @@ def _build_control_rows(series: Any) -> list[ReportControlTime]:
         if ensemble:
             count = _finite_at(member_counts, index)
             observed = int(round(count)) if count is not None else int(getattr(series, "member_count", 0) or 0)
-            member_text = f"{observed}/{expected or observed}"
+            member_text = "статистики" if getattr(series, "ensemble_statistics_only", False) else f"{observed}/{expected or observed}"
         else:
             member_text = "1 модель"
 
@@ -816,7 +816,7 @@ def _build_main_lines(series: Any, daily_rows: Sequence[ReportDay]) -> list[str]
         minimum = _nanmin(counts)
         observed = int(round(minimum)) if minimum is not None else int(getattr(series, "member_count", 0) or 0)
         expected = int(getattr(series, "expected_member_count", 0) or observed)
-        lines.append(f"Ансамбль: не менее {observed}/{expected or observed} членов на срок.")
+        lines.append("Ансамбль: готовые статистики; число доступных членов не передано." if getattr(series, "ensemble_statistics_only", False) else f"Ансамбль: не менее {observed}/{expected or observed} членов на срок.")
     return lines[:5]
 
 def _build_method_lines(series: Any) -> list[str]:

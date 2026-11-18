@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-# Keep the established telegram_bot module namespace intact for existing tests,
-# monkeypatches and deploy entrypoints, while moving the previous implementation
-# to a stable source file and composing optional products here.
+from feature_flags import weathernext3_enabled
+
 from pathlib import Path
 
 _ENTRYPOINT_MODULE_NAME = __name__
@@ -22,16 +21,15 @@ import route_profile_rendering  # noqa: F401,E402
 import telegram_concise_ux  # noqa: E402
 import telegram_result_copy  # noqa: E402
 import meteorological_policy  # noqa: E402
+import telegram_profile_common  # noqa: E402
 
-# Presentation and product policies are applied before handlers are built.
 telegram_concise_ux.install(globals())
 telegram_result_copy.install()
 aero_single_mode.install(globals())
 admin_product_policy.install(globals())
 meteorological_policy.install(globals())
+telegram_profile_common.install(globals())
 
-# All product switches, /start and /cancel must also discard the independent
-# meteogram wizard, otherwise a later plain-text message could resume stale state.
 _core_clear_pending = _clear_pending
 
 
@@ -40,11 +38,11 @@ def _clear_pending(context):
     context.user_data.pop("meteogram_wizard", None)
     context.user_data.pop("schedule_wizard", None)
     context.user_data.pop("schedule_profile_setup", None)
+    context.user_data.pop("schedule_route_setup", None)
+    context.user_data.pop("weathernext3_wizard", None)
+    context.user_data.pop("icing_wizard", None)
 
 
-# A callback message is authored by the bot, so message.from_user cannot identify
-# the person who opened a product from the inline home menu. Capture the actual
-# callback user for the point-selection keyboard and persistent defaults.
 _concise_start_product_wizard = _start_product_wizard
 
 
@@ -66,16 +64,34 @@ from telegram_meteogram import register_meteogram_handlers
 from telegram_schedules import register_schedule_handlers
 import telegram_schedule_ux  # noqa: E402
 
-# Install the schedule guard first. Personal UX then wraps the final product
-# runners, so scheduled deliveries remain snapshots and never change defaults.
 telegram_schedule_ux.install(globals())
 
-import telegram_personal_ux  # noqa: E402
+# Install messenger-neutral runners before personal wrappers. Personal UX then
+# decorates the final common runner and keeps existing Telegram preferences.
+import telegram_meteogram_common  # noqa: E402
+import telegram_route_common  # noqa: E402
+telegram_meteogram_common.install()
+telegram_route_common.install()
 
+# Fill the remaining native Telegram schedule gap without duplicating route
+# meteorology; the adapter delegates execution to the common route runner.
+import telegram_schedule_route_compat  # noqa: E402
+telegram_schedule_route_compat.install()
+
+import telegram_personal_ux  # noqa: E402
 telegram_personal_ux.install(globals())
 
-import telegram_personal_wizard_policy  # noqa: E402
+if weathernext3_enabled():
+    import telegram_weathernext3  # noqa: E402
+    telegram_weathernext3.install()
 
+import telegram_saved_recipes  # noqa: E402
+telegram_saved_recipes.install(globals())
+
+import telegram_saved_recipes_schedule_compat  # noqa: E402
+telegram_saved_recipes_schedule_compat.install()
+
+import telegram_personal_wizard_policy  # noqa: E402
 telegram_personal_wizard_policy.install()
 
 _core_build_application = build_application
@@ -89,23 +105,27 @@ def build_application():
             context.user_data["_ux_home_user_id"] = int(update.effective_user.id)
 
     application.add_handler(
-        CallbackQueryHandler(
-            capture_home_user,
-            pattern=r"^home:(aero|windgram|cloudgram|map)$",
-        ),
+        CallbackQueryHandler(capture_home_user, pattern=r"^home:(aero|windgram|cloudgram|map)$"),
         group=-3,
     )
+    telegram_saved_recipes.register(application, globals())
     telegram_personal_ux.register(application, globals())
     telegram_concise_ux.register(application, globals())
+    import telegram_icing
+    telegram_icing.register(application)
+    if weathernext3_enabled():
+        telegram_weathernext3.register(application)
+    else:
+        from telegram_feature_guard import register
+        register(application)
     register_meteogram_handlers(application)
     telegram_schedule_ux.register_input_guards(application, globals())
     register_schedule_handlers(application, globals())
-    register_route_handlers(
-        application,
-        gfs_semaphore=GFS_SEMAPHORE,
-        geocode_semaphore=GEOCODE_SEMAPHORE,
-    )
+    telegram_schedule_route_compat.register(application)
+    register_route_handlers(application, gfs_semaphore=GFS_SEMAPHORE, geocode_semaphore=GEOCODE_SEMAPHORE)
     aero_single_mode.configure_application(application)
+    from telegram_commands import install_command_registration
+    install_command_registration(application)
     return application
 
 

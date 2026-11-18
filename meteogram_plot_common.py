@@ -61,7 +61,7 @@ def _draw_header(figure: Figure, series: MeteogramSeries, tracked) -> None:
     if series.source.ensemble:
         observed = series.member_count or 0
         expected = series.expected_member_count or observed
-        members = f" · {observed}/{expected} членов"
+        members = " · готовые статистики ансамбля" if getattr(series, "ensemble_statistics_only", False) else f" · {observed}/{expected} членов"
         per_time = series.values("ensemble_member_count")
         if np.isfinite(per_time).any():
             minimum = int(np.nanmin(per_time))
