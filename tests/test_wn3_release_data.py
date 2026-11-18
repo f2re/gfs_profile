@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from wn3_test_support import enable_for_module as setUpModule
+import importlib.util
 import json
 import sys
 import tempfile
@@ -23,6 +24,15 @@ from weathernext3_provider import WeatherNext3Provider, WeatherNext3Error, Weath
 from weathernext3_zarr import WeatherNext3ZarrProvider, ZarrRun, select_hours, select_point
 from weathernext3_surface import surface_rows
 from messenger.weathernext3_service import _row_for_hour, normalize_wn3_params, _map_leads
+
+
+def optional_dependency_available(name):
+    """Base deployments intentionally omit WeatherNext/cloud dependencies."""
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError):
+        return False
+
 
 class ReleaseDataTests(unittest.TestCase):
     def setUp(self):
@@ -75,6 +85,8 @@ class ReleaseDataTests(unittest.TestCase):
         self.assertEqual(count,1); self.assertEqual(len(results),6)
         path.write_text('[{"broken": 1}]')
         self.assertEqual(cached_json(path,60,build,validate),[{'value':3}]); self.assertEqual(count,2)
+    @unittest.skipUnless(optional_dependency_available('google.cloud.bigquery'),
+                         'Optional WN3 BigQuery SDK: install requirements-weathernext3.txt')
     def test_bigquery_budget_default_and_timeout_cancel(self):
         executor=GoogleBigQueryExecutor(billing_project='test-project')
         self.assertEqual(executor.maximum_bytes_billed,1_000_000_000)
@@ -147,6 +159,8 @@ class ZarrReleaseTests(unittest.TestCase):
         ds=upper_dataset().assign_coords(lead_subtime=np.arange(6))
         with self.assertRaises(WeatherNext3Error): upper_provider(ds).profiles(POINT.lat,POINT.lon,[1])
     @unittest.skipIf(sys.version_info < (3, 11), 'GCS/Zarr 3 requires Python 3.11+; surface tests remain active')
+    @unittest.skipUnless(optional_dependency_available('zarr'),
+                         'Optional WN3 Zarr dependency: install requirements-weathernext3.txt')
     def test_real_zarr_roundtrip_and_cache(self):
         with tempfile.TemporaryDirectory() as tmp:
             path=Path(tmp)/'fixture.zarr'; upper_dataset().to_zarr(path,zarr_format=2)
