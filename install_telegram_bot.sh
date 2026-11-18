@@ -54,7 +54,7 @@ $APP_NAME — установка
   --python PATH           Python-интерпретатор
   --yes                   не задавать вопросы; обязательные токены в окружении
   --skip-apt              не устанавливать apt-пакеты
-  --skip-commands         не регистрировать Telegram-команды
+  --skip-commands         не обновлять меню Telegram/MAX (неполная установка)
   --skip-webhooks         не регистрировать MAX/VK webhook
   --no-start              не запускать сервис
   --status                показать состояние
@@ -157,7 +157,7 @@ ask_secret() {
   done
 }
 run_with_env() {
-  run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" bash -c 'set -a; source "$1"; set +a; cd "$2"; shift 2; exec "$@"' _ "$ENV_FILE" "$INSTALL_DIR" "$@"
+  run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" bash -c 'set -e; set -a; source "$1"; set +a; cd "$2"; shift 2; exec "$@"' _ "$ENV_FILE" "$INSTALL_DIR" "$@"
 }
 
 print_status() {
@@ -181,7 +181,7 @@ print_status() {
 
 require_repo_files() {
   local file
-  for file in messenger_launcher.py messenger_runtime.py messenger_config_check.py register_messenger_webhooks.py telegram_bot.py requirements.txt runtime_check.py geocoder_preflight.py prepare_basemap_cache.py register_telegram_commands.py .env.telegram.example; do
+  for file in messenger_launcher.py messenger_runtime.py messenger_config_check.py messenger_readiness.py register_messenger_commands.py register_messenger_webhooks.py telegram_bot.py requirements.txt runtime_check.py geocoder_preflight.py prepare_basemap_cache.py register_telegram_commands.py .env.telegram.example; do
     [[ -f "$REPO_ROOT/$file" ]] || fail "Не найден $file в $REPO_ROOT"
   done
 }
@@ -310,7 +310,8 @@ EOF
 }
 start_service() {
   [[ "$NO_START" -eq 0 ]] || { warn "Запуск пропущен"; return 0; }
-  run_root systemctl enable --now "${SERVICE_NAME}.service"
+  run_root systemctl enable "${SERVICE_NAME}.service"
+  run_root systemctl restart "${SERVICE_NAME}.service"
   sleep 2
   systemctl is-active --quiet "${SERVICE_NAME}.service" || { run_root journalctl -u "${SERVICE_NAME}.service" -n 80 --no-pager || true; fail "Сервис не стартовал"; }
 }
@@ -323,8 +324,8 @@ wait_runtime_ready() {
   [[ "$host" == "0.0.0.0" || "$host" == "::" ]] && host="127.0.0.1"
   url="http://${host}:${port}/ready"
   for attempt in {1..20}; do
-    if run_with_env "$VENV_DIR/bin/python" -c 'import requests,sys; r=requests.get(sys.argv[1], timeout=2); raise SystemExit(0 if r.status_code == 200 else 1)' "$url" >/dev/null 2>&1; then
-      success "Runtime ready: $url"
+    if run_with_env "$VENV_DIR/bin/python" "$INSTALL_DIR/messenger_readiness.py" "$url" --timeout 2 >/dev/null 2>&1; then
+      success "Runtime и все включённые мессенджеры готовы: $url"
       return 0
     fi
     sleep 1
@@ -333,22 +334,41 @@ wait_runtime_ready() {
   fail "Multi-messenger runtime не прошёл /ready: $url"
 }
 register_commands() {
+  local args=()
   [[ "$SKIP_COMMANDS" -eq 0 ]] || return 0
-  run_with_env "$VENV_DIR/bin/python" "$INSTALL_DIR/register_telegram_commands.py" || warn "Не удалось зарегистрировать Telegram-команды"
-  return 0
+  [[ "$NO_START" -eq 0 ]] || { warn "Регистрация меню отложена до запуска сервиса"; return 0; }
+  runtime_enabled || args+=(--telegram)
+  if run_with_env "$VENV_DIR/bin/python" "$INSTALL_DIR/register_messenger_commands.py" "${args[@]}"; then
+    success "Меню Telegram/MAX обновлены и проверены"
+    return 0
+  fi
+  fail "Не удалось обновить меню включённых мессенджеров; установка не подтверждена"
 }
 register_webhooks() {
   [[ "$SKIP_WEBHOOKS" -eq 0 ]] || { warn "Регистрация MAX/VK webhook пропущена"; return 0; }
+  [[ "$NO_START" -eq 0 ]] || { warn "Регистрация webhook отложена до запуска сервиса"; return 0; }
   runtime_enabled || return 0
-  if run_with_env "$VENV_DIR/bin/python" "$INSTALL_DIR/register_messenger_webhooks.py"; then
+  if run_with_env "$VENV_DIR/bin/python" "$INSTALL_DIR/register_messenger_webhooks.py" --strict; then
     success "MAX/VK webhook проверены и зарегистрированы"
     return 0
   fi
   fail "Runtime работает, но регистрация MAX/VK webhook не прошла; проверьте публичный HTTPS и env"
 }
 write_state() {
-  cat <<EOF | run_root tee "$STATE_FILE" >/dev/null
+  local candidate_rev confirmed_rev pending_rev deploy_status tmp
+  candidate_rev="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf unknown)"
+  confirmed_rev="$candidate_rev"; pending_rev=""; deploy_status="complete"
+  if (( NO_START || SKIP_COMMANDS || SKIP_WEBHOOKS )); then
+    deploy_status="partial"; pending_rev="$candidate_rev"
+    confirmed_rev="$(sed -n 's/^source_rev=//p' "$STATE_FILE" 2>/dev/null | tail -n 1 || true)"
+  fi
+  tmp="$(run_root mktemp "$INSTALL_DIR/.install-state.XXXXXX")"
+  cat <<EOF | run_root tee "$tmp" >/dev/null
 installed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+source_repo=$REPO_ROOT
+source_rev=$confirmed_rev
+pending_source_rev=$pending_rev
+deploy_status=$deploy_status
 install_dir=$INSTALL_DIR
 service_name=$SERVICE_NAME
 service_user=$SERVICE_USER
@@ -361,8 +381,13 @@ vk_configured=$([[ -n "$(get_env_value VK_BOT_TOKEN "$ENV_FILE")" ]] && printf y
 geocoder_providers=$(get_env_value GEOCODER_PROVIDERS "$ENV_FILE")
 dadata=validated
 runtime_check=ok
+service_restart=$([[ "$NO_START" -eq 1 ]] && printf skipped || printf ok)
+menu_sync=$([[ "$SKIP_COMMANDS" -eq 1 || "$NO_START" -eq 1 ]] && printf skipped || printf ok)
+webhook_sync=$([[ "$SKIP_WEBHOOKS" -eq 1 || "$NO_START" -eq 1 ]] && printf skipped || printf ok)
 EOF
-  run_root chown "$SERVICE_USER:$SERVICE_USER" "$STATE_FILE"
+  run_root chmod 0644 "$tmp"
+  run_root chown "$SERVICE_USER:$SERVICE_USER" "$tmp"
+  run_root mv -f "$tmp" "$STATE_FILE"
 }
 
 main() {
@@ -388,7 +413,11 @@ main() {
   register_commands
   register_webhooks
   write_state
-  success "Установка завершена: Telegram + общий messenger runtime готовы."
+  if (( NO_START || SKIP_COMMANDS || SKIP_WEBHOOKS )); then
+    warn "Установка частичная: запуск или регистрация пропущены; source_rev не подтверждён"
+  else
+    success "Установка завершена: включённые мессенджеры, меню и runtime готовы."
+  fi
 }
 
 main "$@"

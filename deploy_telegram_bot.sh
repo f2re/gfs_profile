@@ -68,7 +68,7 @@ usage() {
   --install-system-packages
   --skip-pip
   --skip-tests
-  --skip-commands
+  --skip-commands       пропустить меню Telegram/MAX (неполный deploy)
   --skip-webhooks
   --no-restart
   --status
@@ -151,6 +151,7 @@ runtime_enabled() {
 }
 run_with_env() {
   run_user "$SERVICE_USER" env HOME="$INSTALL_DIR" bash -c '
+    set -e
     set -a
     source "$1"
     set +a
@@ -159,7 +160,7 @@ run_with_env() {
     exec "$@"
   ' _ "$ENV_FILE" "$INSTALL_DIR" "$@"
 }
-git_rev() { git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || printf unknown; }
+git_rev() { git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || printf unknown; }
 admin_db_path() {
   local raw
   raw="$(read_env_value TELEGRAM_ADMIN_DB)"; raw="${raw:-$DEFAULT_ADMIN_DB_RELATIVE}"
@@ -219,7 +220,7 @@ print_status() {
 
 require_ready_install() {
   local file
-  for file in messenger_launcher.py messenger_runtime.py messenger_config_check.py register_messenger_webhooks.py telegram_bot.py requirements.txt runtime_check.py geocoder_preflight.py prepare_basemap_cache.py register_telegram_commands.py; do
+  for file in messenger_launcher.py messenger_runtime.py messenger_config_check.py messenger_readiness.py register_messenger_commands.py register_messenger_webhooks.py telegram_bot.py requirements.txt runtime_check.py geocoder_preflight.py prepare_basemap_cache.py register_telegram_commands.py; do
     [[ -f "$REPO_ROOT/$file" ]] || fail "В источнике нет $file"
   done
   [[ -d "$INSTALL_DIR" ]] || fail "Нет $INSTALL_DIR. Сначала выполните install_telegram_bot.sh"
@@ -380,37 +381,63 @@ wait_runtime_ready() {
   [[ "$host" == "0.0.0.0" || "$host" == "::" ]] && host="127.0.0.1"
   url="http://${host}:${port}/ready"
   for attempt in {1..20}; do
-    if run_with_env "$VENV_DIR/bin/python" -c 'import requests,sys; r=requests.get(sys.argv[1], timeout=2); raise SystemExit(0 if r.status_code == 200 else 1)' "$url" >/dev/null 2>&1; then success "Runtime ready: $url"; return 0; fi
+    if run_with_env "$VENV_DIR/bin/python" "$INSTALL_DIR/messenger_readiness.py" "$url" --timeout 2 >/dev/null 2>&1; then success "Runtime и все включённые мессенджеры готовы: $url"; return 0; fi
     sleep 1
   done
   journalctl -u "${SERVICE_NAME}.service" -n 100 --no-pager || true
   fail "Multi-messenger runtime не прошёл /ready: $url"
 }
 register_commands() {
+  local args=()
   if [[ "$SKIP_COMMANDS" -eq 1 ]]; then
-    warn "Регистрация Telegram-команд пропущена"
+    warn "Регистрация меню Telegram/MAX пропущена"
     return 0
   fi
-  if run_with_env "$VENV_DIR/bin/python" "$INSTALL_DIR/register_telegram_commands.py"; then success "Telegram-команды обновлены"; else warn "Не удалось зарегистрировать Telegram-команды"; fi
-  return 0
+  if [[ "$NO_RESTART" -eq 1 ]]; then
+    warn "Регистрация меню отложена до запуска новой версии"
+    return 0
+  fi
+  runtime_enabled || args+=(--telegram)
+  if run_with_env "$VENV_DIR/bin/python" "$INSTALL_DIR/register_messenger_commands.py" "${args[@]}"; then
+    success "Меню Telegram/MAX обновлены и проверены"
+    return 0
+  fi
+  fail "Не удалось обновить меню включённых мессенджеров; deploy не подтверждён"
 }
 register_webhooks() {
   if [[ "$SKIP_WEBHOOKS" -eq 1 ]]; then
     warn "Регистрация MAX/VK webhook пропущена"
     return 0
   fi
+  if [[ "$NO_RESTART" -eq 1 ]]; then
+    warn "Регистрация webhook отложена до запуска новой версии"
+    return 0
+  fi
   runtime_enabled || return 0
-  if run_with_env "$VENV_DIR/bin/python" "$INSTALL_DIR/register_messenger_webhooks.py"; then success "MAX/VK webhook проверены и зарегистрированы"; return 0; fi
+  if run_with_env "$VENV_DIR/bin/python" "$INSTALL_DIR/register_messenger_webhooks.py" --strict; then success "MAX/VK webhook проверены и зарегистрированы"; return 0; fi
   fail "Runtime работает, но регистрация MAX/VK webhook не прошла; endpoint оставлен активным для безопасного повтора"
 }
 write_state() {
-  local installed_at
+  local installed_at previous_rev last_deployed_at candidate_rev deploy_status pending_rev tmp
   installed_at="$(grep '^installed_at=' "$STATE_FILE" 2>/dev/null | cut -d= -f2- || true)"
-  cat <<EOF >"$STATE_FILE"
+  previous_rev="$(sed -n 's/^source_rev=//p' "$STATE_FILE" 2>/dev/null | tail -n 1 || true)"
+  last_deployed_at="$(sed -n 's/^last_deployed_at=//p' "$STATE_FILE" 2>/dev/null | tail -n 1 || true)"
+  candidate_rev="$(git_rev)"; deploy_status="complete"; pending_rev=""
+  if (( NO_RESTART || SKIP_PIP || SKIP_TESTS || SKIP_COMMANDS || SKIP_WEBHOOKS )); then
+    deploy_status="partial"; pending_rev="$candidate_rev"
+  else
+    previous_rev="$candidate_rev"
+    last_deployed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  fi
+  tmp="$(mktemp "$INSTALL_DIR/.install-state.XXXXXX")"
+  cat <<EOF >"$tmp"
 installed_at=$installed_at
-last_deployed_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+last_deployed_at=$last_deployed_at
+last_attempt_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 source_repo=$REPO_ROOT
-source_rev=$(git_rev)
+source_rev=$previous_rev
+pending_source_rev=$pending_rev
+deploy_status=$deploy_status
 install_dir=$INSTALL_DIR
 service_name=$SERVICE_NAME
 service_user=$SERVICE_USER
@@ -424,8 +451,17 @@ dadata=validated
 deploy_lock=$DEPLOY_LOCK
 runtime_check=ok
 unit_tests=$([[ "$SKIP_TESTS" -eq 1 ]] && printf skipped || printf ok)
+dependencies=$([[ "$SKIP_PIP" -eq 1 ]] && printf skipped || printf ok)
+service_restart=$([[ "$NO_RESTART" -eq 1 ]] && printf skipped || printf ok)
+menu_sync=$([[ "$SKIP_COMMANDS" -eq 1 || "$NO_RESTART" -eq 1 ]] && printf skipped || printf ok)
+webhook_sync=$([[ "$SKIP_WEBHOOKS" -eq 1 || "$NO_RESTART" -eq 1 ]] && printf skipped || printf ok)
 EOF
-  chown "$SERVICE_USER:$SERVICE_USER" "$STATE_FILE"
+  chmod 0644 "$tmp"
+  chown "$SERVICE_USER:$SERVICE_USER" "$tmp"
+  mv -f "$tmp" "$STATE_FILE"
+  if [[ "$deploy_status" != "complete" ]]; then
+    warn "Deploy частичный: пропущены обязательные этапы; source_rev не подтверждён"
+  fi
 }
 
 main() {
@@ -447,10 +483,15 @@ main() {
   CURRENT_STAGE="systemd unit"; log "Этап: multi-messenger systemd unit"; write_service_unit
   CURRENT_STAGE="перезапуск systemd"; log "Этап: перезапуск ${SERVICE_NAME}.service"; restart_service
   CURRENT_STAGE="readiness"; log "Этап: /ready"; wait_runtime_ready
-  CURRENT_STAGE="регистрация Telegram-команд"; log "Этап: регистрация Telegram-команд"; register_commands
+  CURRENT_STAGE="регистрация меню мессенджеров"; log "Этап: меню Telegram/MAX"; register_commands
   CURRENT_STAGE="регистрация MAX/VK webhook"; log "Этап: регистрация MAX/VK webhook"; register_webhooks
   CURRENT_STAGE="запись состояния"; write_state
-  CURRENT_STAGE="завершено"; success "Deploy завершён: $(git_rev)"
+  CURRENT_STAGE="завершено"
+  if (( NO_RESTART || SKIP_PIP || SKIP_TESTS || SKIP_COMMANDS || SKIP_WEBHOOKS )); then
+    warn "Частичное обновление завершено: $(git_rev); для подтверждения выполните полный deploy"
+  else
+    success "Deploy завершён: $(git_rev)"
+  fi
   systemctl status "${SERVICE_NAME}.service" --no-pager --lines=5 || true
 }
 

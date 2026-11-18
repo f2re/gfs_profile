@@ -26,7 +26,7 @@ usage() {
   --enable       включить single-process Telegram+MAX+VK runtime
   --disable      оставить launcher, но вернуть Telegram-only polling
   --status       показать состояние
-  --no-register  не регистрировать MAX/VK webhook после запуска
+  --no-register  не обновлять меню Telegram/MAX и MAX/VK webhook после запуска
   --no-restart   не перезапускать systemd service
 USAGE
 }
@@ -66,9 +66,11 @@ set_env() {
 validate_install() {
   [[ -f "$ENV_FILE" ]] || fail "Нет $ENV_FILE"
   [[ -x "$VENV_DIR/bin/python" ]] || fail "Нет $VENV_DIR/bin/python"
-  [[ -f "$INSTALL_DIR/messenger_launcher.py" ]] || fail "Нет messenger_launcher.py — сначала обновите telegram-bot"
-  [[ -f "$INSTALL_DIR/messenger_config_check.py" ]] || fail "Нет messenger_config_check.py — сначала обновите telegram-bot"
-  [[ -f "$INSTALL_DIR/register_messenger_webhooks.py" ]] || fail "Нет register_messenger_webhooks.py — сначала обновите telegram-bot"
+  [[ -f "$INSTALL_DIR/messenger_launcher.py" ]] || fail "Нет messenger_launcher.py — сначала обновите приложение из main"
+  [[ -f "$INSTALL_DIR/messenger_config_check.py" ]] || fail "Нет messenger_config_check.py — сначала обновите приложение из main"
+  [[ -f "$INSTALL_DIR/messenger_readiness.py" ]] || fail "Нет messenger_readiness.py — сначала обновите приложение из main"
+  [[ -f "$INSTALL_DIR/register_messenger_commands.py" ]] || fail "Нет register_messenger_commands.py — сначала обновите приложение из main"
+  [[ -f "$INSTALL_DIR/register_messenger_webhooks.py" ]] || fail "Нет register_messenger_webhooks.py — сначала обновите приложение из main"
   id "$SERVICE_USER" >/dev/null 2>&1 || fail "Нет пользователя $SERVICE_USER"
 }
 
@@ -83,7 +85,7 @@ EOF2
 }
 
 restart_service() {
-  systemctl daemon-reload
+  systemctl daemon-reload || return 1
   [[ "$NO_RESTART" -eq 0 ]] || return 0
   systemctl restart "${SERVICE_NAME}.service" || return 1
   if ! systemctl is-active --quiet "${SERVICE_NAME}.service"; then
@@ -94,6 +96,7 @@ restart_service() {
 
 run_python_env() {
   runuser -u "$SERVICE_USER" -- env HOME="$INSTALL_DIR" bash -c '
+    set -e
     set -a
     source "$1"
     set +a
@@ -111,8 +114,8 @@ wait_ready() {
   [[ "$host" == "0.0.0.0" || "$host" == "::" ]] && host="127.0.0.1"
   url="http://${host}:${port}/ready"
   for attempt in {1..20}; do
-    if run_python_env "$VENV_DIR/bin/python" -c 'import requests,sys; r=requests.get(sys.argv[1],timeout=2); raise SystemExit(0 if r.status_code == 200 else 1)' "$url" >/dev/null 2>&1; then
-      log "ready: $url"
+    if run_python_env "$VENV_DIR/bin/python" "$INSTALL_DIR/messenger_readiness.py" "$url" --timeout 2 >/dev/null 2>&1; then
+      log "runtime и все включённые мессенджеры готовы: $url"
       return 0
     fi
     sleep 1
@@ -122,7 +125,8 @@ wait_ready() {
 
 run_registration() {
   [[ "$REGISTER" -eq 1 ]] || return 0
-  run_python_env "$VENV_DIR/bin/python" "$INSTALL_DIR/register_messenger_webhooks.py"
+  run_python_env "$VENV_DIR/bin/python" "$INSTALL_DIR/register_messenger_commands.py" || return 1
+  run_python_env "$VENV_DIR/bin/python" "$INSTALL_DIR/register_messenger_webhooks.py" --strict
 }
 
 show_status() {
@@ -167,7 +171,7 @@ case "$ACTION" in
       fail "Runtime не прошёл /ready; возвращён Telegram-only режим"
     fi
     if ! run_registration; then
-      fail "Runtime запущен, но регистрация webhook не прошла. Исправьте HTTPS/env и повторите регистрацию; endpoint оставлен активным, чтобы не создавать недоступные частичные подписки."
+      fail "Runtime запущен, но регистрация меню или webhook не прошла. Исправьте HTTPS/env и повторите регистрацию; endpoint оставлен активным, чтобы не создавать недоступные частичные подписки."
     fi
     show_status
     ;;

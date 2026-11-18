@@ -314,14 +314,23 @@ GOOGLE_APPLICATION_CREDENTIALS=/path/outside/repo/credentials.json
 ## Deploy
 
 ```bash
-git checkout telegram-bot
-git pull --ff-only
+git fetch origin refs/heads/main:refs/remotes/origin/main
+git checkout main
+git pull --ff-only origin main
 python -m unittest discover -s tests
 python runtime_check.py
 sudo bash deploy_telegram_bot.sh --yes
 ```
 
 MAX/VK регистрация: [`docs/MESSENGER_REGISTRATION.md`](docs/MESSENGER_REGISTRATION.md).
+
+Production-таймер следит за `main`; рабочая ветка разработки — `telegram-bot`.
+Обновление старых таймеров и критерии полного деплоя: [DEPLOY.md](DEPLOY.md).
+Команды Telegram, включая `/icing`, синхронизируются автоматически после
+готовности runtime, затем проверяются через Bot API. Ошибка этого этапа
+останавливает выпуск и не записывает успешный `source_rev`.
+Новый `/start` показывает актуальные кнопки. Старые inline-сообщения в истории
+чата не переписываются автоматически.
 
 ## Важно
 

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Надёжное автообновление GFS Profile Bot из рабочей ветки.
+# Надёжное автообновление GFS Profile Bot из production-ветки main.
 # origin/<branch> является источником истины для deployment-checkout.
 # Предназначен для запуска root-oneshot service по systemd timer.
 
 set -Eeuo pipefail
 
-DEFAULT_BRANCH="telegram-bot"
+DEFAULT_BRANCH="main"
 DEFAULT_REMOTE="origin"
 DEFAULT_INSTALL_DIR="/opt/gfs_profile"
 DEFAULT_SERVICE_NAME="gfs-profile-bot"
@@ -13,7 +13,10 @@ DEFAULT_STATE_DIR="/var/lib/gfs-profile-bot"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${AUTO_UPDATE_REPO_ROOT:-$SCRIPT_DIR}"
-BRANCH="${AUTO_UPDATE_BRANCH:-$DEFAULT_BRANCH}"
+REQUESTED_BRANCH="${AUTO_UPDATE_BRANCH:-$DEFAULT_BRANCH}"
+BRANCH="$REQUESTED_BRANCH"
+BRANCH_PINNED="${AUTO_UPDATE_BRANCH_PINNED:-0}"
+tracking_branch=""
 REMOTE="${AUTO_UPDATE_REMOTE:-$DEFAULT_REMOTE}"
 INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 SERVICE_NAME="${SERVICE_NAME:-$DEFAULT_SERVICE_NAME}"
@@ -53,7 +56,8 @@ usage() {
 
 Переменные:
   AUTO_UPDATE_REPO_ROOT   git checkout (по умолчанию каталог скрипта)
-  AUTO_UPDATE_BRANCH      ветка (по умолчанию telegram-bot)
+  AUTO_UPDATE_BRANCH      ветка (по умолчанию main)
+  AUTO_UPDATE_BRANCH_PINNED  1 запрещает миграцию явно выбранной ветки
   AUTO_UPDATE_REMOTE      remote (по умолчанию origin)
   AUTO_UPDATE_STATE_DIR   каталог состояния
   AUTO_UPDATE_LOCK_FILE   lock-файл updater
@@ -85,6 +89,14 @@ state_value() {
   sed -n "s/^${key}=//p" "$STATE_FILE" | tail -n 1
 }
 
+# Старые units содержат AUTO_UPDATE_BRANCH=telegram-bot. После успешной
+# миграции сохраняем main отдельно от результата последней попытки deploy.
+# Явная custom/pinned ветка всегда имеет приоритет над этим состоянием.
+tracking_branch="$(state_value tracking_branch)"
+if [[ "$REQUESTED_BRANCH" == "telegram-bot" && "$BRANCH_PINNED" != "1" && "$tracking_branch" == "main" ]]; then
+  BRANCH="main"
+fi
+
 write_state() {
   local result="$1" local_rev="${2:-}" remote_rev="${3:-}" deployed_rev="${4:-}" blocked_rev="${5:-}" message="${6:-}"
   mkdir -p "$STATE_DIR"
@@ -94,6 +106,9 @@ write_state() {
     printf 'last_check_at=%s\n' "$(now_utc)"
     printf 'result=%s\n' "$result"
     printf 'branch=%s\n' "$BRANCH"
+    printf 'requested_branch=%s\n' "$REQUESTED_BRANCH"
+    printf 'effective_branch=%s\n' "$BRANCH"
+    printf 'tracking_branch=%s\n' "$tracking_branch"
     printf 'local_rev=%s\n' "$local_rev"
     printf 'remote_rev=%s\n' "$remote_rev"
     printf 'deployed_rev=%s\n' "$deployed_rev"
@@ -112,6 +127,8 @@ write_state() {
 print_status() {
   echo "repo=$REPO_ROOT"
   echo "branch=$BRANCH"
+  echo "requested_branch=$REQUESTED_BRANCH"
+  echo "effective_branch=$BRANCH"
   echo "remote=$REMOTE"
   echo "state=$STATE_FILE"
   if [[ -f "$STATE_FILE" ]]; then
@@ -160,10 +177,67 @@ resolve_installed_rev() {
   printf '%s' "$resolved"
 }
 
-revision_matches() {
-  local full="$1" known="$2"
-  [[ -n "$full" && -n "$known" ]] || return 1
-  [[ "$full" == "$known" || "$full" == "$known"* || "$known" == "$full"* ]]
+installed_value() {
+  local key="$1"
+  [[ -f "$INSTALL_DIR/.install-state" ]] || return 0
+  sed -n "s/^${key}=//p" "$INSTALL_DIR/.install-state" | tail -n 1
+}
+
+installed_revision_matches() {
+  local expected="$1" mode="${2:-legacy}" actual status pending
+  actual="$(resolve_installed_rev)"
+  status="$(installed_value deploy_status)"
+  pending="$(installed_value pending_source_rev)"
+  [[ "$actual" == "$expected" && -z "$pending" ]] || return 1
+  if [[ "$mode" == "strict" ]]; then
+    [[ "$status" == "complete" && "$(installed_value source_rev)" == "$expected" ]]
+  else
+    # Старые релизы ещё не записывали deploy_status. Новый partial deploy
+    # не считается актуальной установкой даже при совпадении source_rev.
+    [[ -z "$status" || "$status" == "complete" ]]
+  fi
+}
+
+confirm_tracking_branch() {
+  if [[ "$BRANCH" == "main" && "$BRANCH_PINNED" != "1" ]]; then
+    tracking_branch="main"
+  fi
+}
+
+consider_main_migration() {
+  [[ "$BRANCH" == "telegram-bot" && "$BRANCH_PINNED" != "1" ]] || return 0
+  local main_rev legacy_rev
+  # Нельзя переходить на старый main только потому, что ветка существует:
+  # она должна включать свежий legacy head и реально установленный commit.
+  if ! run_git fetch "$REMOTE" "+refs/heads/main:refs/remotes/$REMOTE/main"; then
+    log "main пока недоступен; сохраняю текущий канал $BRANCH"
+    return 0
+  fi
+  main_rev="$(run_git rev-parse "refs/remotes/$REMOTE/main")"
+  legacy_rev="$remote_rev"
+  if [[ "$(run_git rev-parse --is-shallow-repository)" == "true" ]] \
+    && { ! run_git merge-base --is-ancestor "$legacy_rev" "$main_rev" >/dev/null 2>&1 \
+      || { [[ -n "$deployed_rev" ]] && ! run_git merge-base --is-ancestor "$deployed_rev" "$main_rev" >/dev/null 2>&1; }; }; then
+    log "Уточняю историю shallow checkout для проверки перехода на main"
+    if run_git fetch --deepen=256 "$REMOTE" \
+      "+refs/heads/telegram-bot:refs/remotes/$REMOTE/telegram-bot" \
+      "+refs/heads/main:refs/remotes/$REMOTE/main"; then
+      legacy_rev="$(run_git rev-parse "refs/remotes/$REMOTE/telegram-bot")"
+      main_rev="$(run_git rev-parse "refs/remotes/$REMOTE/main")"
+      remote_rev="$legacy_rev"
+    fi
+  fi
+  if ! run_git merge-base --is-ancestor "$legacy_rev" "$main_rev" >/dev/null 2>&1; then
+    log "main ещё не содержит $REMOTE/telegram-bot ${legacy_rev:0:12}; миграция отложена"
+    return 0
+  fi
+  if [[ -n "$deployed_rev" ]] && ! run_git merge-base --is-ancestor "$deployed_rev" "$main_rev" >/dev/null 2>&1; then
+    log "Не подтверждена преемственность установленного SHA в main; миграция отложена"
+    return 0
+  fi
+  BRANCH="main"
+  remote_rev="$main_rev"
+  log "main содержит legacy и установленный релиз; проверяю переход на production-ветку"
 }
 
 save_fallback_dirty_backup() {
@@ -239,6 +313,7 @@ installed_rev="$(resolve_installed_rev)"
 if [[ -n "$installed_rev" ]]; then
   deployed_rev="$installed_rev"
 fi
+consider_main_migration
 
 if [[ "$remote_rev" == "$blocked_rev" && "$FORCE_RETRY" -ne 1 ]]; then
   now_epoch="$(date +%s)"
@@ -300,7 +375,8 @@ if [[ "$candidate_rev" != "$remote_rev" ]]; then
   exit 1
 fi
 
-if revision_matches "$candidate_rev" "$deployed_rev"; then
+if installed_revision_matches "$candidate_rev"; then
+  confirm_tracking_branch
   write_state "up-to-date" "$candidate_rev" "$remote_rev" "$deployed_rev" "$blocked_rev" "Checkout принудительно синхронизирован с remote; /opt уже соответствует commit"
   log "Уже актуально и развёрнуто: ${candidate_rev:0:12}"
   exit 0
@@ -308,11 +384,16 @@ fi
 
 log "Запускаю deploy ${candidate_rev:0:12}"
 if DEPLOY_LOCK_PATH="$INNER_DEPLOY_LOCK_FILE" bash "$DEPLOY_SCRIPT" --yes; then
-  blocked_rev=""
-  blocked_at_epoch=""
-  write_state "deployed" "$candidate_rev" "$remote_rev" "$candidate_rev" "" "Remote синхронизирован и deploy завершён"
-  log "Готово: ${candidate_rev:0:12}"
-  exit 0
+  if installed_revision_matches "$candidate_rev" strict; then
+    blocked_rev=""
+    blocked_at_epoch=""
+    confirm_tracking_branch
+    write_state "deployed" "$candidate_rev" "$remote_rev" "$candidate_rev" "" "Remote синхронизирован; readiness, меню и deploy подтверждены install-state"
+    log "Готово: ${candidate_rev:0:12}"
+    exit 0
+  fi
+  deploy_code=1
+  log "Deploy вернул 0, но не подтвердил complete и точный source_rev; результат не принят"
 else
   deploy_code=$?
 fi
@@ -335,7 +416,8 @@ fi
 run_git clean -fd >/dev/null || true
 
 rollback_ok=0
-if DEPLOY_LOCK_PATH="$INNER_DEPLOY_LOCK_FILE" bash "$DEPLOY_SCRIPT" --yes; then
+if DEPLOY_LOCK_PATH="$INNER_DEPLOY_LOCK_FILE" bash "$DEPLOY_SCRIPT" --yes \
+  && installed_revision_matches "$rollback_rev"; then
   rollback_ok=1
   deployed_rev="$rollback_rev"
   log "Rollback deploy завершён: ${rollback_rev:0:12}"

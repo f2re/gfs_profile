@@ -168,6 +168,14 @@ class MaxApiClient:
         items = payload.get("subscriptions") or []
         return [dict(item) for item in items if isinstance(item, dict)]
 
+    def get_bot_info(self) -> dict[str, Any]:
+        return self._request("GET", "/me")
+
+    def set_commands(self, commands: list[dict[str, str]]) -> dict[str, Any]:
+        # MAX Bot API, verified 2026-11-18: PATCH /me/commands, not PATCH /me.
+        # https://dev.max.ru/docs-api/methods/PATCH/me/commands/
+        return self._request("PATCH", "/me/commands", json={"commands": commands})
+
     def subscribe(self, url: str, secret: str, update_types: list[str]) -> dict[str, Any]:
         return self._request(
             "POST",

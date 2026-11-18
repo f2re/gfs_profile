@@ -283,11 +283,12 @@ sudo bash setup_messenger_bots.sh --status
 sudo systemctl status gfs-profile-bot.service
 ```
 
-## Deploy / update
+## Обновление и автоматический деплой
 
 ```bash
-git checkout telegram-bot
-git pull --ff-only
+git fetch origin refs/heads/main:refs/remotes/origin/main
+git checkout main
+git pull --ff-only origin main
 sudo bash deploy_telegram_bot.sh --yes
 ```
 
@@ -301,7 +302,20 @@ Deploy сохраняет:
 data/basemap/
 ```
 
-После restart проверяется `/ready`; Telegram commands и MAX/VK webhook registrations выполняются после готовности runtime. Ошибка optional platform registration не должна превращать здоровые платформы в outage.
+Разработка ведётся в `telegram-bot`, production-обновления публикуются в `main`.
+Установленный через `sudo bash install_auto_update.sh --yes` таймер опрашивает
+`origin/main` и запускает тот же деплой. Legacy-таймер, следивший за
+`telegram-bot`, переходит на `main` после получения нового скрипта и проверки,
+что выпуск слит. Явно закреплённые тестовые ветки сохраняются.
+
+После перезапуска проверяется `/ready`, затем обновляются команды Telegram/MAX
+с проверкой чтением через API и регистрации webhook MAX/VK. Только завершённая
+цепочка записывает успешный `source_rev`. При ошибке автообновлятор выполняет
+откат; отключённые платформы не мешают работе включённых. `/start` после
+обновления открывает новое меню, включая «Обледенение».
+
+Состояние: `sudo bash install_auto_update.sh --status`.
+Переход старой установки, ограничения и проверки описаны в [DEPLOY.md](DEPLOY.md).
 
 Автообновление: [`docs/AUTO_UPDATE.md`](docs/AUTO_UPDATE.md).
 

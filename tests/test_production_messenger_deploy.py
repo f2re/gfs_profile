@@ -30,6 +30,8 @@ class ProductionMessengerDeployTests(unittest.TestCase):
         self.assertIn("ExecStart=$VENV_DIR/bin/python $INSTALL_DIR/messenger_launcher.py", install)
         self.assertNotIn("ExecStart=$VENV_DIR/bin/python $INSTALL_DIR/telegram_bot.py", install)
         self.assertIn("messenger_config_check.py", install)
+        self.assertIn("messenger_readiness.py", install)
+        self.assertIn("register_messenger_commands.py", install)
         self.assertIn("/ready", install)
         self.assertIn("register_messenger_webhooks.py", install)
 
@@ -38,6 +40,8 @@ class ProductionMessengerDeployTests(unittest.TestCase):
         self.assertIn("ExecStart=$VENV_DIR/bin/python $INSTALL_DIR/messenger_launcher.py", text)
         self.assertIn("ensure_runtime_config", text)
         self.assertIn("messenger_config_check.py", text)
+        self.assertIn("messenger_readiness.py", text)
+        self.assertIn("register_messenger_commands.py", text)
         self.assertIn("register_messenger_webhooks.py", text)
         self.assertIn("/ready", text)
         main = text[text.index("main() {") :]

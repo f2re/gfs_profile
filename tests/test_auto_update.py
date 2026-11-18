@@ -30,6 +30,8 @@ class AutoUpdateScriptTests(unittest.TestCase):
         self.assertIn("OnUnitInactiveSec=${INTERVAL}s", text)
         self.assertIn("User=root", text)
         self.assertIn("AUTO_UPDATE_BRANCH=$BRANCH", text)
+        self.assertIn('DEFAULT_BRANCH="main"', text)
+        self.assertIn("AUTO_UPDATE_BRANCH_PINNED=$BRANCH_PINNED", text)
         self.assertIn("systemctl enable --now", text)
         self.assertIn("git -C \"$REPO_ROOT\" ls-remote --exit-code", text)
 
@@ -46,15 +48,15 @@ class AutoUpdateScriptTests(unittest.TestCase):
             install.mkdir()
 
             run("git", "init", "--bare", str(remote))
-            run("git", "init", "-b", "telegram-bot", str(seed))
+            run("git", "init", "-b", "main", str(seed))
             run("git", "config", "user.email", "test@example.com", cwd=seed)
             run("git", "config", "user.name", "Test", cwd=seed)
             (seed / "app.txt").write_text("v1\n", encoding="utf-8")
             run("git", "add", ".", cwd=seed)
             run("git", "commit", "-m", "init", cwd=seed)
             run("git", "remote", "add", "origin", str(remote), cwd=seed)
-            run("git", "push", "-u", "origin", "telegram-bot", cwd=seed)
-            run("git", "clone", "-b", "telegram-bot", str(remote), str(work))
+            run("git", "push", "-u", "origin", "main", cwd=seed)
+            run("git", "clone", "-b", "main", str(remote), str(work))
 
             (work / "auto_update_telegram_bot.sh").write_text(UPDATER.read_text(encoding="utf-8"), encoding="utf-8")
             deploy = work / "deploy_telegram_bot.sh"
@@ -64,7 +66,7 @@ class AutoUpdateScriptTests(unittest.TestCase):
                 "if [[ -f BROKEN ]]; then echo FAIL >> \"${TEST_DEPLOY_LOG}\"; exit 42; fi\n"
                 "rev=$(git rev-parse HEAD)\n"
                 "echo \"$rev\" >> \"${TEST_DEPLOY_LOG}\"\n"
-                "printf 'source_rev=%s\\n' \"${rev:0:7}\" > \"${INSTALL_DIR}/.install-state\"\n",
+                "printf 'source_rev=%s\\ndeploy_status=complete\\n' \"${rev}\" > \"${INSTALL_DIR}/.install-state\"\n",
                 encoding="utf-8",
             )
             deploy.chmod(0o755)
@@ -73,7 +75,7 @@ class AutoUpdateScriptTests(unittest.TestCase):
             run("git", "config", "user.name", "Test", cwd=work)
             run("git", "add", ".", cwd=work)
             run("git", "commit", "-m", "scripts", cwd=work)
-            run("git", "push", "origin", "telegram-bot", cwd=work)
+            run("git", "push", "origin", "main", cwd=work)
             run("git", "pull", "--ff-only", cwd=seed)
 
             current = run("git", "rev-parse", "HEAD", cwd=work).stdout.strip()
@@ -158,15 +160,15 @@ class AutoUpdateScriptTests(unittest.TestCase):
             install.mkdir()
 
             run("git", "init", "--bare", str(remote))
-            run("git", "init", "-b", "telegram-bot", str(seed))
+            run("git", "init", "-b", "main", str(seed))
             run("git", "config", "user.email", "test@example.com", cwd=seed)
             run("git", "config", "user.name", "Test", cwd=seed)
             (seed / "app.txt").write_text("base\n", encoding="utf-8")
             run("git", "add", ".", cwd=seed)
             run("git", "commit", "-m", "base", cwd=seed)
             run("git", "remote", "add", "origin", str(remote), cwd=seed)
-            run("git", "push", "-u", "origin", "telegram-bot", cwd=seed)
-            run("git", "clone", "-b", "telegram-bot", str(remote), str(work))
+            run("git", "push", "-u", "origin", "main", cwd=seed)
+            run("git", "clone", "-b", "main", str(remote), str(work))
             run("git", "config", "user.email", "test@example.com", cwd=work)
             run("git", "config", "user.name", "Test", cwd=work)
 
@@ -176,14 +178,14 @@ class AutoUpdateScriptTests(unittest.TestCase):
                 "#!/usr/bin/env bash\n"
                 "set -e\n"
                 "rev=$(git rev-parse HEAD)\n"
-                "printf 'source_rev=%s\\n' \"${rev:0:7}\" > \"${INSTALL_DIR}/.install-state\"\n",
+                "printf 'source_rev=%s\\ndeploy_status=complete\\n' \"${rev}\" > \"${INSTALL_DIR}/.install-state\"\n",
                 encoding="utf-8",
             )
             deploy.chmod(0o755)
             (work / "auto_update_telegram_bot.sh").chmod(0o755)
             run("git", "add", ".", cwd=work)
             run("git", "commit", "-m", "scripts", cwd=work)
-            run("git", "push", "origin", "telegram-bot", cwd=work)
+            run("git", "push", "origin", "main", cwd=work)
             run("git", "pull", "--ff-only", cwd=seed)
 
             deployed = run("git", "rev-parse", "HEAD", cwd=work).stdout.strip()

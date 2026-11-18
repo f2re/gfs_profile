@@ -85,6 +85,25 @@ https://platform-api2.max.ru
 
 Token используется только через `Authorization`. Production использует Webhook subscription для `bot_started`, `message_created`, `message_callback`. Endpoint проверяет `X-Max-Bot-Api-Secret`, быстро отвечает 200 и передаёт тяжёлую работу в asyncio-task текущего процесса. Отдельный production Long Polling для того же бота не запускать.
 
+### Обновление приложения и меню
+
+Production получает изменения из `main` через systemd-таймер и штатный
+`deploy_telegram_bot.sh`. Разработка остаётся в `telegram-bot`; автоматический
+переход установленного legacy-таймера описан в [DEPLOY.md](DEPLOY.md).
+
+После готовности всех включённых платформ деплой запускает
+`register_messenger_commands.py`. Список подсказок команд MAX, включая `/icing`,
+берётся из общего каталога `messenger/commands.py` и отправляется через
+[`PATCH /me/commands`](https://dev.max.ru/docs-api/methods/PATCH/me/commands/).
+Результат проверяется чтением `commands` через
+[`GET /me`](https://dev.max.ru/docs-api/methods/GET/me).
+Официальные методы сверены 18 ноября 2026 года. Токен передаётся в заголовке
+`Authorization`; вызовы регистрации не отправляют сообщения пользователям.
+
+Отключённый MAX пропускается. Сбой регистрации включённого MAX не записывается
+как успешный деплой. Кнопки продукции создаются общим router при новом `/start`;
+старые inline-сообщения в истории автоматически не переписываются.
+
 ## 4. Продукты
 
 Common GFS services:
