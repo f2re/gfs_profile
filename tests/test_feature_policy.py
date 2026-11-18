@@ -190,7 +190,7 @@ with TestClient(runtime.app) as client:
     assert client.get('/ready').status_code==200
     health=client.get('/health').json()
     assert health['status']=='ok',health
-    assert len(health['products'])==7
+    assert set(health['products'])=={'profile','aero','windgram','cloudgram','map','icing','meteogram','route'}
     assert 'weathernext' not in json.dumps(health).lower()
     assert not any('/wn3' in p for p in client.get('/openapi.json').json()['paths'])
     assert client.post('/api/wn3/product',headers={'x-api-key':'old-key'},json={'lat':55,'lon':37}).status_code==404

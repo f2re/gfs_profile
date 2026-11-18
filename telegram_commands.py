@@ -14,6 +14,7 @@ _ALL_BOT_COMMANDS: tuple[BotCommand, ...] = (
     BotCommand("cloudgram", "☁️ Облака, осадки, грозы"),
     BotCommand("meteogram", "📊 Метеограмма и отчёт DOCX/PDF"),
     BotCommand("map", "🗺️ Карта, серия, анимация"),
+    BotCommand("icing", "❄ Обледенение: вода и слои"),
     BotCommand("wn3", "🛰 WeatherNext 3"),
     BotCommand("schedule", "🕒 Автоматическая отправка"),
     BotCommand("settings", "⚙️ Мои точки и параметры"),

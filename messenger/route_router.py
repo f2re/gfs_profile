@@ -140,6 +140,7 @@ class RouteMessengerRouter(MeteogramMessengerRouter):
             [UiButton("📈 Профиль", "callback", encode_callback("product", "open", "profile")), UiButton("🧾 Аэродиаграмма", "callback", encode_callback("product", "open", "aero"))],
             [UiButton("🟦 Срок × уровень", "callback", encode_callback("product", "open", "windgram")), UiButton("☁ Облака", "callback", encode_callback("product", "open", "cloudgram"))],
             [UiButton("🗺 Карта", "callback", encode_callback("product", "open", "map")), UiButton("📊 Метеограмма", "callback", encode_callback("product", "open", "meteogram"))],
+            [UiButton("❄ Обледенение", "callback", encode_callback("product", "open", "icing"))],
             [UiButton("✈ Маршрут", "callback", encode_callback("product", "open", "route")), UiButton("📍 Геолокация", "request_location")],
         ])
         await gateway.send_text(event.chat_id, START_TEXT, keyboard=UiKeyboard.from_rows(rows))

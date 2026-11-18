@@ -190,6 +190,7 @@ class WeatherNext3MessengerRouter(ScheduleMessengerRouter):
             [UiButton("📈 Профиль", "callback", encode_callback("product", "open", "profile")), UiButton("🧾 Аэродиаграмма", "callback", encode_callback("product", "open", "aero"))],
             [UiButton("🟦 Срок × уровень", "callback", encode_callback("product", "open", "windgram")), UiButton("☁ Облака", "callback", encode_callback("product", "open", "cloudgram"))],
             [UiButton("🗺 Карта GFS", "callback", encode_callback("product", "open", "map")), UiButton("📊 Метеограмма", "callback", encode_callback("product", "open", "meteogram"))],
+            [UiButton("❄ Обледенение", "callback", encode_callback("product", "open", "icing"))],
             [UiButton("🛰 WeatherNext 3", "callback", encode_callback("product", "open", "weathernext3")), UiButton("✈ Маршрут", "callback", encode_callback("product", "open", "route"))],
             [UiButton("🕒 Расписания", "callback", encode_callback("schedule", "open")), UiButton("⚙ Настройки", "callback", encode_callback("settings", "open"))],
             [UiButton("📍 Геолокация", "request_location")],

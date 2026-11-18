@@ -51,6 +51,8 @@ def configure_process_resources(resources: RuntimeResources = RESOURCES) -> None
     telegram_bot.MAX_CONCURRENT_GEOCODE = resources.geocode_limit
     telegram_meteogram.METEOGRAM_SEMAPHORE = resources.meteogram_semaphore
     telegram_meteogram.MAX_CONCURRENT_METEOGRAM = resources.meteogram_limit
+    import telegram_icing
+    telegram_icing.set_router(ROUTER)
     if weathernext3_enabled():
         import telegram_weathernext3
         telegram_weathernext3.WN3_SEMAPHORE = resources.weathernext3_semaphore
@@ -128,6 +130,7 @@ async def lifespan(app: FastAPI):
         app.state.runtime_ready = False
         await SCHEDULER.shutdown()
         await SERVICE.tasks.shutdown()
+        await ROUTER.shutdown_icing()
         if weathernext3_enabled():
             await ROUTER.shutdown_wn3()
         try: await _stop_telegram(telegram_application)
@@ -152,7 +155,7 @@ async def health() -> dict[str, object]:
         "runtime": "multi-messenger",
         "platforms": {name: item.get("state") == "ready" for name, item in states.items()},
         "platform_status": states,
-        "products": ["profile", "aero", "windgram", "cloudgram", "map", "meteogram", "route"],
+        "products": ["profile", "aero", "windgram", "cloudgram", "map", "icing", "meteogram", "route"],
         "features": ["saved_recipes", "settings", "schedules"],
         "scheduler": {"last_error": SCHEDULER.last_error},
         "resources": RESOURCES.snapshot(),

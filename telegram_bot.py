@@ -40,6 +40,7 @@ def _clear_pending(context):
     context.user_data.pop("schedule_profile_setup", None)
     context.user_data.pop("schedule_route_setup", None)
     context.user_data.pop("weathernext3_wizard", None)
+    context.user_data.pop("icing_wizard", None)
 
 
 _concise_start_product_wizard = _start_product_wizard
@@ -110,6 +111,8 @@ def build_application():
     telegram_saved_recipes.register(application, globals())
     telegram_personal_ux.register(application, globals())
     telegram_concise_ux.register(application, globals())
+    import telegram_icing
+    telegram_icing.register(application)
     if weathernext3_enabled():
         telegram_weathernext3.register(application)
     else:

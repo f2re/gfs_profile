@@ -95,6 +95,7 @@ Common GFS services:
 /windgram
 /cloudgram
 /map
+/icing
 /meteogram
 /route
 ```
@@ -149,6 +150,26 @@ places
 ```
 
 MP4 отправляется как native `video` attachment.
+
+### `/icing`
+
+`/icing` открывает региональные карты условий обледенения без ввода города.
+Район берётся из `ICING_BBOX` (по умолчанию `-15,100,34,80`); начальный срок +24 ч.
+Параметры, кнопки и расчёт общие с Telegram/VK. Доступны вода на уровне,
+мощность/границы/число слоёв по Годске, максимум водности и его высота, запас воды,
+сравнение методов; сроки до +384 с пагинацией и изолинии 100/500 гп.м.
+
+```text
+/icing product=godske_sum +24 contours=100
+/icing product=slw_level +12 level=850
+/icing product=slwp +48
+```
+
+Callback подтверждается до расчёта, статус обновляется в одной карточке,
+результаты передаются через штатный MaxGateway как PNG и CSV. `/status` и
+`/cancel` относятся к активной операции. Продукция явно обозначается как модель
+GFS; мощность слоя не переводится в интенсивность. WAFS и неготовые продукты
+в меню отсутствуют. Подробности: [ICING_MAPS_SPEC.md](docs/specs/ICING_MAPS_SPEC.md).
 
 ### `/meteogram`
 
@@ -240,6 +261,8 @@ sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
 /windgram Москва
 /cloudgram Москва
 /map Москва
+/icing
+/icing product=slw_level +24 level=850
 /meteogram Москва source=gfs days=5
 /wn3 Москва +24
 /wn3 Москва kind=clouds to=24 step=3 radius=150

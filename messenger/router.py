@@ -18,11 +18,12 @@ LEAD_PAGE_SIZE = 12
 START_TEXT = (
     "🌦 GFS 0.25 — модельный прогноз\n"
     "Укажите город, координаты или геолокацию. Для быстрого профиля: Москва +24.\n\n"
-    "Продукты: /profile, /aero, /windgram, /cloudgram, /meteogram, /map.\n"
+    "Продукты: /profile, /aero, /windgram, /cloudgram, /meteogram, /map, /icing.\n"
     "GFS — модель, не наблюдение и не радиозонд."
 )
 HELP_TEXT = (
-    "Команды: /profile, /aero, /windgram, /cloudgram, /meteogram, /map, /status, /cancel.\n"
+    "Команды: /profile, /aero, /windgram, /cloudgram, /meteogram, /map, /icing, /status, /cancel.\n"
+    "/icing — карты обледенения по заданному району; город вводить не требуется.\n"
     "Пример: Москва +24 или /profile Москва +24. Сроки GFS доступны до +384 ч."
 )
 

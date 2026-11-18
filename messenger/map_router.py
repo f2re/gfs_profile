@@ -9,7 +9,7 @@ from typing import Any, Callable
 from geocode import GeoPoint
 
 from .callback_codec import CallbackCodecError, decode_callback, encode_callback
-from .cloudgram_router import CloudgramMessengerRouter
+from .icing_router import IcingMessengerRouter
 from .contracts import MessengerGateway, NormalizedEvent, ProgressEvent, UiButton, UiKeyboard
 from .map_service import (
     DEFAULT_MAP_PARAMS,
@@ -122,10 +122,11 @@ def _keyboard(params: dict[str, Any]) -> UiKeyboard:
         [UiButton(("✓ " if int(params["radius"]) == value else "") + f"{value} км", "callback", encode_callback("map", "radius", value)) for value in MAP_RADII],
         [UiButton(("✓ " if params["basemap"] == key else "") + label, "callback", encode_callback("map", "base", key)) for key, label in MAP_BASEMAP_CHOICES],
         [UiButton("📍 Другая точка", "callback", encode_callback("map", "point")), UiButton("Отмена", "callback", encode_callback("map", "cancel"))],
+        [UiButton("❄ Обледенение по району", "callback", encode_callback("product", "open", "icing"))],
     ])
 
 
-class MapMessengerRouter(CloudgramMessengerRouter):
+class MapMessengerRouter(IcingMessengerRouter):
     def __init__(self, dependencies: RouterDependencies, *, map_builder: Callable[..., Any] = build_map_product_result, map_parser: Callable[[str], ParsedMapInput] = parse_map_input, **kwargs: Any) -> None:
         super().__init__(dependencies, **kwargs)
         self.map_builder = map_builder
@@ -149,6 +150,7 @@ class MapMessengerRouter(CloudgramMessengerRouter):
             [UiButton("📈 Профиль", "callback", encode_callback("product", "open", "profile")), UiButton("🧾 Аэродиаграмма", "callback", encode_callback("product", "open", "aero"))],
             [UiButton("🟦 Срок × уровень", "callback", encode_callback("product", "open", "windgram")), UiButton("☁ Облака", "callback", encode_callback("product", "open", "cloudgram"))],
             [UiButton("🗺 Карта", "callback", encode_callback("product", "open", "map")), UiButton("📍 Геолокация", "request_location")],
+            [UiButton("❄ Обледенение", "callback", encode_callback("product", "open", "icing"))],
         ])
         await gateway.send_text(event.chat_id, START_TEXT, keyboard=UiKeyboard.from_rows(rows))
 

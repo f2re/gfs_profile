@@ -13,7 +13,7 @@ class TelegramCommandTests(unittest.TestCase):
             names,
             [
                 "start", "help", "profile", "route", "aero", "windgram",
-                "cloudgram", "meteogram", "map", "schedule", "settings",
+                "cloudgram", "meteogram", "map", "icing", "schedule", "settings",
                 "cycle", "status", "cancel",
             ],
         )

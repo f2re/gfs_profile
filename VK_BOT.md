@@ -126,6 +126,7 @@ message_event
 /windgram
 /cloudgram
 /map
+/icing
 /meteogram
 /route
 ```
@@ -135,6 +136,26 @@ message_event
 ### `/map`
 
 Default: MP4 animation `+0…+48 ч`, step 3, radius 100 км, places. VK gateway сначала использует native video upload (`video.save`). Если конкретный token/API не позволяет video upload, применяется document fallback; результат не теряется.
+
+### `/icing`
+
+Региональные карты условий обледенения используют тот же общий router и service,
+что Telegram/MAX. Команда `/icing` не запрашивает город: район задаёт `ICING_BBOX`
+(по умолчанию `-15,100,34,80`), первый срок +24 ч. Продукты: вода на уровне,
+мощность и границы слоёв по Годске, число слоёв, максимум водности и его высота,
+интегральный запас воды, сравнение методов. Доступны PNG/CSV, выбор срока до
++384 с пагинацией, уровень, изолинии 100/500 гп.м, статус и отмена.
+
+```text
+/icing product=godske_sum +24 contours=100
+/icing product=slw_level +12 level=850
+/icing product=slwp +48
+```
+
+Мощность слоя не является интенсивностью обледенения. Модель, фактический цикл
+и срок действия указаны в результате. Не реализованные WAFS, осадки и временные
+продукты не показываются как доступные. Методика и ограничения:
+[ICING_MAPS_SPEC.md](docs/specs/ICING_MAPS_SPEC.md).
 
 ### `/meteogram`
 
@@ -214,6 +235,8 @@ sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
 /windgram Москва
 /cloudgram Москва
 /map Москва
+/icing
+/icing product=slw_level +24 level=850
 /meteogram Москва source=gfs days=5
 /route Москва -> Санкт-Петербург
 /settings

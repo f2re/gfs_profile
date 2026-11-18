@@ -142,6 +142,7 @@ class TelegramFlowSmokeTests(unittest.TestCase):
             "wiz:run",
             "wiz:point",
             "wiz:cancel",
+            "home:icing",
         )
         for state in states:
             callbacks = [

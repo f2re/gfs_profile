@@ -41,6 +41,7 @@ Telegram сохраняет native wizard/UI, но основные продук
 /cloudgram   облака, осадки, видимость, риски GFS
 /meteogram   модель/ансамбль, PNG/DOCX/PDF
 /map         карта, серия, анимация GFS
+/icing       региональные карты условий обледенения, PNG/CSV
 /wn3         WeatherNext 3: point/meteogram/cloud/precip maps
 /schedule    автоматическая отправка
 /settings    точки, параметры и recipes
@@ -57,6 +58,7 @@ Telegram сохраняет native wizard/UI, но основные продук
 /windgram  → messenger/windgram_service.py
 /cloudgram → messenger/cloudgram_service.py
 /map       → messenger/map_service.py
+/icing     → messenger/icing_service.py
 /meteogram → messenger/meteogram_service.py
 /route     → messenger/route_service.py
 /wn3       → messenger/weathernext3_service.py
@@ -145,6 +147,7 @@ Route endpoints не заменяют active point.
 /windgram    wind, +0…+120, step 6, top 500 hPa
 /cloudgram   Подробно, +0…+72, step 3
 /map         MP4 +0…+48, step 3, radius 100, places
+/icing       мощность по Годске, +24, район ICING_BBOX, изолинии 500 гп.м
 /meteogram   GFS, 5 суток, PNG
 /wn3         point +24; карты: +1…+48, step 3, radius 150
 /route       +24, 300 км/ч, simple, grid 50 км
@@ -195,6 +198,31 @@ UI: `Подробно/Кратко`. Hazard/thunder — модельная ди�
 ```
 
 Default animation: +0…+48 ч, step 3, 17 кадров, radius 100 км. Для длинных диапазонов step автоматически приводится к лимиту кадров. Telegram отправляет silent H.264/MP4 с fallback при необходимости.
+
+## `/icing`
+
+Раздел «Обледенение» открывается из меню или командой `/icing`. Город не нужен:
+используется `ICING_BBOX=-15,100,34,80`. Точка профиля сохраняется. Общий router
+обслуживает Telegram, MAX и VK; Telegram передаёт ему нормализованные события и
+отправляет изображения/файлы.
+
+Основные группы: вода на уровне, мощность по Годске, границы/число слоёв,
+максимальная водность и высота максимума, запас воды, сравнение методов.
+Выбор сохраняет район и срок. Быстрые сроки +0/+3/+6/+12/+24/+48 и пагинация до
++384; уровень воды выбирается из 17 изобарических поверхностей 1000–300 гПа.
+Изолинии мощности — 100 или 500 гп.м. Поддерживаются статус, отмена и PNG/CSV.
+
+```text
+/icing product=godske_sum +24 contours=100
+/icing product=slw_level +12 level=850
+/icing product=slwp +48
+/icing product=agreement +24
+```
+
+Карта показывает модельные условия, не наблюдавшееся обледенение. Мощность
+слоёв по Годске не является интенсивностью нарастания льда. WAFS и неготовые
+продукты в меню не показываются. Описание формул, качества данных и ограничений:
+[ICING_MAPS_SPEC.md](docs/specs/ICING_MAPS_SPEC.md).
 
 ## `/meteogram`
 
