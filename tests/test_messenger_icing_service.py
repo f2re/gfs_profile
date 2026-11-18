@@ -49,7 +49,14 @@ class IcingServiceTests(unittest.TestCase):
             self.assertEqual(first.metadata["run_cycle"], "06")
             self.assertIn("run=20261117/06", first.repeat_command)
             self.assertFalse(first.metadata["meteorological_skill_validated"])
-            self.assertEqual([a.kind for a in first.attachments], ["image", "file"])
+            self.assertEqual([a.kind for a in first.attachments], ["image"])
+            self.assertEqual(list((Path(directory)/"icing").glob("*.csv")), [])
+            self.assertEqual(first.metadata["units"], "дам")
+            self.assertEqual(first.metadata["raw_units"], "гп.м")
+            self.assertEqual(first.metadata["contour_step_dam"], 50)
+            self.assertIn("18.11.2026 06:00 UTC", first.summary)
+            self.assertIn("NOAA/NCEP", first.summary)
+            self.assertNotIn("гп.м", first.summary)
             self.assertTrue(all(a.path.exists() for a in first.attachments))
             self.assertTrue(set(a.path for a in first.attachments).isdisjoint(a.path for a in second.attachments))
             cleanup_product_result(first)
@@ -69,11 +76,42 @@ class IcingServiceTests(unittest.TestCase):
                                            renderer=cancel_renderer, cancel_event=cancel)
             self.assertEqual(list((Path(directory)/"icing").glob("*")), [])
 
+    def test_selected_point_reaches_map_summary_and_repeat_command(self):
+        case = input_case()
+        request = IcingRequest(bbox=(37, 37.25, 55, 55.25), point=(55.125, 37.125))
+        draw = Mock(side_effect=renderer)
+        with tempfile.TemporaryDirectory() as directory, patch("messenger.icing_service.CACHE_DIR", Path(directory)):
+            result = build_icing_product_result(request, input_loader=lambda *a, **kw: case, renderer=draw)
+            self.assertEqual(draw.call_args.kwargs["point"], request.point)
+            self.assertEqual(result.metadata["requested_point"], [55.125, 37.125])
+            self.assertIn("Отмеченный пункт: 55.125°, 37.125°", result.summary)
+            self.assertIn("point=55.125,37.125", result.repeat_command)
+            self.assertEqual([item.kind for item in result.attachments], ["image"])
+            cleanup_product_result(result)
+
     def test_invalid_lead_never_loads_data(self):
         loader = Mock()
         with self.assertRaises(GfsProfileError):
             build_icing_product_result(IcingRequest(lead=121), input_loader=loader)
         loader.assert_not_called()
+
+    def test_incomplete_warm_profile_is_not_reported_as_absence_of_water(self):
+        for missing in (False, True):
+            case = input_case()
+            case.fields["temperature_k"][:] = 278.15
+            if missing:
+                case.fields["cloud_water_kgkg"][0] = np.nan
+            with self.subTest(missing=missing), tempfile.TemporaryDirectory() as directory, \
+                    patch("messenger.icing_service.CACHE_DIR", Path(directory)):
+                result = build_icing_product_result(IcingRequest(product="slw_max"),
+                    input_loader=lambda *a, **kw: case, renderer=renderer)
+                if missing:
+                    self.assertNotIn("вода не выявлена", result.summary)
+                    self.assertIn("неполные данные по высоте", result.summary)
+                    self.assertEqual(result.metadata["nodes_with_incomplete_water_profile"], 4)
+                else:
+                    self.assertIn("вода не выявлена", result.summary)
+                cleanup_product_result(result)
 
     def test_csv_distinguishes_first_layer_boundary_from_column_boundary(self):
         case = input_case()

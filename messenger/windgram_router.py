@@ -230,7 +230,10 @@ class WindgramMessengerRouter(AeroMessengerRouter):
                 if point is None:
                     await gateway.send_text(event.chat_id, "В сценарии потеряна точка. Создайте windgram заново.")
                     return
-                await self._run_windgram(event, gateway, point, _windgram_params(recipe.params), None)
+                params = _windgram_params(recipe.params)
+                run = await self._recipe_forecast_run(event, gateway, recipe, params, int(params["to"]))
+                if run is not None:
+                    await self._run_windgram(event, gateway, point, params, run)
                 return
             if data.action == "toggle":
                 try:
@@ -316,7 +319,7 @@ class WindgramMessengerRouter(AeroMessengerRouter):
             except (TypeError, ValueError):
                 await gateway.send_text(event.chat_id, "Параметр кнопки устарел. Откройте /windgram заново.")
                 return
-            state.params = params
+            state.params = {**params, **{key: value for key, value in state.params.items() if key.startswith("_forecast_")}}
             state.step = "params"
             await self._send_windgram_params_card(event, gateway, state)
             return
@@ -325,7 +328,12 @@ class WindgramMessengerRouter(AeroMessengerRouter):
             if state.point is None:
                 await gateway.send_text(event.chat_id, "Точка выбора потеряна. Начните заново: /windgram")
                 return
-            await self._run_windgram(event, gateway, state.point, _windgram_params(state.params), state.pending_run)
+            params = _windgram_params(state.params)
+            run = await self._forecast_selection_run(event, gateway, state, int(params["to"]))
+            if (run is None or self.sessions.get(event.platform, event.user_id, event.chat_id) is not state
+                    or state.params.get("_forecast_lead", int(params["to"])) != int(params["to"])):
+                return
+            await self._run_windgram(event, gateway, state.point, params, run)
             return
 
         if data.action == "point":
@@ -430,13 +438,8 @@ class WindgramMessengerRouter(AeroMessengerRouter):
     ) -> None:
         state.product = "windgram"
         state.step = "params"
-        state.params = _windgram_params(state.params)
-        self.sessions.set(event.platform, event.user_id, event.chat_id, state)
-        await gateway.send_text(
-            event.chat_id,
-            _params_text(state.point, state.params),
-            keyboard=_params_keyboard(state.params),
-        )
+        state.params = {**_windgram_params(state.params), **{key: value for key, value in state.params.items() if key.startswith("_forecast_")}}
+        await self._send_forecast_parameter_card(event, gateway, state, _params_text, _params_keyboard)
 
     async def _send_windgram_recipe_card(
         self,
@@ -447,13 +450,13 @@ class WindgramMessengerRouter(AeroMessengerRouter):
         point = recipe.point or {}
         params = _windgram_params(recipe.params)
         pin_text = "★ Открепить" if recipe.pinned else "⭐ Закрепить"
-        await gateway.send_text(
-            event.chat_id,
-            "🟦 Срок × уровень GFS\n"
+        await self._send_forecast_parameter_card(
+            event, gateway, self._forecast_recipe_state(recipe, params),
+            lambda *_: "🟦 Срок × уровень GFS\n"
             f"📍 {point.get('label', 'точка')}\n"
             f"{PARAM_NAMES.get(str(params['param']), params['param'])} · +{params['from']}…+{params['to']} ч · "
             f"шаг {params['step']} ч · до {params['top']} гПа",
-            keyboard=menu_keyboard(
+            lambda _: menu_keyboard(
                 [
                     [UiButton("▶ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],
                     [

@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, patch
 
 from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler
 
+from gfs_core import GfsRun
 from messenger.menu_catalog import PRODUCT_LABELS, product_rows
 import telegram_personal_ux as personal
 import telegram_product_wizard as wizard
@@ -29,15 +30,18 @@ class TelegramMenuNavigationTests(unittest.IsolatedAsyncioTestCase):
             self.application = telegram_bot.build_application()
         self.record_patch = patch.object(telegram_bot, "record_telegram_user")
         self.record_patch.start()
+        self.run_patch = patch.object(telegram_bot, "latest_available_run_for_lead", return_value=GfsRun("20261118", "00"))
+        self.run_selector = self.run_patch.start()
         self.user = SimpleNamespace(id=42, username="tester", first_name="Tester", last_name=None,
                                     full_name="Tester", is_bot=False, language_code="ru")
         self.message = SimpleNamespace(
             message_id=77, text="Меню", from_user=self.user,
-            reply_text=AsyncMock(return_value=SimpleNamespace(delete=AsyncMock())),
+            reply_text=AsyncMock(return_value=SimpleNamespace(delete=AsyncMock(), edit_text=AsyncMock())),
         )
         self.context = SimpleNamespace(user_data={}, args=[], bot=AsyncMock(), application=self.application)
 
     async def asyncTearDown(self):
+        self.run_patch.stop()
         self.record_patch.stop()
         self.db_patch.stop()
         self.tmp.cleanup()
@@ -119,6 +123,11 @@ class TelegramMenuNavigationTests(unittest.IsolatedAsyncioTestCase):
         query = await self.press("personal:profile:all")
         self.assertEqual(self.context.user_data["pending_profile"]["point"]["lat"], 55.75)
         self.assertIn("Москва", query.edit_message_text.call_args.args[0])
+        self.assertIn("18.11.2026 00:00 UTC", query.edit_message_text.call_args.args[0])
+        self.assertIn("18.11.2026 03:00 UTC", query.edit_message_text.call_args.args[0])
+        labels = [button.text for row in query.edit_message_text.call_args.kwargs["reply_markup"].inline_keyboard for button in row]
+        self.assertTrue(any("18.11 03:00" in label for label in labels))
+        self.run_selector.assert_called_once_with(3)
         leads = {int(button.callback_data.split(":")[1])
                  for page in range(lead_page_count() + 1)
                  for row in lead_keyboard(page).inline_keyboard for button in row

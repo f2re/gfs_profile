@@ -7,6 +7,8 @@ from threading import Lock
 from typing import Any, Callable
 
 from geocode import GeoPoint
+from forecast_menu import UNVERIFIED_TIME_TEXT
+from forecast_time import forecast_lead_label, forecast_time_lines
 
 from .aero_service import ParsedAeroInput, build_aero_product_result, parse_aero_input
 from .callback_codec import CallbackCodecError, decode_callback, encode_callback
@@ -62,13 +64,15 @@ def _aero_progress_text(point: Any, lead: int, event: ProgressEvent) -> str:
     return header + body
 
 
-def _aero_lead_rows(values: list[int]) -> list[list[UiButton]]:
+def _aero_lead_rows(values: list[int], run=None) -> list[list[UiButton]]:
     rows: list[list[UiButton]] = []
-    for start in range(0, len(values), 3):
+    width = 2 if run is not None else 3
+    for start in range(0, len(values), width):
         rows.append(
             [
-                UiButton(f"+{lead}", "callback", encode_callback("aero", "lead", lead))
-                for lead in values[start : start + 3]
+                UiButton(forecast_lead_label(run, lead) if run is not None else f"+{lead}",
+                         "callback", encode_callback("aero", "lead", lead))
+                for lead in values[start : start + width]
             ]
         )
     return rows
@@ -172,7 +176,10 @@ class AeroMessengerRouter(PersonalMessengerRouter):
                 if point is None:
                     await gateway.send_text(event.chat_id, "В сценарии потеряна точка. Создайте аэродиаграмму заново.")
                     return
-                await self._run_aero(event, gateway, point, int(recipe.params.get("lead", 24)), None)
+                lead = int(recipe.params.get("lead", 24))
+                run = await self._recipe_forecast_run(event, gateway, recipe, {"lead": lead}, lead)
+                if run is not None:
+                    await self._run_aero(event, gateway, point, lead, run)
                 return
             if data.action == "toggle":
                 try:
@@ -238,7 +245,11 @@ class AeroMessengerRouter(PersonalMessengerRouter):
             if lead not in self.deps.leads():
                 await gateway.send_text(event.chat_id, "Этот срок GFS недоступен.")
                 return
-            await self._run_aero(event, gateway, state.point, lead, state.pending_run)
+            run = await self._forecast_selection_run(event, gateway, state, lead)
+            if (run is None or self.sessions.get(event.platform, event.user_id, event.chat_id) is not state
+                    or state.params.get("_forecast_lead", lead) != lead):
+                return
+            await self._run_aero(event, gateway, state.point, lead, run)
             return
 
         if data.action == "leadpage":
@@ -310,10 +321,21 @@ class AeroMessengerRouter(PersonalMessengerRouter):
         *,
         page: int,
     ) -> None:
+        token = int(state.params.get("_forecast_view", 0)) + 1
+        state.params["_forecast_view"] = token
+        check_text = f"Проверяю данные GFS для +{self.default_lead} ч…"
+        if event.event_type.upper() == "CALLBACK" and event.message_id:
+            status = await gateway.edit_text(event.chat_id, event.message_id, check_text)
+        else:
+            status = await gateway.send_text(event.chat_id, check_text)
+        run = await self._forecast_menu_run(state)
+        if (self.sessions.get(event.platform, event.user_id, event.chat_id) is not state
+                or state.params.get("_forecast_view") != token):
+            return
         leads = self.deps.leads()
         if page <= 0:
             values = [lead for lead in QUICK_LEADS if lead in leads]
-            rows = _aero_lead_rows(values)
+            rows = _aero_lead_rows(values, run)
             rows.append([UiButton("Все сроки до +384", "callback", encode_callback("aero", "leadpage", 1))])
             page_text = "быстрые сроки"
         else:
@@ -323,7 +345,7 @@ class AeroMessengerRouter(PersonalMessengerRouter):
                 page = max(1, (len(leads) - 1) // LEAD_PAGE_SIZE + 1)
                 start = (page - 1) * LEAD_PAGE_SIZE
                 values = leads[start : start + LEAD_PAGE_SIZE]
-            rows = _aero_lead_rows(values)
+            rows = _aero_lead_rows(values, run)
             nav: list[UiButton] = []
             if page > 1:
                 nav.append(UiButton("‹", "callback", encode_callback("aero", "leadpage", page - 1)))
@@ -336,9 +358,10 @@ class AeroMessengerRouter(PersonalMessengerRouter):
         state.lead_page = page
         state.step = "choose_lead"
         self.sessions.set(event.platform, event.user_id, event.chat_id, state)
-        await gateway.send_text(
-            event.chat_id,
-            f"📍 {getattr(state.point, 'label', 'выбранная точка')}\nВыберите срок GFS для Skew-T ({page_text}):",
+        timing = forecast_time_lines(run, self.default_lead) if run is not None else UNVERIFIED_TIME_TEXT
+        await gateway.edit_text(
+            event.chat_id, status.message_id,
+            f"📍 {getattr(state.point, 'label', 'выбранная точка')}\n{timing}\n\nВыберите срок GFS для Skew-T ({page_text}, UTC):",
             keyboard=menu_keyboard(rows),
         )
 
@@ -350,10 +373,17 @@ class AeroMessengerRouter(PersonalMessengerRouter):
     ) -> None:
         point = recipe.point or {}
         lead = int(recipe.params.get("lead", 24))
+        state = self._forecast_recipe_state(recipe, {"lead": lead})
+        self.sessions.set(event.platform, event.user_id, event.chat_id, state)
+        status = await gateway.send_text(event.chat_id, f"Проверяю данные GFS для +{lead} ч…")
+        run = await self._forecast_menu_run(state, lead)
+        if self.sessions.get(event.platform, event.user_id, event.chat_id) is not state:
+            return
+        timing = forecast_time_lines(run, lead) if run is not None else UNVERIFIED_TIME_TEXT
         pin_text = "★ Открепить" if recipe.pinned else "⭐ Закрепить"
-        await gateway.send_text(
-            event.chat_id,
-            f"🧾 Аэрологическая диаграмма GFS\n📍 {point.get('label', 'точка')}\nСрок: +{lead} ч · Skew-T log-P · годограф",
+        await gateway.edit_text(
+            event.chat_id, status.message_id,
+            f"🧾 Аэрологическая диаграмма GFS\n📍 {point.get('label', 'точка')}\n{timing}\nSkew-T log-P · годограф",
             keyboard=menu_keyboard(
                 [
                     [UiButton("▶ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],

@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from gfs_core import GfsRun
 
 from messenger.callback_codec import encode_callback
 from messenger.cloudgram_router import CloudgramMessengerRouter
@@ -73,7 +74,7 @@ class CloudgramRouterTests(unittest.IsolatedAsyncioTestCase):
             return CommonProductResult("cloudgram", "CLOUDGRAM SUMMARY", [], {"lead_to": lead_to, "mode": mode})
 
         self.router = CloudgramMessengerRouter(
-            RouterDependencies(geocode=lambda q, n: list(self.points)),
+            RouterDependencies(geocode=lambda q, n: list(self.points), latest_run_for_lead=lambda lead: GfsRun("20261118", "00")),
             recipes=self.store,
             cloudgram_builder=builder,
             cloudgram_parser=lambda raw: self.parsed,
@@ -125,12 +126,12 @@ class CloudgramRouterTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(self.built[-1][1:5], (0, 120, 6, "simple"))
 
-    async def test_pinned_recipe_repeat_uses_no_saved_run(self):
+    async def test_pinned_recipe_repeat_resolves_current_run(self):
         recipe = self.store.record_success("max", "42", "cloudgram", {"from": 0, "to": 72, "step": 3, "mode": "pro"}, Point(label="Краснодар"))
         self.store.set_pinned("max", "42", recipe.recipe_id, True)
         event = NormalizedEvent("max", "8", "CALLBACK", "42", "chat", callback_payload=encode_callback("recipe", "run", recipe.recipe_id), callback_id="8")
         await self.router.handle(event, self.gateway)
-        self.assertEqual(self.built[-1], ("Краснодар", 0, 72, 3, "pro", None))
+        self.assertEqual(self.built[-1], ("Краснодар", 0, 72, 3, "pro", GfsRun("20261118", "00")))
 
 
 if __name__ == "__main__":

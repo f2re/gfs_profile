@@ -3,6 +3,7 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
+from gfs_core import GfsRun
 
 from messenger.callback_codec import encode_callback
 from messenger.contracts import CommonProductResult, NormalizedEvent, PlatformMessage
@@ -70,6 +71,7 @@ class PersonalRouterTests(unittest.IsolatedAsyncioTestCase):
                 profile_builder=builder,
                 profile_parser=lambda raw, default: Parsed(),
                 canonical_leads=lambda: [0, 3, 6, 12, 24, 48],
+                latest_run_for_lead=lambda lead: GfsRun("20261118", "00"),
             ),
             recipes=self.store,
             progress_interval_seconds=0.01,
@@ -119,7 +121,7 @@ class PersonalRouterTests(unittest.IsolatedAsyncioTestCase):
             callback_id="cb2",
         )
         await self.router.handle(run, self.gateway)
-        self.assertEqual(self.built[-1][1:], (48, None))
+        self.assertEqual(self.built[-1][1:], (48, GfsRun("20261118", "00")))
 
 
 if __name__ == "__main__":

@@ -23,6 +23,7 @@ NATURAL_EARTH_BASE_URL = "https://naturalearth.s3.amazonaws.com"
 VALID_RESOLUTIONS = {"10m", "50m", "110m"}
 
 LAYER_SPECS: dict[str, dict[str, object]] = {
+    "ocean": {"category": "physical", "name": "ocean", "required": True, "polygon": True},
     "coastline": {"category": "physical", "name": "coastline", "required": True, "polygon": False},
     "lakes": {"category": "physical", "name": "lakes", "required": True, "polygon": True},
     "rivers": {"category": "physical", "name": "rivers_lake_centerlines", "required": True, "polygon": False},

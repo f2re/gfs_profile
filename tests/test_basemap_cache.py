@@ -66,6 +66,7 @@ class BasemapCacheTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"MAP_BASEMAP_DIR": tmp}):
             root = Path(tmp)
             write_manifest(root)
+            write_polygon_layer(layer_base(root, "ocean"), [[(38.8, 44.8), (38.8, 45.2), (39.2, 45.2), (39.2, 44.8), (38.8, 44.8)]])
             write_polyline_layer(layer_base(root, "coastline"), [[(38.9, 44.9), (39.1, 45.1)]])
             write_polygon_layer(layer_base(root, "lakes"), [[(38.9, 44.9), (39.0, 44.9), (39.0, 45.0), (38.9, 44.9)]])
             write_polyline_layer(layer_base(root, "rivers_lake_centerlines"), [[(38.8, 44.8), (39.2, 45.2)]])
@@ -73,6 +74,13 @@ class BasemapCacheTests(unittest.TestCase):
             write_point_layer(layer_base(root, "populated_places"), [(39.0, 45.0, "Краснодар", 2, 1000000)])
             self.assertTrue(is_basemap_cache_ready("10m"))
             self.assertTrue(check_basemap_cache("10m").ready)
+
+    def test_existing_cache_without_ocean_requires_deploy_preparation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"MAP_BASEMAP_DIR": tmp}):
+            write_manifest(Path(tmp))
+            status = check_basemap_cache("10m")
+            self.assertIn("ocean", status.missing_layers)
+            self.assertFalse(status.ready)
 
     def test_bbox_filtering_and_multipart_shape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"MAP_BASEMAP_DIR": tmp}):
@@ -89,6 +97,7 @@ class BasemapCacheTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {"MAP_BASEMAP_DIR": tmp, "MAP_BASEMAP_AUTO_DOWNLOAD": "0"}):
             root = Path(tmp)
             write_manifest(root)
+            write_polygon_layer(layer_base(root, "ocean"), [[(38.8, 44.8), (38.8, 45.2), (39.2, 45.2), (39.2, 44.8), (38.8, 44.8)]])
             write_polyline_layer(layer_base(root, "coastline"), [[(38.9, 44.9), (39.1, 45.1)]])
             write_polygon_layer(layer_base(root, "lakes"), [[(38.9, 44.9), (39.0, 44.9), (39.0, 45.0), (38.9, 44.9)]])
             write_polyline_layer(layer_base(root, "rivers_lake_centerlines"), [[(38.8, 44.8), (39.2, 45.2)]])

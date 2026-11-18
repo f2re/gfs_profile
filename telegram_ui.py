@@ -7,6 +7,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton,
 from geocode import GeoPoint
 from gfs_core import canonical_leads
 from messenger.menu_catalog import PRODUCT_LABELS, product_rows
+from forecast_time import forecast_lead_label, forecast_time_lines
 from user_location_session import recent_location_button_label
 
 CANCEL_TEXT = "✖ Отмена"
@@ -15,7 +16,9 @@ LEAD_PAGE_SIZE = 12
 MAX_LEAD = 384
 
 
-def _lead_label(lead: int) -> str:
+def _lead_label(lead: int, run=None) -> str:
+    if run is not None:
+        return forecast_lead_label(run, lead)
     return f"+{lead} ч"
 
 
@@ -42,17 +45,17 @@ def lead_page_count() -> int:
     return math.ceil(len(canonical_leads()) / LEAD_PAGE_SIZE)
 
 
-def lead_keyboard(page: int = 0) -> InlineKeyboardMarkup:
+def lead_keyboard(page: int = 0, run=None) -> InlineKeyboardMarkup:
     """Build lead selector. Page 0 is compact/common; pages 1..N expose all GFS leads to +384 h."""
 
     if page <= 0:
-        buttons = [InlineKeyboardButton(_lead_label(lead), callback_data=f"lead:{lead}") for lead in COMMON_LEADS]
+        buttons = [InlineKeyboardButton(_lead_label(lead, run), callback_data=f"lead:{lead}") for lead in COMMON_LEADS]
+        width = 2 if run is not None else 3
         return InlineKeyboardMarkup(
-            [
-                buttons[:3],
-                buttons[3:],
+            [buttons[i:i + width] for i in range(0, len(buttons), width)] + [
                 [InlineKeyboardButton("Все сроки →", callback_data="leadpage:1")],
-                [InlineKeyboardButton("+384 ч", callback_data="lead:384"), InlineKeyboardButton("Отмена", callback_data="cancel")],
+                [InlineKeyboardButton(_lead_label(384, run), callback_data="lead:384"),
+                 InlineKeyboardButton("Отмена", callback_data="cancel")],
             ]
         )
 
@@ -62,8 +65,9 @@ def lead_keyboard(page: int = 0) -> InlineKeyboardMarkup:
     start = (page - 1) * LEAD_PAGE_SIZE
     chunk = leads[start : start + LEAD_PAGE_SIZE]
     rows = []
-    for i in range(0, len(chunk), 3):
-        rows.append([InlineKeyboardButton(_lead_label(lead), callback_data=f"lead:{lead}") for lead in chunk[i : i + 3]])
+    width = 2 if run is not None else 3
+    for i in range(0, len(chunk), width):
+        rows.append([InlineKeyboardButton(_lead_label(lead, run), callback_data=f"lead:{lead}") for lead in chunk[i : i + width]])
 
     nav = []
     if page > 1:
@@ -72,15 +76,16 @@ def lead_keyboard(page: int = 0) -> InlineKeyboardMarkup:
     if page < total_pages:
         nav.append(InlineKeyboardButton("→", callback_data=f"leadpage:{page + 1}"))
     rows.append(nav)
-    rows.append([InlineKeyboardButton("Популярные", callback_data="leadpage:0"), InlineKeyboardButton("+384 ч", callback_data="lead:384")])
+    rows.append([InlineKeyboardButton("Популярные", callback_data="leadpage:0"), InlineKeyboardButton(_lead_label(384, run), callback_data="lead:384")])
     rows.append([InlineKeyboardButton("Отмена", callback_data="cancel")])
     return InlineKeyboardMarkup(rows)
 
 
-def lead_page_text(page: int = 0) -> str:
+def lead_page_text(page: int = 0, run=None, lead: int = 24) -> str:
+    time_text = f"{forecast_time_lines(run, lead)}\n\n" if run is not None else ""
     if page <= 0:
-        return "Выберите срок."
-    return f"Все сроки: страница {max(1, min(page, lead_page_count()))}/{lead_page_count()}."
+        return time_text + "Выберите срок (UTC)." if run is not None else "Выберите срок."
+    return time_text + f"Все сроки: страница {max(1, min(page, lead_page_count()))}/{lead_page_count()}."
 
 
 def place_keyboard(labels: list[str]) -> InlineKeyboardMarkup:
