@@ -42,7 +42,8 @@ class TelegramPersonalUxTests(unittest.TestCase):
         )
         text = home_text(1001)
         self.assertIn("Краснодар", text)
-        self.assertIn("+0…+48", text)
+        self.assertIn("GFS data", text)
+        self.assertIn("+0…+48", " ".join(b.text for row in home_keyboard(1001).inline_keyboard for b in row))
         callbacks = [
             button.callback_data
             for row in home_keyboard(1001).inline_keyboard

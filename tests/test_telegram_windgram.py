@@ -56,7 +56,7 @@ class TelegramWindgramTests(unittest.TestCase):
     def test_windgram_caption_keeps_compact_product_contract(self) -> None:
         caption = format_windgram_caption(self._data())
         self.assertIn("GFS", caption)
-        self.assertIn("Windgram", caption)
+        self.assertIn("высота × срок", caption)
         self.assertIn("температура", caption)
         self.assertIn("20260701 12Z", caption)
         self.assertIn("+0…+3 ч", caption)

@@ -38,7 +38,7 @@ class IcingRenderTests(unittest.TestCase):
                         self.assertGreater(image.height, 1000)
                         self.assertLess(image.width + image.height, 10000)
                         self.assertIn("2026-11-18T06:00:00", image.info["Description"])
-                        self.assertIn("model, not observation", image.info["Description"])
+                        self.assertIn("GFS data; model", image.info["Description"])
 
     def test_empty_field_at_tiny_equatorial_bbox_is_renderable(self):
         fields = compute_icing_fields(

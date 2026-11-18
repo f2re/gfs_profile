@@ -44,6 +44,8 @@ STEP_RE = re.compile(r"\b(?:step|grid|шаг)=(?P<value>25|50|100)(?:\s*км)?\b
 LEAD_RE = re.compile(r"(?:\blead=|\+)(?P<value>\d{1,3})(?:\s*(?:h|ч))?\b", re.IGNORECASE)
 ROUTE_SPLIT_RE = re.compile(r"\s*(?:->|→|=>|\|)\s*")
 
+from telegram_ui import button_rows
+
 ROUTE_LEADS = (0, 6, 12, 24, 48)
 ROUTE_SPEEDS = (150, 300, 450, 600)
 ROUTE_MODES = (("simple", "Простой"), ("pro", "Профи"))
@@ -189,7 +191,7 @@ def route_settings_keyboard(state: dict[str, object]) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         lead_buttons[:3],
         lead_buttons[3:],
-        [InlineKeyboardButton(("✓ " if speed == value else "") + f"{value} км/ч", callback_data=f"route:speed:{value}") for value in ROUTE_SPEEDS],
+        *button_rows([InlineKeyboardButton(("✓ " if speed == value else "") + f"{value} км/ч", callback_data=f"route:speed:{value}") for value in ROUTE_SPEEDS], 2),
         [InlineKeyboardButton(("✓ " if spatial_step == value else "") + f"сетка {value} км", callback_data=f"route:grid:{value}") for value in ROUTE_SPATIAL_STEPS_KM],
         [InlineKeyboardButton(("✓ " if mode == key else "") + label, callback_data=f"route:mode:{key}") for key, label in ROUTE_MODES],
         [InlineKeyboardButton("▶ Построить", callback_data="route:run")],
@@ -389,14 +391,16 @@ async def route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     callback_data = query.data or ""
     if callback_data == "route:cancel":
         context.user_data.pop(ROUTE_SESSION_KEY, None)
-        await query.edit_message_text("Маршрутный расчёт отменён. Начать заново: /route")
+        from telegram_personal_ux import home_text, home_keyboard
+        user_id = int(getattr(update.effective_user, "id", 0) or 0)
+        await query.edit_message_text(home_text(user_id), reply_markup=home_keyboard(user_id))
         return
     if callback_data == "route:restart":
         context.user_data[ROUTE_SESSION_KEY] = {"step": "await_route", "lead": 24, "speed": ROUTE_DEFAULT_SPEED_KMH, "mode": "simple", "spatial_step": int(ROUTE_SPATIAL_STEP_KM)}
         await query.edit_message_text("Введите новый маршрут через → или ->. Пример: Москва -> Санкт-Петербург")
         return
     if not isinstance(state, dict) or state.get("step") != "settings":
-        await query.edit_message_text("Сценарий маршрута устарел. Начните заново: /route")
+        await query.edit_message_text("Сценарий маршрута устарел. Начните заново: /route", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Меню", callback_data="prefs:home")]]))
         return
     state = dict(state)
     try:

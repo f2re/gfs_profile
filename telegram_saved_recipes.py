@@ -56,17 +56,6 @@ def _result_actions_keyboard(recipe: UserRecipe | None, *, include_schedule: boo
     return InlineKeyboardMarkup(rows)
 
 
-def _home_text(user_id: int) -> str:
-    quick = _store().quick(_PLATFORM, user_id, limit=2)
-    if not quick:
-        return personal._SAVED_RECIPES_ORIGINAL_HOME_TEXT(user_id)
-    active = user_state.get_active_location(user_id)
-    lines = ["🌦 GFS 0.25 · модельные прогнозы",
-             f"📍 {active.label} · {active.lat:.4f}, {active.lon:.4f}" if active else "📍 Основная точка ещё не выбрана"]
-    lines += ["", "Быстрые сценарии:", *(_summary(x) for x in quick)]
-    return "\n".join([*lines, "", "Выберите продукт.", "ℹ GFS grid, не наблюдение и не радиозонд."])
-
-
 def _home_keyboard(user_id: int) -> InlineKeyboardMarkup:
     base = personal._SAVED_RECIPES_ORIGINAL_HOME_KEYBOARD(user_id)
     recipes = _store().quick(_PLATFORM, user_id, limit=2)
@@ -107,7 +96,7 @@ def _card(recipe: UserRecipe) -> tuple[str, InlineKeyboardMarkup]:
     if _schedulable(recipe): rows.append([InlineKeyboardButton("🕒 В расписание", callback_data=f"recipe:schedule:{recipe.recipe_id}")])
     rows += [[InlineKeyboardButton("🗑 Удалить", callback_data=f"recipe:deleteconfirm:{recipe.recipe_id}")],
              [InlineKeyboardButton("← Все сценарии", callback_data="recipe:list")]]
-    return f"{'★ ' if recipe.pinned else ''}{_summary(recipe)}\n{point}\nУспешных запусков: {recipe.success_count}\n\nПовтор использует актуальный опубликованный цикл модели.", InlineKeyboardMarkup(rows)
+    return f"{'★ ' if recipe.pinned else ''}{_summary(recipe)}\n{point}\nУспешных запусков: {recipe.success_count}\n\nПовтор обновляет прогноз по последнему доступному циклу.", InlineKeyboardMarkup(rows)
 
 
 def _get_pref(user_id: int, product: str, *, include_selection: bool = True, db_path=None):
@@ -169,7 +158,6 @@ def install(namespace: dict[str, Any]) -> None:
     global _INSTALLED
     if _INSTALLED: return
     _INSTALLED = True
-    personal._SAVED_RECIPES_ORIGINAL_HOME_TEXT = personal.home_text
     personal._SAVED_RECIPES_ORIGINAL_HOME_KEYBOARD = personal.home_keyboard
     personal._SAVED_RECIPES_ORIGINAL_SETTINGS_TEXT = personal._settings_text
     personal._SAVED_RECIPES_ORIGINAL_SETTINGS_KEYBOARD = personal._settings_keyboard
@@ -177,7 +165,7 @@ def install(namespace: dict[str, Any]) -> None:
     personal._SAVED_RECIPES_ORIGINAL_RECORD_PRODUCT_SUCCESS = personal.record_product_success
     personal._SAVED_RECIPES_ORIGINAL_CLEAR_PRODUCT_PREFERENCE = personal.clear_product_preference
     personal._SAVED_RECIPES_ORIGINAL_CLEAR_USER_DATA = personal.clear_user_data
-    personal.home_text, personal.home_keyboard = _home_text, _home_keyboard
+    personal.home_keyboard = _home_keyboard
     personal._settings_text, personal._settings_keyboard = _settings_text, _settings_keyboard
     personal.get_product_preference, personal.record_product_success = _get_pref, _record
     personal.clear_product_preference, personal.clear_user_data = _clear_product, _clear_user

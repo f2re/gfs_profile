@@ -15,23 +15,15 @@ from geocode import GeoPoint
 
 from .callback_codec import CallbackCodecError, decode_callback, encode_callback
 from .contracts import MessengerGateway, NormalizedEvent, UiButton, UiKeyboard
+from .menu_catalog import PRODUCT_LABELS
 from .route_router import RouteMessengerRouter
-from .router import RouterDependencies
+from .router import RouterDependencies, menu_keyboard
 from .user_locations import MessengerLocation, MessengerLocationStore
 from .user_recipes import UserRecipe, UserRecipeStore
 
 LOG = logging.getLogger(__name__)
 RECIPE_PAGE_SIZE = 4
-PRODUCT_TITLES = {
-    "profile": "Профиль",
-    "aero": "Аэродиаграмма",
-    "windgram": "Срок × уровень",
-    "cloudgram": "Облака",
-    "map": "Карта",
-    "meteogram": "Метеограмма",
-    "route": "Маршрут",
-    "weathernext3": "WeatherNext 3",
-}
+PRODUCT_TITLES = PRODUCT_LABELS
 
 
 class SettingsRecipeStore(UserRecipeStore):
@@ -91,6 +83,13 @@ def _recipe_label(recipe: UserRecipe) -> str:
 
 
 class SettingsMessengerRouter(RouteMessengerRouter):
+
+    home_settings = True
+
+    def _home_point_label(self, event: NormalizedEvent) -> str | None:
+        self._sync_locations_from_recipes(event)
+        active = self.locations.active(event.platform, event.user_id)
+        return active.label if active else None
     def __init__(
         self,
         dependencies: RouterDependencies,
@@ -175,47 +174,20 @@ class SettingsMessengerRouter(RouteMessengerRouter):
             "⚙ Настройки\n"
             f"{point_line}\n"
             f"📌 Сохранённых сценариев: {len(recipes)} · закреплено: {pinned}\n\n"
-            "Точки и сценарии хранятся отдельно для этой платформы и пользователя. "
-            "Удаление настроек не удаляет расписания."
+            "Выберите точку или сохранённый сценарий."
         )
 
     def _settings_keyboard(self) -> UiKeyboard:
-        return UiKeyboard.from_rows(
+        return menu_keyboard(
             [
                 [UiButton("📍 Мои точки", "callback", encode_callback("settings", "locations"))],
                 [UiButton("📌 Сценарии", "callback", encode_callback("settings", "recipes", 0))],
                 [UiButton("🧹 Очистить точки", "callback", encode_callback("settings", "clearp"))],
                 [UiButton("🗑 Удалить мои настройки", "callback", encode_callback("settings", "cleara"))],
-                [UiButton("🏠 Главное меню", "callback", encode_callback("settings", "home"))],
+                [UiButton("Меню", "callback", encode_callback("settings", "home"))],
             ]
         )
 
-    async def _start(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
-        self.sessions.clear(event.platform, event.user_id, event.chat_id)
-        self._sync_locations_from_recipes(event)
-        active = self.locations.active(event.platform, event.user_id)
-        rows: list[list[UiButton]] = []
-        for recipe in self.recipes.quick(event.platform, event.user_id, limit=2):
-            rows.append([UiButton("▶ " + _recipe_label(recipe)[2:], "callback", encode_callback("recipe", "run", recipe.recipe_id))])
-        rows.extend(
-            [
-                [UiButton("📈 Профиль", "callback", encode_callback("product", "open", "profile")), UiButton("🧾 Аэродиаграмма", "callback", encode_callback("product", "open", "aero"))],
-                [UiButton("🟦 Срок × уровень", "callback", encode_callback("product", "open", "windgram")), UiButton("☁ Облака", "callback", encode_callback("product", "open", "cloudgram"))],
-                [UiButton("🗺 Карта", "callback", encode_callback("product", "open", "map")), UiButton("📊 Метеограмма", "callback", encode_callback("product", "open", "meteogram"))],
-                [UiButton("❄ Обледенение", "callback", encode_callback("product", "open", "icing"))],
-                [UiButton("✈ Маршрут", "callback", encode_callback("product", "open", "route")), UiButton("⚙ Настройки", "callback", encode_callback("settings", "open"))],
-                [UiButton("📍 Геолокация", "request_location")],
-            ]
-        )
-        point = f"\n📍 Основная точка: {active.label}" if active else ""
-        await gateway.send_text(
-            event.chat_id,
-            "🌦 GFS 0.25 — модельный прогноз"
-            f"{point}\n"
-            "Профиль, аэродиаграмма, срок × уровень, облака, карта, метеограмма и маршрут.\n"
-            "GFS — модель, не наблюдение и не радиозонд.",
-            keyboard=UiKeyboard.from_rows(rows),
-        )
 
     async def _text(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
         command = (event.command or "").lower().lstrip("/")
@@ -278,7 +250,7 @@ class SettingsMessengerRouter(RouteMessengerRouter):
             await gateway.send_text(
                 event.chat_id,
                 f"Удалить сценарий «{_recipe_label(recipe)[2:]}»?",
-                keyboard=UiKeyboard.from_rows([
+                keyboard=menu_keyboard([
                     [UiButton("Удалить", "callback", encode_callback("settings", "del", recipe_id))],
                     [UiButton("Отмена", "callback", encode_callback("settings", "recipes", 0))],
                 ]),
@@ -296,7 +268,7 @@ class SettingsMessengerRouter(RouteMessengerRouter):
             await gateway.send_text(
                 event.chat_id,
                 "Удалить историю и основную точку? Сценарии и расписания останутся.",
-                keyboard=UiKeyboard.from_rows([
+                keyboard=menu_keyboard([
                     [UiButton("Удалить точки", "callback", encode_callback("settings", "clearpy"))],
                     [UiButton("Отмена", "callback", encode_callback("settings", "back"))],
                 ]),
@@ -310,7 +282,7 @@ class SettingsMessengerRouter(RouteMessengerRouter):
             await gateway.send_text(
                 event.chat_id,
                 "Удалить все точки и сохранённые сценарии этой платформы? Расписания удаляются отдельно.",
-                keyboard=UiKeyboard.from_rows([
+                keyboard=menu_keyboard([
                     [UiButton("Удалить мои настройки", "callback", encode_callback("settings", "clearay"))],
                     [UiButton("Отмена", "callback", encode_callback("settings", "back"))],
                 ]),
@@ -331,7 +303,7 @@ class SettingsMessengerRouter(RouteMessengerRouter):
             await gateway.send_text(
                 event.chat_id,
                 prefix + "📍 Сохранённых точек пока нет.",
-                keyboard=UiKeyboard.from_rows([[UiButton("← Настройки", "callback", encode_callback("settings", "back"))]]),
+                keyboard=menu_keyboard([[UiButton("← Настройки", "callback", encode_callback("settings", "back"))]]),
             )
             return
         rows = [
@@ -339,7 +311,7 @@ class SettingsMessengerRouter(RouteMessengerRouter):
             for item in items
         ]
         rows.append([UiButton("← Настройки", "callback", encode_callback("settings", "back"))])
-        await gateway.send_text(event.chat_id, prefix + "📍 Выберите основную точку:", keyboard=UiKeyboard.from_rows(rows))
+        await gateway.send_text(event.chat_id, prefix + "📍 Выберите основную точку:", keyboard=menu_keyboard(rows))
 
     async def _show_recipes(self, event: NormalizedEvent, gateway: MessengerGateway, page: int, prefix: str = "") -> None:
         items = self.recipes.list(event.platform, event.user_id, limit=100)
@@ -364,4 +336,4 @@ class SettingsMessengerRouter(RouteMessengerRouter):
             rows.append(nav)
         rows.append([UiButton("← Настройки", "callback", encode_callback("settings", "back"))])
         text = prefix + ("📌 Сохранённые сценарии:" if items else "📌 Сохранённых сценариев пока нет.")
-        await gateway.send_text(event.chat_id, text, keyboard=UiKeyboard.from_rows(rows))
+        await gateway.send_text(event.chat_id, text, keyboard=menu_keyboard(rows))

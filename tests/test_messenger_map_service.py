@@ -63,7 +63,7 @@ class MapServiceTests(unittest.TestCase):
             self.assertEqual(result.metadata["frame_count"], 17)
             self.assertEqual(result.attachments[0].kind, "animation")
             self.assertEqual(result.attachments[0].mime_type, "video/mp4")
-            self.assertIn("модельная карта", result.summary)
+            self.assertIn("GFS data", result.summary)
             self.assertIn("run=20260905/00", result.repeat_command)
             cleanup_product_result(result)
             self.assertFalse(mp4.exists())

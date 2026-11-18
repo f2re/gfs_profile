@@ -45,24 +45,21 @@ def _pro_footer(data: CloudgramData) -> str:
     max_hazard = max((cell.hazard_score for cell in data.cells), default=0)
     missing = f" Нет полей: {', '.join(data.missing_fields)}." if data.missing_fields else ""
     intervals = sorted({float(cell.precip_interval_hours) for cell in data.cells if cell.precip_interval_hours is not None})
-    interval_text = "/".join(f"{value:g}" for value in intervals) if intervals else "—"
+    interval_text = "/".join(f"{value:g}" for value in intervals) + " ч" if intervals else "интервал"
     return (
-        "Облачность H/M/L и TCDC выбраны по точным слоям GFS. "
-        f"Осадки — количество за интервал {interval_text} ч. "
-        "ВНГО — нативное HGT cloud ceiling AGL; 20 000 м означает «потолка нет». "
-        "Конвективный потенциал 0–3 рассчитан по CAPE/CIN 180–0 гПа AGL, ACPCP, CPRAT и TCDC convective cloud; "
-        "TSRA/⚡ только при уровне 3 и осадках. Шкала опасности 0–4 локальная, не ICAO. "
-        f"Макс. опасность: {max_hazard}.{missing}"
+        f"GFS data · осадки за {interval_text} · ВНГО над землёй; 20 000 м = потолка нет\n"
+        f"Конвективный потенциал 0–3 · опасность 0–4; максимум {max_hazard}{missing}"
     )
+
 
 def _simple_footer(data: CloudgramData) -> str:
     max_hazard = max((cell.hazard_score for cell in data.cells), default=0)
+    missing = f" · нет полей: {', '.join(data.missing_fields)}" if data.missing_fields else ""
     return (
-        "Облака: верх/сред/низ; осадки — количество за интервал. "
-        "ВНГО — нативное AGL; 20 000 м = потолка нет. «пот.» — конвективный потенциал, не гроза; ⚡ — только модельный TSRA.\n"
-        "Опасность 0–4 — локальная модельная шкала по осадкам, VIS, ВНГО AGL и подтверждённому TSRA. "
-        f"Максимум: {max_hazard}."
+        "GFS data · облака: верх / середина / низ · осадки за интервал\n"
+        f"«пот.» — конвективный потенциал · ⚡ — TSRA · опасность 0–4; максимум {max_hazard}{missing}"
     )
+
 
 def _write_grid(data: CloudgramData, rows, cell_func, *, title: str, footer: str, simple: bool) -> Path:
     import matplotlib
@@ -75,7 +72,7 @@ def _write_grid(data: CloudgramData, rows, cell_func, *, title: str, footer: str
     n_cols = len(data.cells)
     n_rows = len(rows)
     fig_width = max(10.0, n_cols * (0.54 if not simple else 0.44))
-    fig_height = 4.25 if simple else 6.7
+    fig_height = 4.8 if simple else 7.0
 
     tmp = tempfile.NamedTemporaryFile(prefix="gfs_cloudgram", suffix=".png", delete=False)
     out_path = Path(tmp.name)
@@ -99,29 +96,29 @@ def _write_grid(data: CloudgramData, rows, cell_func, *, title: str, footer: str
                 if text.startswith("icon:"):
                     _draw_icon(ax, text.split(":", 1)[1], x, y)
                 elif text:
-                    ax.text(x, y, text, ha="center", va="center", fontsize=8.0 if simple else 7.2, color=text_color, fontweight="bold")
+                    ax.text(x, y, text, ha="center", va="center", fontsize=10.0 if simple else 9.5, color=text_color, fontweight="bold")
 
         y_date = n_rows + (0.08 if simple else 0.22)
-        draw_utc_day_guides(ax, data.cells, y_date, fontsize=7.4 if simple else 8.0)
+        draw_utc_day_guides(ax, data.cells, y_date, fontsize=9)
         if not simple:
             for y in (0.5, 2.5, 4.5):
                 ax.axhline(y, color="#53687D", linewidth=1.05, alpha=0.72)
         ax.set_xlim(-0.5, n_cols - 0.5)
         ax.set_ylim(n_rows + (0.34 if simple else 0.58), -0.5)
         ax.set_xticks(range(n_cols))
-        ax.set_xticklabels(_hour_lead_labels(data, sparse=n_cols > 60), rotation=0, fontsize=7)
+        ax.set_xticklabels(_hour_lead_labels(data, sparse=n_cols > 60), rotation=0, fontsize=9)
         ax.set_yticks(range(n_rows))
-        ax.set_yticklabels([f"{row.label}\n{row.unit}" if row.unit else row.label for row in rows], fontsize=8)
+        ax.set_yticklabels([f"{row.label}\n{row.unit}" if row.unit else row.label for row in rows], fontsize=10)
         ax.set_xlabel("" if simple else "UTC-время; ниже — заблаговременность +ч")
         ax.set_ylabel("Параметр")
-        ax.set_title(title, fontsize=10.5, fontweight="bold", color=METEO.axis_text, pad=12)
+        ax.set_title(title, fontsize=13, fontweight="bold", color=METEO.axis_text, pad=12)
         style_axis(ax, grid=False)
-        ax.tick_params(which="both", length=0)
-        if simple:
-            fig.text(0.5, 0.017, footer, ha="center", va="bottom", fontsize=6.15, color=METEO.muted_text, linespacing=1.04)
-        else:
-            add_footer(fig, footer, y=0.012)
-        fig.tight_layout(rect=(0, 0.080 if simple else 0.10, 1, 1))
+        ax.tick_params(which="both", length=0, labelsize=9)
+        ax.title.set_fontsize(13)
+        ax.xaxis.label.set_fontsize(10)
+        ax.yaxis.label.set_fontsize(10)
+        add_footer(fig, footer, y=0.014, fontsize=9)
+        fig.tight_layout(rect=(0, 0.12 if simple else 0.10, 1, 1))
         fig.savefig(out_path, dpi=180, bbox_inches="tight")
     except Exception:
         out_path.unlink(missing_ok=True)
@@ -134,7 +131,7 @@ def _write_grid(data: CloudgramData, rows, cell_func, *, title: str, footer: str
 
 def _write_cloudgram_pro_png(data: CloudgramData) -> Path:
     title = (
-        f"GFS 0.25 · cloudgram PRO: облачность, осадки, явления, VIS, ВНГО AGL и конвективный потенциал · "
+        f"Облака и явления · подробно\n"
         f"{data.run.date} {data.run.cycle}Z · +{data.leads[0]}…+{data.leads[-1]} ч · узел {data.grid_lat:.2f}, {data.grid_lon:.2f}"
     )
     return _write_grid(data, PRO_ROWS, _pro_cell, title=title, footer=_pro_footer(data), simple=False)
@@ -142,7 +139,7 @@ def _write_cloudgram_pro_png(data: CloudgramData) -> Path:
 
 def _write_cloudgram_simple_png(data: CloudgramData) -> Path:
     title = (
-        f"GFS 0.25 · cloudgram SIMPLE: облака, осадки/явления, конвективный потенциал и видимость · "
+        f"Облака и явления · кратко\n"
         f"{data.run.date} {data.run.cycle}Z · +{data.leads[0]}…+{data.leads[-1]} ч · узел {data.grid_lat:.2f}, {data.grid_lon:.2f}"
     )
     return _write_grid(data, SIMPLE_ROWS, _audited_simple_cell, title=title, footer=_simple_footer(data), simple=True)

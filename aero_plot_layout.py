@@ -78,7 +78,7 @@ def _curve_legend(ax, handles, labels) -> None:
         bbox_to_anchor=(0.0, 0.0, 1.0, 1.0),
         mode="expand",
         ncol=len(ordered_handles),
-        fontsize=7.4,
+        fontsize=9.0,
         frameon=False,
         handlelength=2.7,
         columnspacing=1.25,
@@ -112,22 +112,11 @@ def _layer_legend(ax) -> None:
         handles=handles,
         loc="upper left",
         bbox_to_anchor=(0.0, 0.84),
-        fontsize=6.8,
+        fontsize=8.5,
         frameon=False,
         handlelength=2.4,
         labelspacing=0.62,
         borderaxespad=0,
-    )
-    ax.text(
-        0.0,
-        0.02,
-        "Диагностика по влажности,\nтемпературе и сдвигу ветра.",
-        transform=ax.transAxes,
-        ha="left",
-        va="bottom",
-        fontsize=6.25,
-        linespacing=1.15,
-        color=METEO.muted_text,
     )
 
 
@@ -269,7 +258,7 @@ def _plot_metpy_diagram(result: ProfileResult, out_path: Path) -> None:
 
         title, subtitle = base._diagram_title(result)
         fig.text(0.055, 0.978, title, ha="left", va="top", fontsize=15.0, fontweight="bold", color=METEO.axis_text)
-        fig.text(0.055, 0.948, subtitle, ha="left", va="top", fontsize=8.7, color=METEO.muted_text)
+        fig.text(0.055, 0.948, subtitle, ha="left", va="top", fontsize=10, color=METEO.muted_text)
 
         handles, labels = diagram.ax.get_legend_handles_labels()
         curve_legend = fig.add_axes(AERO_LAYOUT["curve_legend"])
@@ -281,13 +270,13 @@ def _plot_metpy_diagram(result: ProfileResult, out_path: Path) -> None:
         hazards = fig.add_axes(AERO_LAYOUT["hazards"], sharey=diagram.ax)
         base._hazards(hazards, layers)
         hazards.set_title("Слои по высоте", fontsize=9.0, fontweight="bold", pad=5)
-        hazards.tick_params(axis="x", labelsize=6.4, pad=2)
+        hazards.tick_params(axis="x", labelsize=8, pad=2)
 
         wind = fig.add_axes(AERO_LAYOUT["wind"], sharey=diagram.ax)
         base._wind_panel(wind, df)
         wind.set_title("Ветер и сдвиг", fontsize=9.0, fontweight="bold", pad=5)
-        wind.set_xlabel("м/с · м/с/км", fontsize=7.1, labelpad=3)
-        wind.tick_params(axis="x", labelsize=6.7, pad=2)
+        wind.set_xlabel("м/с · м/с/км", fontsize=8.5, labelpad=3)
+        wind.tick_params(axis="x", labelsize=8, pad=2)
 
         hodograph = fig.add_axes(AERO_LAYOUT["hodograph"])
         _hodograph(hodograph, df)
@@ -297,7 +286,7 @@ def _plot_metpy_diagram(result: ProfileResult, out_path: Path) -> None:
 
         add_footer(
             fig,
-            f"{getattr(result, 'model_label', 'GFS 0.25°')} · модель, не радиозонд. {getattr(result, 'diagnostics_note', '') or 'Облачность, обледенение и болтанка — диагностические модельные слои.'}",
+            "GFS data" if str(getattr(result, "model_label", "GFS")).startswith("GFS") else f"{result.model_label} data",
             y=0.022,
         )
         # Keep the exact canvas geometry. tight bbox reflows outside artists and

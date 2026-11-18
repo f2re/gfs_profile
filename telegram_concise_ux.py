@@ -3,103 +3,67 @@ from __future__ import annotations
 """Compact Telegram copy and stage-aware keyboards.
 
 The reply keyboard with location sharing exists only while the bot is waiting
-for a point. Home and parameter navigation use inline keyboards. Scientific
-disclaimers remain in final products instead of being repeated in every prompt.
+for a point. Home and parameter navigation use inline keyboards. The product
+catalogue and source label are shared with the other messengers.
 """
 
 import asyncio
 import html
 from typing import Any
 
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
 from telegram.constants import ParseMode
 from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler
 
+from feature_flags import weathernext3_enabled
+from messenger.menu_catalog import HOME_TEXT, PRODUCT_LABELS
 from telegram_product_wizard import PRODUCT_WIZARD_KEY, copy_command
-from user_location_session import RECENT_LOCATION_PREFIX, recent_location_button_label
-
-CANCEL_TEXT = "✖ Отмена"
+from telegram_ui import CANCEL_TEXT, location_keyboard, product_button_rows
+from user_location_session import RECENT_LOCATION_PREFIX
 
 
 def home_text() -> str:
-    return (
-        "🌦 GFS-прогнозы по точке и маршруту\n\n"
-        "/profile — вертикальный профиль\n"
-        "/route — разрез вдоль маршрута\n"
-        "/aero, /skewt — аэродиаграммы\n"
-        "/windgram — ветер, температура или влажность по срокам\n"
-        "/cloudgram — облака, осадки и грозы\n"
-        "/meteogram — прогноз по времени и ансамбль\n"
-        "/map — карта, серия или анимация\n"
-        "/icing — обледенение по заданному району\n"
-        "/schedule — автоматическая отправка\n\n"
-        "Выберите продукт."
-    )
+    return HOME_TEXT
+
 
 def help_text() -> str:
     return (
-        "Как пользоваться\n\n"
-        "1. Выберите продукт.\n"
-        "2. Для продукта по точке укажите город, координаты или геолокацию.\n"
-        "3. Настройте срок и параметры кнопками.\n\n"
-        "Быстрые примеры:\n"
+        "Как пользоваться · GFS data\n\n"
+        "Выберите продукт, точку и срок. Быстрый запрос: Москва +24.\n\n"
+        "/profile — вертикальный профиль\n"
+        "/aero — аэрограмма\n"
+        "/windgram — ветер, температура и влажность по высоте и времени\n"
+        "/cloudgram — облака и осадки\n"
+        "/meteogram — метеограмма или отчёт\n"
+        "/map — карта, серия или анимация\n"
+        "/icing — обледенение; район уже задан\n"
+        "/route — разрез по маршруту\n"
+        + ("/wn3 — WeatherNext 3\n" if weathernext3_enabled() else "")
+        + "\nПримеры:\n"
         "<code>/profile Москва +24</code>\n"
         "<code>/route Москва -&gt; Санкт-Петербург +6</code>\n"
-        "<code>/cloudgram Москва to=72 mode=simple</code>\n"
-        "<code>/meteogram Москва ensemble=gefs days=5 format=pdf</code>\n"
-        "<code>/map Москва from=0 to=24 step=3 mode=gif</code>\n\n"
-        "<code>/icing</code> — карты обледенения; район уже задан\n\n"
-        "/schedule — до 2 автоматических отправок на пользователя\n"
-        "/cycle — последний цикл · /status — доступность · /cancel — сброс"
+        "<code>/meteogram Москва ensemble=gefs days=5 format=pdf</code>\n\n"
+        "/settings — точка и сохранённые параметры\n"
+        "/schedule — автоматическая отправка\n"
+        "/cycle — цикл · /status — доступность · /cancel — сброс"
     )
+
 
 def home_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("📈 Профиль", callback_data="home:profile"),
-                InlineKeyboardButton("✈️ Маршрут", callback_data="home:route"),
-            ],
-            [
-                InlineKeyboardButton("☁️ Облака", callback_data="home:cloudgram"),
-                InlineKeyboardButton("🟦 Срок × уровень", callback_data="home:windgram"),
-            ],
-            [
-                InlineKeyboardButton("🧾 Аэродиаграмма", callback_data="home:aero"),
-                InlineKeyboardButton("📊 Метеограмма", callback_data="home:meteogram"),
-            ],
-            [
-                InlineKeyboardButton("🗺️ Карта", callback_data="home:map"),
-                InlineKeyboardButton("❓ Как пользоваться", callback_data="home:help"),
-            ],
-            [InlineKeyboardButton("🕒 Расписания", callback_data="home:schedule")],
-            [InlineKeyboardButton("❄ Обледенение", callback_data="home:icing")],
-        ]
-    )
+    return InlineKeyboardMarkup([
+        *product_button_rows(),
+        [InlineKeyboardButton("Расписания", callback_data="home:schedule"),
+         InlineKeyboardButton("Настройки", callback_data="home:settings")],
+        [InlineKeyboardButton("Помощь", callback_data="home:help")],
+    ])
+
 
 def point_keyboard(recent_locations: list[Any] | None = None) -> ReplyKeyboardMarkup:
-    rows: list[list[KeyboardButton]] = [[KeyboardButton("📍 Моя геолокация", request_location=True)]]
-    buttons = [KeyboardButton(recent_location_button_label(point)) for point in (recent_locations or [])[:4]]
-    for index in range(0, len(buttons), 2):
-        rows.append(buttons[index : index + 2])
-    rows.append([KeyboardButton(CANCEL_TEXT)])
-    return ReplyKeyboardMarkup(
-        rows,
-        resize_keyboard=True,
-        one_time_keyboard=True,
-        selective=True,
-        is_persistent=False,
-        input_field_placeholder="Город или координаты",
-    )
+    return location_keyboard(recent_locations)
 
 
 def point_prompt_text(state: dict[str, object]) -> str:
-    product = {
-        "aero": "🧾 Аэродиаграмма",
-        "windgram": "🟦 Срок × уровень",
-        "cloudgram": "☁️ Облака и осадки",
-        "map": "🗺️ Карта",
-    }.get(str(state.get("product", "")), "Продукт GFS")
+    product = PRODUCT_LABELS.get(str(state.get("product", "")), "GFS data")
     return f"{product}\n\nУкажите город, координаты или отправьте геолокацию."
 
 
@@ -118,7 +82,7 @@ def params_text(state: dict[str, object]) -> str:
     command_line = f"\n<code>{html.escape(command)}</code>" if command else ""
 
     if product == "aero":
-        body = f"🧾 Аэродиаграмма\n{point}\nТип: {str(state.get('diagram_type', 'stuve')).upper()} · срок +{int(state.get('lead', 24))} ч"
+        body = f"Аэрограмма\n{point}\n+{int(state.get('lead', 24))} ч · Skew-T · годограф"
     elif product == "windgram":
         param = {"wind": "ветер", "temp": "температура", "rh": "влажность"}.get(str(state.get("param", "wind")), "ветер")
         body = (
@@ -162,80 +126,6 @@ async def _remove_reply_keyboard(message) -> None:
         pass
 
 
-def _patch_product_messages() -> None:
-    import telegram_aero as aero
-    import telegram_cloudgram as cloud
-    import telegram_map as map_module
-    import telegram_windgram as wind
-
-    if getattr(map_module, "_CONCISE_COPY_PATCHED", False):
-        return
-
-    def repeat_aero(point, parsed, run) -> str:
-        return f"📋 <code>{html.escape(aero.repeat_aero_command(point, parsed, run))}</code>"
-
-    def repeat_wind(point, parsed, run) -> str:
-        return f"📋 <code>{html.escape(wind.repeat_windgram_command(point, parsed, run))}</code>"
-
-    def wind_caption(data) -> str:
-        step = data.leads[1] - data.leads[0] if len(data.leads) > 1 else 0
-        name = wind.PARAM_NAMES.get(data.param, data.param)
-        return (
-            f"🟦 Windgram · {name}\n"
-            f"{data.run.date} {data.run.cycle}Z · +{data.leads[0]}…+{data.leads[-1]} ч · шаг {step} ч\n"
-            f"Узел {data.grid_lat:.3f}, {data.grid_lon:.3f}"
-        )
-
-    def repeat_cloud(point, parsed, run) -> str:
-        return f"📋 <code>{html.escape(cloud.repeat_cloudgram_command(point, parsed, run))}</code>"
-
-    def cloud_caption(data, mode="pro") -> str:
-        step = data.leads[1] - data.leads[0] if len(data.leads) > 1 else 0
-        maximum = max((cell.hazard_score for cell in data.cells), default=0)
-        missing = f"\nНет полей: {', '.join(data.missing_fields)}" if data.missing_fields else ""
-        return (
-            f"☁️ Cloudgram · {'SIMPLE' if mode == 'simple' else 'PRO'}\n"
-            f"{data.run.date} {data.run.cycle}Z · +{data.leads[0]}…+{data.leads[-1]} ч · шаг {step} ч\n"
-            f"Максимальная оценка: {cloud._hazard_label(maximum)}{missing}"
-        )
-
-    def repeat_map(point, parsed, run) -> str:
-        return f"📋 <code>{html.escape(map_module._repeat_command(point, parsed, run))}</code>"
-
-    def map_status(data: dict, *, animated: bool = False, series: bool = False, lead_count: int = 1) -> str:
-        run = data["run"]
-        point = data["point"]
-        title = "🗺️ Карта"
-        if animated:
-            title = f"🗺️ Анимация · {lead_count} кадров"
-        elif series:
-            title = f"🗺️ Серия карт · {lead_count} кадров"
-        return f"{title}\n📍 {point.label}\n🕒 {run.date} {run.cycle}Z · +{data['lead_hour']} ч"
-
-    def map_file_caption(data: dict, *, animated: bool = False, series: bool = False, animation_format: str = "MP4-анимация") -> str:
-        run = data["run"]
-        point = data["point"]
-        kind = animation_format if animated else "PNG-серия" if series else "PNG"
-        lines = [
-            f"{kind} · MAP · {run.date} {run.cycle}Z",
-            f"{point.label} · +{int(data['lead_hour'])} ч · радиус {int(data['radius_km'])} км",
-        ]
-        missing = data.get("missing") or set()
-        if missing:
-            lines.append("Нет полей: " + ", ".join(sorted(missing)))
-        return "\n".join(lines)
-
-    aero.format_repeat_aero_message = repeat_aero
-    wind.format_repeat_windgram_message = repeat_wind
-    wind.format_windgram_caption = wind_caption
-    cloud.format_repeat_cloudgram_message = repeat_cloud
-    cloud.format_cloudgram_caption = cloud_caption
-    map_module.format_repeat_map_message = repeat_map
-    map_module.format_map_status = map_status
-    map_module.format_map_file_caption = map_file_caption
-    map_module._CONCISE_COPY_PATCHED = True
-
-
 def _patch_route_messages() -> None:
     import telegram_route as route
 
@@ -253,6 +143,7 @@ def _patch_route_messages() -> None:
         message = update.effective_message
         if not message:
             return
+        await _remove_reply_keyboard(message)
         context.user_data[route.ROUTE_SESSION_KEY] = {
             "step": "await_route",
             "lead": 24,
@@ -266,6 +157,7 @@ def _patch_route_messages() -> None:
             "<code>Москва -&gt; Санкт-Петербург</code>\n\n"
             "Далее выберите срок, скорость, детализацию и режим.",
             parse_mode=ParseMode.HTML,
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data="route:cancel")]]),
         )
 
     def route_settings_text(state: dict[str, object]) -> str:
@@ -294,7 +186,6 @@ def install(namespace: dict[str, Any]) -> None:
 
     if namespace.get("_CONCISE_UX_INSTALLED"):
         return
-    _patch_product_messages()
     _patch_route_messages()
 
     original_aero_command = namespace["aero_command"]

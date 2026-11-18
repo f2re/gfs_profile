@@ -10,8 +10,8 @@ class TelegramUiTests(unittest.TestCase):
     def test_common_lead_keyboard_has_full_range_entry(self) -> None:
         markup = lead_keyboard(0)
         labels = [button.text for row in markup.inline_keyboard for button in row]
-        self.assertIn("+24 ч сутки", labels)
-        self.assertIn("Максимум +384 ч", labels)
+        self.assertIn("+24 ч", labels)
+        self.assertIn("+384 ч", labels)
         self.assertIn("Все сроки →", labels)
 
     def test_lead_pagination_has_multiple_pages(self) -> None:

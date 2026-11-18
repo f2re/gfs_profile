@@ -108,7 +108,7 @@ def format_aero_summary(result: Any, point: Any) -> str:
         f"📍 {getattr(point, 'label', 'точка')} · {requested_lat:.4f}, {requested_lon:.4f}\n"
         f"GFS grid: {float(result.grid_lat):.3f}, {float(result.grid_lon):.3f}\n"
         "Skew-T log-P · годограф · Zg MSL\n"
-        "icing/CAT — модельные прокси · модель, не радиозонд"
+        "GFS data"
     )
 
 

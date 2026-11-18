@@ -549,5 +549,5 @@ def _weekday_ru(index: int) -> str:
 
 
 def _footer(fig: Any) -> None:
-    fig.text(0.045, 0.022, "GFS Profile • модельный прогноз", fontsize=6.4, color=MUTED, va="bottom")
-    fig.text(0.955, 0.022, "местное время точки • не наблюдение", fontsize=6.4, color=MUTED, ha="right", va="bottom")
+    fig.text(0.045, 0.022, "GFS Profile · data", fontsize=6.4, color=MUTED, va="bottom")
+    fig.text(0.955, 0.022, "местное время точки", fontsize=6.4, color=MUTED, ha="right", va="bottom")

@@ -29,15 +29,9 @@ from .route_service import (
     route_plan,
     route_recipe_params,
 )
-from .router import RouterDependencies, _command_args
+from .router import RouterDependencies, _command_args, menu_keyboard
 from .state import FlowState
 from .user_recipes import RecipeLimitError, UserRecipe
-
-START_TEXT = (
-    "🌦 GFS 0.25 — модельный прогноз\n"
-    "Доступны профиль, аэродиаграмма, срок × уровень, облака, карта, метеограмма и маршрут.\n"
-    "GFS — модель, не наблюдение и не радиозонд."
-)
 
 
 def _route_params(value: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -66,8 +60,7 @@ def _route_card_text(origin: GeoPoint, destination: GeoPoint, params: dict[str, 
         f"📏 {distance:.0f} км · расчётное время {duration:.1f} ч\n"
         f"🕒 вылет +{p['lead']} ч · прибытие около +{max_lead} ч\n"
         f"🚀 {p['speed']} км/ч · сетка {p['spatial_step']} км · {len(specs)} точек\n"
-        f"📊 {mode} · профиль до 500 гПа{warning}\n\n"
-        "Simple/Pro используют одинаковые исходные данные и риск; различается только представление."
+        f"📊 {mode} · профиль до 500 гПа{warning}"
     )
 
 
@@ -75,7 +68,7 @@ def _route_keyboard(params: dict[str, Any]) -> UiKeyboard:
     p = _route_params(params)
     lead_rows = [[UiButton(("✓ " if p["lead"] == value else "") + f"+{value}ч", "callback", encode_callback("route", "lead", value)) for value in ROUTE_LEADS[:3]],
                  [UiButton(("✓ " if p["lead"] == value else "") + f"+{value}ч", "callback", encode_callback("route", "lead", value)) for value in ROUTE_LEADS[3:]]]
-    return UiKeyboard.from_rows([
+    return menu_keyboard([
         [UiButton("▶ Построить", "callback", encode_callback("route", "run"))],
         *lead_rows,
         [UiButton(("✓ " if p["speed"] == value else "") + f"{value}", "callback", encode_callback("route", "speed", value)) for value in ROUTE_SPEEDS],
@@ -105,18 +98,10 @@ def _route_progress(origin: GeoPoint, destination: GeoPoint, params: dict[str, A
     return header + body
 
 
-def _quick_label(recipe: UserRecipe) -> str:
-    marker = "★" if recipe.pinned else "▶"
-    if recipe.product == "route":
-        endpoints = _recipe_endpoints(recipe)
-        if endpoints:
-            return f"{marker} Маршрут · {endpoints[0].label} → {endpoints[1].label}"[:62]
-    label = (recipe.point or {}).get("label", "точка")
-    titles = {"profile": "Профиль", "aero": "Аэродиаграмма", "windgram": "Срок × уровень", "cloudgram": "Облака", "map": "Карта", "meteogram": "Метеограмма"}
-    return f"{marker} {titles.get(recipe.product, recipe.product)} · {label}"[:62]
-
-
 class RouteMessengerRouter(MeteogramMessengerRouter):
+
+    home_products = MeteogramMessengerRouter.home_products + ("route",)
+
     def __init__(self, dependencies: RouterDependencies, *, route_builder: Callable[..., Any] = build_route_product_result, route_parser: Callable[[str], ParsedRouteInput] = parse_route_input, **kwargs: Any) -> None:
         super().__init__(dependencies, **kwargs)
         self.route_builder = route_builder
@@ -130,20 +115,6 @@ class RouteMessengerRouter(MeteogramMessengerRouter):
     def _default_route_recipe(self, event: NormalizedEvent) -> UserRecipe | None:
         return self.recipes.default_for_product(event.platform, event.user_id, "route") or self.recipes.latest_for_product(event.platform, event.user_id, "route")
 
-    async def _start(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
-        self.sessions.clear(event.platform, event.user_id, event.chat_id)
-        rows: list[list[UiButton]] = []
-        for recipe in self.recipes.quick(event.platform, event.user_id, limit=2):
-            if recipe.product in {"profile", "aero", "windgram", "cloudgram", "map", "meteogram", "route"}:
-                rows.append([UiButton(_quick_label(recipe), "callback", encode_callback("recipe", "run", recipe.recipe_id))])
-        rows.extend([
-            [UiButton("📈 Профиль", "callback", encode_callback("product", "open", "profile")), UiButton("🧾 Аэродиаграмма", "callback", encode_callback("product", "open", "aero"))],
-            [UiButton("🟦 Срок × уровень", "callback", encode_callback("product", "open", "windgram")), UiButton("☁ Облака", "callback", encode_callback("product", "open", "cloudgram"))],
-            [UiButton("🗺 Карта", "callback", encode_callback("product", "open", "map")), UiButton("📊 Метеограмма", "callback", encode_callback("product", "open", "meteogram"))],
-            [UiButton("❄ Обледенение", "callback", encode_callback("product", "open", "icing"))],
-            [UiButton("✈ Маршрут", "callback", encode_callback("product", "open", "route")), UiButton("📍 Геолокация", "request_location")],
-        ])
-        await gateway.send_text(event.chat_id, START_TEXT, keyboard=UiKeyboard.from_rows(rows))
 
     async def _text(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
         command = (event.command or "").lower().lstrip("/")
@@ -231,7 +202,7 @@ class RouteMessengerRouter(MeteogramMessengerRouter):
             elif data.action == "mode": p["mode"] = str(data.value)
             elif data.action == "run": await self._run_route(event, gateway, origin, destination, p, None); return
             elif data.action == "restart": await self._ask_route(event, gateway, p); return
-            elif data.action == "cancel": self.sessions.clear(event.platform, event.user_id, event.chat_id); await gateway.send_text(event.chat_id, "Маршрут отменён."); return
+            elif data.action == "cancel": self.sessions.clear(event.platform, event.user_id, event.chat_id); await gateway.send_text(event.chat_id, "Выбор отменён.", keyboard=menu_keyboard([])); return
             else: return
             p = _route_params(p)
         except Exception as exc:
@@ -240,7 +211,7 @@ class RouteMessengerRouter(MeteogramMessengerRouter):
 
     async def _ask_route(self, event: NormalizedEvent, gateway: MessengerGateway, params: dict[str, Any]) -> None:
         self.sessions.set(event.platform, event.user_id, event.chat_id, FlowState(product="route", step="await_route", params=_route_params(params)))
-        await gateway.send_text(event.chat_id, "✈ Маршрут GFS. Введите `Москва -> Санкт-Петербург` или отправьте геолокацию как точку старта.", keyboard=UiKeyboard.from_rows([[UiButton("📍 Старт из геолокации", "request_location")]]))
+        await gateway.send_text(event.chat_id, "Маршрут · GFS data\nВведите Москва -> Санкт-Петербург или отправьте геолокацию старта.", keyboard=menu_keyboard([[UiButton("📍 Старт из геолокации", "request_location")]]))
 
     async def _geocode_one(self, query: str) -> GeoPoint:
         candidates = await asyncio.to_thread(self.deps.geocode, query, 1)
@@ -283,7 +254,7 @@ class RouteMessengerRouter(MeteogramMessengerRouter):
         endpoints = _recipe_endpoints(recipe)
         if endpoints is None: return
         pin = "★ Открепить" if recipe.pinned else "⭐ Закрепить"
-        await gateway.send_text(event.chat_id, _route_card_text(endpoints[0], endpoints[1], recipe.params), keyboard=UiKeyboard.from_rows([
+        await gateway.send_text(event.chat_id, _route_card_text(endpoints[0], endpoints[1], recipe.params), keyboard=menu_keyboard([
             [UiButton("▶ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],
             [UiButton(pin, "callback", encode_callback("recipe", "toggle", recipe.recipe_id)), UiButton("⚙ Изменить", "callback", encode_callback("recipe", "change", recipe.recipe_id))],
         ]))

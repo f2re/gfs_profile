@@ -173,8 +173,7 @@ def format_cloudgram_summary(data: CloudgramData, point: Any, mode: str) -> str:
         f"⚠️ Макс. опасность: {hazard_label(max_hazard)}\n"
         f"{MODE_DESCRIPTIONS[selected_mode]}"
         f"{missing}\n"
-        "Опасность/гроза — модельная диагностика, не наблюдение.\n"
-        "GFS grid • модель, не радиозонд"
+        "GFS data"
     )
 
 

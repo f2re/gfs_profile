@@ -70,7 +70,7 @@ def upper_product(point, kind, params, *, provider=None, progress_callback=None)
                                'grid_lat': profile.grid_lat, 'grid_lon': profile.grid_lon, **row})
         csv = csv_attachment(export, kind)
         paths.append(csv.path)
-        return CommonProductResult('weathernext3', summary + '\nGoogle GCS/Zarr · модель, не радиозонд и не наблюдение',
+        return CommonProductResult('weathernext3', summary + '\nWeatherNext 3 data · Google GCS/Zarr',
             [ProductAttachment('image', path, path.name, first.model_label + ' · ' + kind, 'image/png'), csv],
             {'kind': kind, 'model': 'WeatherNext 3', 'provider': 'Google GCS/Zarr', 'data_kind': 'model',
              'run': first.run.run_datetime_utc.isoformat(), 'lead_from': leads[0], 'lead_to': leads[-1],
@@ -113,7 +113,7 @@ def surface_plot(point, series, kind: str) -> Path:
         ax.set_xlabel('Срок действия, UTC')
         ax.grid(alpha=.2)
         ax.legend(loc='upper left', bbox_to_anchor=(0, -.16), ncol=2, fontsize=9)
-        fig.text(.5, .025, note + '\nGoogle BigQuery · модельный прогноз, не наблюдение', ha='center', fontsize=8)
+        fig.text(.5, .025, note + '\nWeatherNext 3 data · Google BigQuery', ha='center', fontsize=8)
         fig.subplots_adjust(bottom=.30, left=.09, right=.97, top=.88)
         fig.savefig(path)
         return path

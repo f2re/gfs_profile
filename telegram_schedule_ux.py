@@ -81,28 +81,6 @@ def _ensure_meteogram_schedule_state(context) -> dict[str, object]:
     return state
 
 
-def _product_keyboard() -> InlineKeyboardMarkup:
-    """Put the most common schedule products first and keep labels short."""
-
-    return InlineKeyboardMarkup(
-        [
-            [
-                InlineKeyboardButton("📊 Метеограмма", callback_data="sched:product:meteogram"),
-                InlineKeyboardButton("📈 Профиль", callback_data="sched:product:profile"),
-            ],
-            [
-                InlineKeyboardButton("☁️ Облака", callback_data="sched:product:cloudgram"),
-                InlineKeyboardButton("🟦 Срок × уровень", callback_data="sched:product:windgram"),
-            ],
-            [
-                InlineKeyboardButton("🧾 Аэродиаграмма", callback_data="sched:product:aero"),
-                InlineKeyboardButton("🗺️ Карта / анимация", callback_data="sched:product:map"),
-            ],
-            [InlineKeyboardButton("← Расписания", callback_data="sched:list")],
-        ]
-    )
-
-
 def _quick_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [[InlineKeyboardButton("🕒 В расписание", callback_data="sched:quick")]]
@@ -520,7 +498,6 @@ def install(namespace: dict[str, Any]) -> None:
         return await original_schedule_callback(update, context, ns)
 
     schedules.schedule_callback = schedule_callback
-    schedules._product_keyboard = _product_keyboard
     schedules._manager_text = _manager_text_wrapper(schedules._manager_text)
 
     # Meteogram live runs can preserve their complete schedule specification.

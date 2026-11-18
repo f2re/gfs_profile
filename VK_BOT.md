@@ -256,7 +256,12 @@ sudo journalctl -u gfs-profile-bot.service -n 100 --no-pager
 /cancel
 ```
 
-Все GFS-продукты должны быть помечены как модель, не наблюдение/радиозонд.
+GFS-продукты подписываются `GFS data` с фактическими run/valid UTC и единицами.
+Общий каталог и подписи продуктов совпадают с Telegram/MAX; подробные методики
+доступны отдельно от основных действий.
+
+Общий обход меню, возвраты и приёмка новой раскладки:
+[UI_MENU_ACCEPTANCE.md](docs/UI_MENU_ACCEPTANCE.md).
 
 ## WeatherNext 3
 

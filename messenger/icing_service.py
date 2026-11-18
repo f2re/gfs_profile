@@ -148,9 +148,7 @@ def build_icing_product_result(
         summary = (f"{title}\n{time_line}\n"
                    f"Район: {west:g}…{east:g}° долготы; {south:g}…{north:g}° с.ш.\n"
                    f"{details} · {PRODUCT_UNITS[request.product]}\n"
-                   "GFS 0.25° · модельный прогноз, не наблюдение")
-        if request.product.startswith("godske_"):
-            summary += "\nМощность слоя не является интенсивностью обледенения."
+                   "GFS data · 0.25°")
         if not np.isfinite(values).any():
             summary += "\nНет определённых значений: проверьте покрытие и незамкнутые границы."
         metadata = {

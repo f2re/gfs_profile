@@ -362,8 +362,7 @@ async def _run_product(
             f"{series.times[0]:%d.%m %H:%M} — "
             f"{series.times[-1]:%d.%m %H:%M} · местное время"
             f"{warning_line}{fallback_line}\n"
-            f"Результат: {_output_label(actual_format)}\n"
-            "ℹ Модельный прогноз, не наблюдение."
+            f"Результат: {_output_label(actual_format)}"
         )
 
         if output_format == "png":
@@ -516,14 +515,14 @@ async def meteogram_callback(update: Update, context) -> None:
         return
     await query.answer()
     state = context.user_data.get(SESSION_KEY)
-    if not isinstance(state, dict):
-        await query.edit_message_text("Выбор устарел. Запустите /meteogram.")
-        raise ApplicationHandlerStop
     if data == "meteo:cancel":
         context.user_data.pop(SESSION_KEY, None)
-        await query.edit_message_text("Выбор метеограммы сброшен.")
-        if query.message:
-            await _show_home(query.message)
+        from telegram_personal_ux import home_text, home_keyboard
+        user_id = int(getattr(update.effective_user, "id", 0) or 0)
+        await query.edit_message_text(home_text(user_id), reply_markup=home_keyboard(user_id))
+        raise ApplicationHandlerStop
+    if not isinstance(state, dict):
+        await query.edit_message_text("Выбор устарел. Запустите /meteogram.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Меню", callback_data="prefs:home")]]))
         raise ApplicationHandlerStop
     if data.startswith("meteo:place:"):
         index = int(data.rsplit(":", 1)[1])

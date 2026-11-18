@@ -63,8 +63,8 @@ class TelegramCloudgramTests(unittest.TestCase):
     def test_caption_keeps_compact_product_contract(self) -> None:
         caption = format_cloudgram_caption(self._data(), "simple")
         self.assertIn("GFS", caption)
-        self.assertIn("Cloudgram", caption)
-        self.assertIn("SIMPLE", caption)
+        self.assertIn("облака и осадки", caption)
+        self.assertIn("кратко", caption)
         self.assertIn("20260701 12Z", caption)
         self.assertIn("+0…+3 ч", caption)
         self.assertIn("4/4", caption)

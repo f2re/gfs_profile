@@ -7,9 +7,9 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 from .callback_codec import CallbackCodecError, decode_callback, encode_callback
-from .contracts import MessengerGateway, NormalizedEvent, UiButton, UiKeyboard
+from .contracts import MessengerGateway, NormalizedEvent, UiButton
 from .product_executor import ProductSnapshot
-from .router import RouterDependencies
+from .router import RouterDependencies, menu_keyboard
 from .schedule_store import (
     MAX_SCHEDULES_PER_USER,
     MessengerSchedule,
@@ -43,6 +43,9 @@ def _schedule_line(item: MessengerSchedule) -> str:
 
 
 class ScheduleMessengerRouter(SettingsMessengerRouter):
+
+    home_schedule = True
+
     def __init__(
         self,
         dependencies: RouterDependencies,
@@ -61,30 +64,6 @@ class ScheduleMessengerRouter(SettingsMessengerRouter):
 
         return cls(RouterDependencies(geocode=search_location_candidates), **kwargs)
 
-    async def _start(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
-        self.sessions.clear(event.platform, event.user_id, event.chat_id)
-        self._sync_locations_from_recipes(event)
-        active = self.locations.active(event.platform, event.user_id)
-        rows: list[list[UiButton]] = []
-        for recipe in self.recipes.quick(event.platform, event.user_id, limit=2):
-            rows.append([UiButton("▶ " + _recipe_label(recipe)[2:], "callback", encode_callback("recipe", "run", recipe.recipe_id))])
-        rows.extend([
-            [UiButton("📈 Профиль", "callback", encode_callback("product", "open", "profile")), UiButton("🧾 Аэродиаграмма", "callback", encode_callback("product", "open", "aero"))],
-            [UiButton("🟦 Срок × уровень", "callback", encode_callback("product", "open", "windgram")), UiButton("☁ Облака", "callback", encode_callback("product", "open", "cloudgram"))],
-            [UiButton("🗺 Карта", "callback", encode_callback("product", "open", "map")), UiButton("📊 Метеограмма", "callback", encode_callback("product", "open", "meteogram"))],
-            [UiButton("❄ Обледенение", "callback", encode_callback("product", "open", "icing"))],
-            [UiButton("✈ Маршрут", "callback", encode_callback("product", "open", "route")), UiButton("🕒 Расписания", "callback", encode_callback("schedule", "open"))],
-            [UiButton("⚙ Настройки", "callback", encode_callback("settings", "open")), UiButton("📍 Геолокация", "request_location")],
-        ])
-        point = f"\n📍 Основная точка: {active.label}" if active else ""
-        await gateway.send_text(
-            event.chat_id,
-            "🌦 GFS 0.25 — модельный прогноз"
-            f"{point}\n"
-            "Все основные продукты, сохранённые сценарии и расписания доступны в одном flow.\n"
-            "GFS — модель, не наблюдение и не радиозонд.",
-            keyboard=UiKeyboard.from_rows(rows),
-        )
 
     async def _text(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
         command = (event.command or "").lower().lstrip("/")
@@ -126,6 +105,11 @@ class ScheduleMessengerRouter(SettingsMessengerRouter):
             return
         await gateway.answer_callback(event)
         action = data.action
+        if action in {"freq", "freqcustom", "time", "timecustom", "save"}:
+            state = self._schedule_state(event)
+            if state is None:
+                await self._show_manager(event, gateway, prefix="Выбор устарел. Начните создание заново.\n\n")
+                return
         if action in {"open", "list"}:
             self.sessions.clear(event.platform, event.user_id, event.chat_id)
             await self._show_manager(event, gateway)
@@ -209,7 +193,7 @@ class ScheduleMessengerRouter(SettingsMessengerRouter):
             await gateway.send_text(
                 event.chat_id,
                 f"Удалить расписание «{_schedule_line(item)}»?",
-                keyboard=UiKeyboard.from_rows([
+                keyboard=menu_keyboard([
                     [UiButton("Удалить", "callback", encode_callback("schedule", "del", schedule_id))],
                     [UiButton("Отмена", "callback", encode_callback("schedule", "view", schedule_id))],
                 ]),
@@ -243,31 +227,33 @@ class ScheduleMessengerRouter(SettingsMessengerRouter):
         rows = [[UiButton(f"{idx + 1}. {PRODUCT_TITLES.get(item.product, item.product)}", "callback", encode_callback("schedule", "view", item.schedule_id))] for idx, item in enumerate(items)]
         if len(items) < MAX_SCHEDULES_PER_USER:
             rows.append([UiButton("➕ Новое расписание", "callback", encode_callback("schedule", "new"))])
-        rows.append([UiButton("🏠 Главное меню", "callback", encode_callback("schedule", "home"))])
-        await gateway.send_text(event.chat_id, prefix + "\n".join(lines), keyboard=UiKeyboard.from_rows(rows))
+        rows.append([UiButton("Меню", "callback", encode_callback("schedule", "home"))])
+        await gateway.send_text(event.chat_id, prefix + "\n".join(lines), keyboard=menu_keyboard(rows))
 
     async def _choose_recipe(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
         recipes = self.recipes.list(event.platform, event.user_id, limit=24)
         if not recipes:
-            await gateway.send_text(event.chat_id, "Сначала успешно постройте нужный продукт. После этого он появится как сохранённый сценарий.")
+            await gateway.send_text(event.chat_id, "Сначала постройте нужный продукт — он появится в сохранённых сценариях.", keyboard=menu_keyboard([]))
             return
         rows = [[UiButton(_recipe_label(recipe), "callback", encode_callback("schedule", "recipe", recipe.recipe_id))] for recipe in recipes[:12]]
         rows.append([UiButton("← Расписания", "callback", encode_callback("schedule", "list"))])
-        await gateway.send_text(event.chat_id, "Выберите сохранённый сценарий для автоматической отправки:", keyboard=UiKeyboard.from_rows(rows))
+        await gateway.send_text(event.chat_id, "Выберите сохранённый сценарий для автоматической отправки:", keyboard=menu_keyboard(rows))
 
     async def _show_frequency_picker(self, event: NormalizedEvent, gateway: MessengerGateway, state: FlowState, recipe: UserRecipe) -> None:
         state.step = "frequency"
         self.sessions.set(event.platform, event.user_id, event.chat_id, state)
         rows = [[UiButton(_interval_label(value), "callback", encode_callback("schedule", "freq", value)) for value in FREQUENCIES]]
         rows.append([UiButton("Другой интервал 1–30", "callback", encode_callback("schedule", "freqcustom"))])
-        await gateway.send_text(event.chat_id, f"🕒 {_recipe_label(recipe)[2:]}\nКак часто отправлять?", keyboard=UiKeyboard.from_rows(rows))
+        rows.append([UiButton("Назад", "callback", encode_callback("schedule", "new"))])
+        await gateway.send_text(event.chat_id, f"🕒 {_recipe_label(recipe)[2:]}\nКак часто отправлять?", keyboard=menu_keyboard(rows))
 
     async def _show_time_picker(self, event: NormalizedEvent, gateway: MessengerGateway, state: FlowState) -> None:
         state.step = "time"
         self.sessions.set(event.platform, event.user_id, event.chat_id, state)
         rows = [[UiButton(value, "callback", encode_callback("schedule", "time", value)) for value in TIMES[:2]], [UiButton(value, "callback", encode_callback("schedule", "time", value)) for value in TIMES[2:]]]
         rows.append([UiButton("Другое время", "callback", encode_callback("schedule", "timecustom"))])
-        await gateway.send_text(event.chat_id, f"Частота: {_interval_label(int(state.params['every_days']))}\nВо сколько отправлять по местному времени точки?", keyboard=UiKeyboard.from_rows(rows))
+        rows.append([UiButton("Назад", "callback", encode_callback("schedule", "recipe", state.params["recipe_id"]))])
+        await gateway.send_text(event.chat_id, f"Частота: {_interval_label(int(state.params['every_days']))}\nВо сколько отправлять по местному времени точки?", keyboard=menu_keyboard(rows))
 
     async def _resolve_timezone(self, event: NormalizedEvent, gateway: MessengerGateway, state: FlowState) -> None:
         recipe = self.recipes.get(event.platform, event.user_id, int(state.params.get("recipe_id", 0)))
@@ -288,8 +274,8 @@ class ScheduleMessengerRouter(SettingsMessengerRouter):
         first = next_run_utc(timezone_name, local_time, every_days).astimezone(ZoneInfo(timezone_name))
         await gateway.send_text(
             event.chat_id,
-            f"🕒 Новое расписание\n{_recipe_label(recipe)[2:]}\n{_interval_label(every_days)} в {local_time} · {timezone_name}\nПервая отправка: {first:%d.%m.%Y %H:%M}\n\nКаждый запуск использует актуальные модельные данные, а не старый run/cycle.",
-            keyboard=UiKeyboard.from_rows([
+            f"🕒 Новое расписание\n{_recipe_label(recipe)[2:]}\n{_interval_label(every_days)} в {local_time} · {timezone_name}\nПервая отправка: {first:%d.%m.%Y %H:%M}\n\nКаждый запуск — свежие данные.",
+            keyboard=menu_keyboard([
                 [UiButton("Сохранить", "callback", encode_callback("schedule", "save"))],
                 [UiButton("Отмена", "callback", encode_callback("schedule", "list"))],
             ]),
@@ -320,7 +306,7 @@ class ScheduleMessengerRouter(SettingsMessengerRouter):
         await gateway.send_text(
             event.chat_id,
             prefix + "🕒 " + _schedule_line(item),
-            keyboard=UiKeyboard.from_rows([
+            keyboard=menu_keyboard([
                 [UiButton("▶ Прислать сейчас", "callback", encode_callback("schedule", "run", item.schedule_id))],
                 [UiButton("🗑 Удалить", "callback", encode_callback("schedule", "delq", item.schedule_id))],
                 [UiButton("← Все расписания", "callback", encode_callback("schedule", "list"))],

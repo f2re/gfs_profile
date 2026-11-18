@@ -735,8 +735,7 @@ def write_route_profile_png(data: RouteProfileData) -> Path:
 
         add_footer(
             fig,
-            "GFS grid, не радиозонд. Обледенение и болтанка — диагностические прокси по T/RH и вертикальному сдвигу ветра. "
-            "Не является разрешением на полёт; обязательны METAR/TAF/SIGMET/GAMET/NOTAM и решение командира.",
+            "GFS data · высоты MSL · оценка участков по исходным точкам",
             y=0.012,
         )
         fig.savefig(out_path, dpi=180, bbox_inches="tight", facecolor=METEO.figure_bg)

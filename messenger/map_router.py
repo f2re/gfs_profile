@@ -21,20 +21,13 @@ from .map_service import (
     parse_map_input,
 )
 from .profile_service import cleanup_product_result
-from .router import RouterDependencies, _command_args, _short_label
+from .router import RouterDependencies, _command_args, _short_label, menu_keyboard
 from .state import FlowState
 from .user_recipes import RecipeLimitError, UserRecipe
 
 MAP_MODES = (("gif", "Анимация"), ("single", "Одна карта"), ("series", "Серия PNG"))
 MAP_BASEMAP_CHOICES = (("places", "Города"), ("basic", "База"), ("roads", "Дороги"), ("water", "Вода"))
 MAP_RADII = (50, 100)
-
-START_TEXT = (
-    "🌦 GFS 0.25 — модельный прогноз\n"
-    "Укажите город, координаты или геолокацию. Быстрый запрос: Москва +24.\n\n"
-    "Доступны профиль, аэродиаграмма, срок × уровень, облака и карта.\n"
-    "GFS — модель, не наблюдение и не радиозонд."
-)
 
 
 def _point(recipe: UserRecipe) -> GeoPoint | None:
@@ -57,23 +50,6 @@ def _parsed_params(parsed: ParsedMapInput) -> dict[str, Any]:
         "radius": parsed.radius_km,
         "basemap": parsed.basemap,
     })
-
-
-def _quick_label(recipe: UserRecipe) -> str:
-    point = recipe.point or {}
-    marker = "★" if recipe.pinned else "▶"
-    if recipe.product == "profile":
-        return f"{marker} Профиль · {point.get('label', 'точка')} · +{int(recipe.params.get('lead', 24))} ч"[:62]
-    if recipe.product == "aero":
-        return f"{marker} Аэродиаграмма · {point.get('label', 'точка')} · +{int(recipe.params.get('lead', 24))} ч"[:62]
-    if recipe.product == "windgram":
-        return f"{marker} Срок × уровень · {point.get('label', 'точка')} · +{int(recipe.params.get('from', 0))}…+{int(recipe.params.get('to', 120))}"[:62]
-    if recipe.product == "cloudgram":
-        return f"{marker} Облака · {point.get('label', 'точка')} · +{int(recipe.params.get('from', 0))}…+{int(recipe.params.get('to', 72))}"[:62]
-    p = _params(recipe.params)
-    title = {"gif": "Анимация", "single": "Карта", "series": "Серия"}[p["mode"]]
-    period = f"+{p['from']}" if p["mode"] == "single" else f"+{p['from']}…+{p['to']}"
-    return f"{marker} {title} · {point.get('label', 'точка')} · {period}"[:62]
 
 
 def _progress_text(point: Any, params: dict[str, Any], event: ProgressEvent) -> str:
@@ -106,7 +82,7 @@ def _card_text(point: Any, params: dict[str, Any]) -> str:
         "🗺 Композитная карта GFS\n"
         f"📍 {getattr(point, 'label', 'точка')}\n"
         f"Режим: {mode}\nПериод: {period}\n"
-        f"Радиус: {int(params['radius'])} км\nПодложка: {params['basemap']}\n\n"
+        f"Радиус: {int(params['radius'])} км\nПодложка: {dict(MAP_BASEMAP_CHOICES).get(params['basemap'], params['basemap'])}\n\n"
         "Слои: осадки, облачность, гроза, ветер 500 гПа, явления и видимость."
     )
 
@@ -114,7 +90,7 @@ def _card_text(point: Any, params: dict[str, Any]) -> str:
 def _keyboard(params: dict[str, Any]) -> UiKeyboard:
     mode = params["mode"]
     lead_to = params["from"] if mode == "single" else params["to"]
-    return UiKeyboard.from_rows([
+    return menu_keyboard([
         [UiButton("▶ Построить", "callback", encode_callback("map", "run"))],
         [UiButton(("✓ " if mode == key else "") + label, "callback", encode_callback("map", "mode", key)) for key, label in MAP_MODES],
         [UiButton(("✓ " if int(lead_to) == value else "") + f"+{value}", "callback", encode_callback("map", "to", value)) for value in MAP_TO_HOURS],
@@ -127,6 +103,9 @@ def _keyboard(params: dict[str, Any]) -> UiKeyboard:
 
 
 class MapMessengerRouter(IcingMessengerRouter):
+
+    home_products = IcingMessengerRouter.home_products + ("map",)
+
     def __init__(self, dependencies: RouterDependencies, *, map_builder: Callable[..., Any] = build_map_product_result, map_parser: Callable[[str], ParsedMapInput] = parse_map_input, **kwargs: Any) -> None:
         super().__init__(dependencies, **kwargs)
         self.map_builder = map_builder
@@ -140,19 +119,6 @@ class MapMessengerRouter(IcingMessengerRouter):
     def _default_recipe(self, event: NormalizedEvent) -> UserRecipe | None:
         return self.recipes.default_for_product(event.platform, event.user_id, "map") or self.recipes.latest_for_product(event.platform, event.user_id, "map")
 
-    async def _start(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
-        self.sessions.clear(event.platform, event.user_id, event.chat_id)
-        rows: list[list[UiButton]] = []
-        for recipe in self.recipes.quick(event.platform, event.user_id, limit=2):
-            if recipe.product in {"profile", "aero", "windgram", "cloudgram", "map"}:
-                rows.append([UiButton(_quick_label(recipe), "callback", encode_callback("recipe", "run", recipe.recipe_id))])
-        rows.extend([
-            [UiButton("📈 Профиль", "callback", encode_callback("product", "open", "profile")), UiButton("🧾 Аэродиаграмма", "callback", encode_callback("product", "open", "aero"))],
-            [UiButton("🟦 Срок × уровень", "callback", encode_callback("product", "open", "windgram")), UiButton("☁ Облака", "callback", encode_callback("product", "open", "cloudgram"))],
-            [UiButton("🗺 Карта", "callback", encode_callback("product", "open", "map")), UiButton("📍 Геолокация", "request_location")],
-            [UiButton("❄ Обледенение", "callback", encode_callback("product", "open", "icing"))],
-        ])
-        await gateway.send_text(event.chat_id, START_TEXT, keyboard=UiKeyboard.from_rows(rows))
 
     async def _text(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
         command = (event.command or "").lower().lstrip("/")
@@ -171,7 +137,7 @@ class MapMessengerRouter(IcingMessengerRouter):
                 if recipe is not None:
                     await self._send_recipe(event, gateway, recipe)
                 else:
-                    await self._ask_point(event, gateway, dict(DEFAULT_MAP_PARAMS))
+                    await self._ask_map_point(event, gateway, dict(DEFAULT_MAP_PARAMS))
             else:
                 await self._resolve_direct(event, gateway, args)
             return
@@ -224,7 +190,7 @@ class MapMessengerRouter(IcingMessengerRouter):
             if data.action == "change":
                 point = _point(recipe)
                 if point is None:
-                    await self._ask_point(event, gateway, _params(recipe.params)); return
+                    await self._ask_map_point(event, gateway, _params(recipe.params)); return
                 await self._send_card(event, gateway, FlowState(product="map", step="params", point=point, params=_params(recipe.params)))
                 return
 
@@ -234,7 +200,7 @@ class MapMessengerRouter(IcingMessengerRouter):
             if recipe is not None:
                 await self._send_recipe(event, gateway, recipe)
             else:
-                await self._ask_point(event, gateway, dict(DEFAULT_MAP_PARAMS))
+                await self._ask_map_point(event, gateway, dict(DEFAULT_MAP_PARAMS))
             return
         if data.scope != "map":
             await super()._callback(event, gateway); return
@@ -287,14 +253,14 @@ class MapMessengerRouter(IcingMessengerRouter):
                 await gateway.send_text(event.chat_id, "Точка потеряна. Начните /map заново."); return
             await self._run(event, gateway, state.point, _params(state.params), state.pending_run); return
         if data.action == "point":
-            await self._ask_point(event, gateway, _params(state.params)); return
+            await self._ask_map_point(event, gateway, _params(state.params)); return
         if data.action == "cancel":
             self.sessions.clear(event.platform, event.user_id, event.chat_id)
-            await gateway.send_text(event.chat_id, "Выбор карты отменён. Откройте /start."); return
+            await gateway.send_text(event.chat_id, "Выбор отменён.", keyboard=menu_keyboard([])); return
 
-    async def _ask_point(self, event: NormalizedEvent, gateway: MessengerGateway, params: dict[str, Any]) -> None:
+    async def _ask_map_point(self, event: NormalizedEvent, gateway: MessengerGateway, params: dict[str, Any]) -> None:
         self.sessions.set(event.platform, event.user_id, event.chat_id, FlowState(product="map", step="await_point", params=_params(params)))
-        await gateway.send_text(event.chat_id, "🗺 Карта GFS · шаг 1/2. Укажите город, координаты или отправьте геолокацию.", keyboard=UiKeyboard.from_rows([[UiButton("📍 Отправить геолокацию", "request_location")]]))
+        await gateway.send_text(event.chat_id, "Карта · GFS data\nУкажите город, координаты или геолокацию.", keyboard=menu_keyboard([[UiButton("Геолокация", "request_location")]]))
 
     async def _resolve_point(self, event: NormalizedEvent, gateway: MessengerGateway, raw: str, params: dict[str, Any]) -> None:
         try:
@@ -307,7 +273,7 @@ class MapMessengerRouter(IcingMessengerRouter):
             state = FlowState(product="map", step="choose_place", candidates=list(candidates[:5]), params={**_params(params), "_direct": False})
             self.sessions.set(event.platform, event.user_id, event.chat_id, state)
             rows = [[UiButton(_short_label(point), "callback", encode_callback("map", "place", index))] for index, point in enumerate(state.candidates)]
-            await gateway.send_text(event.chat_id, "Найдено несколько точек. Выберите нужную:", keyboard=UiKeyboard.from_rows(rows)); return
+            await gateway.send_text(event.chat_id, "Найдено несколько точек. Выберите нужную:", keyboard=menu_keyboard(rows)); return
         await self._send_card(event, gateway, FlowState(product="map", step="params", point=candidates[0], params=_params(params)))
 
     async def _resolve_direct(self, event: NormalizedEvent, gateway: MessengerGateway, raw: str) -> None:
@@ -323,7 +289,7 @@ class MapMessengerRouter(IcingMessengerRouter):
             state = FlowState(product="map", step="choose_place", candidates=list(candidates[:5]), pending_run=parsed.run, params={**p, "_direct": True})
             self.sessions.set(event.platform, event.user_id, event.chat_id, state)
             rows = [[UiButton(_short_label(point), "callback", encode_callback("map", "place", index))] for index, point in enumerate(state.candidates)]
-            await gateway.send_text(event.chat_id, "Найдено несколько точек. Выберите нужную:", keyboard=UiKeyboard.from_rows(rows)); return
+            await gateway.send_text(event.chat_id, "Найдено несколько точек. Выберите нужную:", keyboard=menu_keyboard(rows)); return
         await self._run(event, gateway, candidates[0], p, parsed.run)
 
     async def _send_card(self, event: NormalizedEvent, gateway: MessengerGateway, state: FlowState) -> None:
@@ -334,7 +300,7 @@ class MapMessengerRouter(IcingMessengerRouter):
     async def _send_recipe(self, event: NormalizedEvent, gateway: MessengerGateway, recipe: UserRecipe) -> None:
         point = recipe.point or {}; p = _params(recipe.params)
         pin = "★ Открепить" if recipe.pinned else "⭐ Закрепить"
-        await gateway.send_text(event.chat_id, _card_text(SimplePoint(point), p), keyboard=UiKeyboard.from_rows([
+        await gateway.send_text(event.chat_id, _card_text(SimplePoint(point), p), keyboard=menu_keyboard([
             [UiButton("▶ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],
             [UiButton(pin, "callback", encode_callback("recipe", "toggle", recipe.recipe_id)), UiButton("⚙ Изменить", "callback", encode_callback("recipe", "change", recipe.recipe_id))],
         ]))

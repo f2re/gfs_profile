@@ -7,9 +7,10 @@ from typing import Any
 from geocode import GeoPoint
 
 from .callback_codec import CallbackCodecError, decode_callback, encode_callback
-from .contracts import MessengerGateway, NormalizedEvent, ProgressEvent, UiButton, UiKeyboard
+from .contracts import MessengerGateway, NormalizedEvent, ProgressEvent, UiButton
+from .menu_catalog import PRODUCT_LABELS
 from .profile_service import cleanup_product_result
-from .router import MessengerRouter, RouterDependencies, START_TEXT, _command_args, _profile_progress_text
+from .router import MessengerRouter, RouterDependencies, _command_args, _profile_progress_text, menu_keyboard
 from .user_recipes import RecipeLimitError, UserRecipe, UserRecipeStore
 
 
@@ -23,13 +24,6 @@ def _recipe_point(recipe: UserRecipe) -> GeoPoint | None:
         str(point.get("label", "сохранённая точка")),
         str(point.get("source", recipe.platform)),
     )
-
-
-def _recipe_label(recipe: UserRecipe) -> str:
-    point = recipe.point or {}
-    lead = int(recipe.params.get("lead", 24))
-    marker = "★" if recipe.pinned else "▶"
-    return f"{marker} Профиль · {point.get('label', 'точка')} · +{lead} ч"[:62]
 
 
 class PersonalMessengerRouter(MessengerRouter):
@@ -52,27 +46,23 @@ class PersonalMessengerRouter(MessengerRouter):
             "profile",
         )
 
-    async def _start(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
-        self.sessions.clear(event.platform, event.user_id, event.chat_id)
-        rows: list[list[UiButton]] = []
+    def _home_quick_rows(self, event: NormalizedEvent, enabled: tuple[str, ...]) -> list[list[UiButton]]:
+        rows = []
         for recipe in self.recipes.quick(event.platform, event.user_id, limit=2):
-            if recipe.product == "profile":
-                rows.append(
-                    [
-                        UiButton(
-                            _recipe_label(recipe),
-                            "callback",
-                            encode_callback("recipe", "run", recipe.recipe_id),
-                        )
-                    ]
-                )
-        rows.extend(
-            [
-                [UiButton("📈 Профиль", "callback", encode_callback("product", "open", "profile"))],
-                [UiButton("📍 Геолокация", "request_location")],
-            ]
-        )
-        await gateway.send_text(event.chat_id, START_TEXT, keyboard=UiKeyboard.from_rows(rows))
+            if recipe.product not in enabled:
+                continue
+            title = PRODUCT_LABELS.get(recipe.product, recipe.product)
+            point = (recipe.point or {}).get("label", "точка")
+            if recipe.product == "route":
+                origin = recipe.params.get("origin", {})
+                destination = recipe.params.get("destination", {})
+                point = f"{origin.get('label', 'старт')} → {destination.get('label', 'финиш')}"
+            suffix = f" · +{int(recipe.params.get('lead', 24))} ч" if recipe.product in {"profile", "aero"} else ""
+            marker = "★" if recipe.pinned else "▶"
+            label = f"{marker} {title} · {point}{suffix}"[:62]
+            rows.append([UiButton(label, "callback", encode_callback("recipe", "run", recipe.recipe_id))])
+        return rows
+
 
     async def _text(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
         command = (event.command or "").lower().lstrip("/")
@@ -139,7 +129,7 @@ class PersonalMessengerRouter(MessengerRouter):
         await gateway.send_text(
             event.chat_id,
             f"📈 Профиль GFS\n📍 {point.get('label', 'точка')}\nСрок: +{lead} ч",
-            keyboard=UiKeyboard.from_rows(
+            keyboard=menu_keyboard(
                 [
                     [UiButton("▶ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],
                     [

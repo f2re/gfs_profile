@@ -11,6 +11,7 @@ from messenger.callback_codec import encode_callback
 from messenger.contracts import NormalizedEvent, PlatformMessage
 from messenger.runtime_resources import get_runtime_resources
 from telegram_file_send import reply_png_file
+from telegram_ui import native_callback_payload
 
 SESSION_KEY = "icing_wizard"
 _ROUTER = None
@@ -33,7 +34,7 @@ def telegram_markup(keyboard):
     if keyboard is None:
         return None
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(button.text, callback_data=button.payload) if button.action == "callback"
+        [InlineKeyboardButton(button.text, callback_data=native_callback_payload(button.payload)) if button.action == "callback"
          else InlineKeyboardButton(button.text, url=button.url) for button in row
          if button.action in {"callback", "link"}]
         for row in keyboard.rows

@@ -160,15 +160,33 @@ def assess_group(data: RouteProfileData, group) -> CardAssessment:
     return CardAssessment(score, peak, high_fraction, tuple(hazards[:3]))
 
 
-def _draw_card_shell(ax, group, score: int, *, rounded: bool) -> None:
+def _card_axes(ax, groups, *, title: str):
+    """Lay out readable cards in route order, independently of segment length."""
+    ax.axis("off")
+    ax.set_title(title, loc="left", fontsize=10.5, fontweight="bold", pad=8)
+    if not groups:
+        return ()
+    columns = min(5, len(groups))
+    rows = (len(groups) + columns - 1) // columns
+    width = 1.0 / columns
+    height = 1.0 / rows
+    cards = []
+    for index, group in enumerate(groups):
+        row, column = divmod(index, columns)
+        card = ax.inset_axes((column * width + 0.004, 1.0 - (row + 1) * height + 0.012,
+                              width - 0.008, height - 0.024))
+        card.set_xlim(0, 1)
+        card.set_ylim(0, 1)
+        card.axis("off")
+        cards.append((card, group))
+    ax.text(0.5, -0.05, "Участки по порядку маршрута · время UTC", transform=ax.transAxes,
+            ha="center", va="top", fontsize=8.5, color=PALETTE.text)
+    return cards
+
+
+def _draw_card_shell(ax, score: int, *, rounded: bool) -> None:
     from matplotlib.patches import FancyBboxPatch, Rectangle
 
-    xmin, xmax = ax.get_xlim()
-    total = max(1.0, xmax - xmin)
-    x0 = (group.start_km - xmin) / total
-    width = max(0.001, (group.end_km - group.start_km) / total)
-    inset = min(0.002, width * 0.08)
-    patch_class = FancyBboxPatch if rounded else Rectangle
     kwargs = {
         "transform": ax.transAxes,
         "facecolor": risk_color(score, soft=True),
@@ -177,70 +195,60 @@ def _draw_card_shell(ax, group, score: int, *, rounded: bool) -> None:
         "alpha": 0.96,
     }
     if rounded:
-        patch = patch_class(
-            (x0 + inset, 0.04),
-            max(0.001, width - 2.0 * inset),
-            0.91,
-            boxstyle="round,pad=0.008,rounding_size=0.025",
-            **kwargs,
-        )
+        patch = FancyBboxPatch((0.01, 0.01), 0.98, 0.98,
+                               boxstyle="round,pad=0,rounding_size=0.025", **kwargs)
     else:
-        patch = patch_class((x0 + inset, 0.04), max(0.001, width - 2.0 * inset), 0.91, **kwargs)
+        patch = Rectangle((0.01, 0.01), 0.98, 0.98, **kwargs)
     ax.add_patch(patch)
 
 
 def _summary_text(assessment: CardAssessment) -> str:
     if not assessment.hazards:
-        return "значимых рисков нет"
+        return "Значимых рисков нет"
     parts = [f"{hazard.label} {hazard.fraction * 100:.0f}%" for hazard in assessment.hazards[:2]]
-    if assessment.peak_score > assessment.score:
-        parts.append("локальный пик")
-    return " · ".join(parts)
+    return "\n".join(parts)
+
+
+def _card_caption(ax, group, point) -> None:
+    ax.text(0.5, 0.90, f"{group.start_km:.0f}–{group.end_km:.0f} км", ha="center",
+            va="center", fontsize=8.6, color=PALETTE.muted)
+    ax.text(0.5, 0.09, f"+{point.lead_hour} ч · {point.valid_time_utc:%d.%m %H}Z",
+            ha="center", va="center", fontsize=8.2, color=PALETTE.text)
 
 
 def draw_simple_cards(ax, data: RouteProfileData) -> None:
-    groups = route_card_groups(data)
-    ax.set_xlim(0.0, max(1.0, data.total_distance_km))
-    ax.set_ylim(0.0, 1.0)
-    ax.axis("off")
-    ax.set_title("Оценка маршрута по существенным участкам", loc="left", fontsize=9.4, fontweight="bold", pad=6)
-
-    for group in groups:
+    cards = _card_axes(ax, route_card_groups(data), title="Участки маршрута")
+    for card, group in cards:
         assessment = assess_group(data, group)
         point = data.waypoints[group.start_index]
-        _draw_card_shell(ax, group, assessment.score, rounded=True)
-        ax.text(group.center_km, 0.86, f"{group.start_km:.0f}–{group.end_km:.0f} км", ha="center", va="center", fontsize=6.4, color=PALETTE.muted)
-        ax.text(group.center_km, 0.69, risk_label(assessment.score).replace("ВЫСОКИЙ РИСК", "ВЫСОКИЙ\nРИСК"), ha="center", va="center", fontsize=7.8, fontweight="bold", color=risk_color(assessment.score), linespacing=0.9)
-
-        width = max(1.0, group.end_km - group.start_km)
+        _draw_card_shell(card, assessment.score, rounded=True)
+        _card_caption(card, group, point)
+        peak_note = f" · пик R{assessment.peak_score}" if assessment.peak_score > assessment.score else ""
+        card.text(0.5, 0.74, risk_label(assessment.score) + peak_note, ha="center", va="center",
+                  fontsize=10, fontweight="bold", color=risk_color(assessment.score))
         hazards = assessment.hazards[:2]
         if hazards:
             for index, hazard in enumerate(hazards):
-                x_value = group.start_km + width * (index + 1) / (len(hazards) + 1)
-                draw_hazard_icon(ax, hazard.key, x_value, 0.46, size=0.036, transform=ax.get_xaxis_transform(), color=hazard.color, zorder=8)
+                draw_hazard_icon(card, hazard.key, (index + 1) / (len(hazards) + 1), 0.52,
+                                 size=16, transform=card.transAxes, color=hazard.color, zorder=8)
         else:
-            ax.text(group.center_km, 0.46, "✓", ha="center", va="center", fontsize=12, color=AVIATION.safe, fontweight="bold")
-
-        ax.text(group.center_km, 0.25, _summary_text(assessment), ha="center", va="center", fontsize=5.9, color=PALETTE.muted)
-        ax.text(group.center_km, 0.10, f"+{point.lead_hour} ч · {point.valid_time_utc:%d.%m %H}Z", ha="center", va="center", fontsize=5.9, color=PALETTE.text)
-
-    ax.text(0.5, -0.08, "Расстояние · срок GFS и UTC-время начала участка", transform=ax.transAxes, ha="center", va="top", fontsize=8.0, color=PALETTE.text)
+            card.text(0.5, 0.52, "✓", ha="center", va="center", fontsize=16,
+                      color=AVIATION.safe, fontweight="bold")
+        card.text(0.5, 0.28, _summary_text(assessment), ha="center", va="center",
+                  fontsize=8.4, color=PALETTE.muted, linespacing=1.12)
 
 
 def draw_professional_cards(ax, data: RouteProfileData) -> None:
-    groups = route_card_groups(data)
-    ax.set_xlim(0.0, max(1.0, data.total_distance_km))
-    ax.set_ylim(0.0, 1.0)
-    ax.axis("off")
-    ax.set_title("Профессиональная сводка участков", loc="left", fontsize=9.4, fontweight="bold", pad=6)
-
-    for group in groups:
+    cards = _card_axes(ax, route_card_groups(data), title="Сводка по участкам")
+    for card, group in cards:
         assessment = assess_group(data, group)
         point = data.waypoints[group.start_index]
-        _draw_card_shell(ax, group, assessment.score, rounded=False)
-        ax.text(group.center_km, 0.87, f"{group.start_km:.0f}–{group.end_km:.0f} км", ha="center", va="center", fontsize=6.2, color=PALETTE.muted)
-        peak_note = f" · peak R{assessment.peak_score}" if assessment.peak_score > assessment.score else ""
-        ax.text(group.center_km, 0.72, f"R{assessment.score} · {risk_label(assessment.score, short=True)}{peak_note}", ha="center", va="center", fontsize=6.5, fontweight="bold", color=risk_color(assessment.score))
+        _draw_card_shell(card, assessment.score, rounded=False)
+        _card_caption(card, group, point)
+        peak_note = f"\nЛокальный пик R{assessment.peak_score}" if assessment.peak_score > assessment.score else ""
+        card.text(0.5, 0.72, f"R{assessment.score} · {risk_label(assessment.score, short=True)}{peak_note}",
+                  ha="center", va="center", fontsize=9.5, fontweight="bold",
+                  color=risk_color(assessment.score), linespacing=1.12)
 
         indices = group.point_indices
         wind_values = np.asarray(data.wind_speed_ms[:, indices], dtype=float)
@@ -251,16 +259,7 @@ def draw_professional_cards(ax, data: RouteProfileData) -> None:
         ceiling_values = [data.waypoints[index].surface.ceiling_m for index in indices if data.waypoints[index].surface.ceiling_m is not None]
         vis = min(vis_values) if vis_values else None
         ceiling = min(ceiling_values) if ceiling_values else None
-        ax.text(
-            group.center_km,
-            0.43,
-            f"Vmax {vmax:.0f} м/с · P {precip:.1f} мм\nVIS {'—' if vis is None else f'{vis:.0f} км'} · ВНГО {'—' if ceiling is None else f'{ceiling:.0f} м'}",
-            ha="center",
-            va="center",
-            fontsize=5.4,
-            color=PALETTE.muted,
-            linespacing=1.12,
-        )
-        ax.text(group.center_km, 0.10, f"+{point.lead_hour} ч · {point.valid_time_utc:%d.%m %H}Z", ha="center", va="center", fontsize=5.9, color=PALETTE.text)
-
-    ax.text(0.5, -0.08, "Расстояние · срок GFS и UTC-время начала участка", transform=ax.transAxes, ha="center", va="top", fontsize=8.0, color=PALETTE.text)
+        card.text(0.5, 0.40,
+                  f"Vmax {vmax:.0f} м/с · P {precip:.1f} мм\n"
+                  f"VIS {'—' if vis is None else f'{vis:.0f} км'} · ВНГО {'—' if ceiling is None else f'{ceiling:.0f} м'}",
+                  ha="center", va="center", fontsize=8.4, color=PALETTE.muted, linespacing=1.3)

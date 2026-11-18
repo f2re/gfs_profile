@@ -148,7 +148,7 @@ def format_windgram_summary(data: Any, point: Any) -> str:
         f"Уровни: 1000…{top} гПа · {len(data.levels_hpa)}\n"
         f"{max_wind_line}"
         f"{PARAM_CAPTIONS.get(data.param, PARAM_CAPTIONS['wind'])}\n"
-        "GFS grid • модель, не наблюдение и не радиозонд"
+        "GFS data"
     )
 
 

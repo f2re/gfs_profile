@@ -75,48 +75,19 @@ def _basemap_status_text(stats: dict) -> str:
         return "Подложка: локальный кэш не найден"
     warnings = stats.get("warnings") or []
     warning_text = f" · {warnings[0]}" if warnings else ""
-    return (
-        f"Подложка: Natural Earth {stats.get('resolution') or ''} · "
-        f"города {int(stats.get('city_count') or 0)} · "
-        f"реки {int(stats.get('river_count') or 0)} · "
-        f"водоёмы {int(stats.get('water_count') or 0)} · "
-        f"границы {int(stats.get('admin_count') or 0)}"
-        f"{warning_text}"
-    )
+    return f"Подложка: Natural Earth {stats.get('resolution') or ''}{warning_text}"
 
 
 def _draw_legend(fig, data: dict) -> None:
     interval = float(data.get("precip_interval_hours") or 0.0)
     interval_text = f"{interval:g} ч" if interval > 0 else "интервал"
-    threshold = float(data.get("phenomenon_rate_threshold_mmh") or 0.1)
-    fig.text(
-        0.045,
-        0.082,
-        f"Зелёный: сумма за предыдущие {interval_text}, мм · APCP (резерв PRATE×Δt) · 0.1 0.5 1 3 7 15+",
-        fontsize=8.4,
-        color="#263238",
+    lines = (
+        f"Осадки за {interval_text}, мм: зелёный · 0,1 / 0,5 / 1 / 3 / 7 / 15+ · облачность: серый, %",
+        "☔ дождь · ❄ снег · ❄☔ переохл. дождь · ☔❄ смешанные · ◆ гранулы · ◇ фаза н/д",
+        "⚡ гроза · ≋ туман · число у значка: мм/ч · стрелки: ветер 500 гПа · видимость: км",
     )
-    fig.text(
-        0.045,
-        0.058,
-        f"Значок в центре ячейки GFS: явление на срок · PRATE ≥ {threshold:g} мм/ч + CRAIN/CSNOW/CFRZR/CICEP; число под значком = мм/ч",
-        fontsize=8.2,
-        color="#263238",
-    )
-    fig.text(
-        0.045,
-        0.034,
-        "☔ дождь · ❄ снег · ❄☔ переохл. дождь · ☔❄ смешанные · ◆ ледяные гранулы · ◇ фаза не определена · ⚡ гроза · ≋ туман",
-        fontsize=8.2,
-        color="#263238",
-    )
-    fig.text(
-        0.045,
-        0.012,
-        "Серый: общая облачность, % · тонкая сетка: ячейки GFS 0.25° · стрелки: ветер 500 гПа · VIS подпись в км",
-        fontsize=8.2,
-        color="#263238",
-    )
+    for index, line in enumerate(lines):
+        fig.text(0.045, 0.080 - index * 0.030, line, fontsize=9.5, color="#263238")
 
 
 def _phenomenon_font_size(x: np.ndarray, y: np.ndarray, pixel_size: int) -> float:
@@ -374,13 +345,13 @@ def write_composite_map_png(
     subtitle = f"{data['run'].date} {data['run'].cycle}Z · срок {data['valid_time']:%Y-%m-%d %H:%M} UTC · радиус {int(radius_km)} км"
     ax.set_title(title + "\n" + subtitle, fontsize=12, color="#263238", pad=12)
     _draw_legend(fig, data)
-    footer = "GFS 0.25 — модель, не радар и не наблюдения."
+    footer = "GFS data · 0.25°"
     overlay_footer = data.get("overlay_footer")
     if overlay_footer:
-        footer += " " + str(overlay_footer) + "."
+        footer += " · " + str(overlay_footer)
     if data.get("missing"):
         footer += " Нет полей: " + ", ".join(sorted(data["missing"]))
-    fig.text(0.045, 0.108, footer, fontsize=7.6, color="#78909c")
+    fig.text(0.045, 0.108, footer, fontsize=9.5, color="#78909c")
     fig.subplots_adjust(left=0.08, right=0.985, top=0.9, bottom=0.17)
     fig.savefig(path, dpi=dpi, facecolor="white")
     plt.close(fig)

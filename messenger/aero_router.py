@@ -10,19 +10,12 @@ from geocode import GeoPoint
 
 from .aero_service import ParsedAeroInput, build_aero_product_result, parse_aero_input
 from .callback_codec import CallbackCodecError, decode_callback, encode_callback
-from .contracts import MessengerGateway, NormalizedEvent, ProgressEvent, UiButton, UiKeyboard
+from .contracts import MessengerGateway, NormalizedEvent, ProgressEvent, UiButton
 from .personal_router import PersonalMessengerRouter
 from .profile_service import cleanup_product_result
-from .router import LEAD_PAGE_SIZE, QUICK_LEADS, RouterDependencies, _command_args, _short_label
+from .router import LEAD_PAGE_SIZE, QUICK_LEADS, RouterDependencies, _command_args, _short_label, menu_keyboard
 from .state import FlowState
 from .user_recipes import RecipeLimitError, UserRecipe
-
-START_TEXT = (
-    "🌦 GFS 0.25 — модельный прогноз\n"
-    "Укажите город, координаты или геолокацию. Быстрый запрос: Москва +24.\n\n"
-    "Продукты: /profile, /aero. Остальные продукты подключаются к тому же общему service поэтапно.\n"
-    "GFS — модель, не наблюдение и не радиозонд."
-)
 
 
 def _recipe_point(recipe: UserRecipe) -> GeoPoint | None:
@@ -35,14 +28,6 @@ def _recipe_point(recipe: UserRecipe) -> GeoPoint | None:
         str(point.get("label", "сохранённая точка")),
         str(point.get("source", recipe.platform)),
     )
-
-
-def _quick_recipe_label(recipe: UserRecipe) -> str:
-    point = recipe.point or {}
-    lead = int(recipe.params.get("lead", 24))
-    marker = "★" if recipe.pinned else "▶"
-    title = "Аэродиаграмма" if recipe.product == "aero" else "Профиль"
-    return f"{marker} {title} · {point.get('label', 'точка')} · +{lead} ч"[:62]
 
 
 def _aero_progress_text(point: Any, lead: int, event: ProgressEvent) -> str:
@@ -92,6 +77,8 @@ def _aero_lead_rows(values: list[int]) -> list[list[UiButton]]:
 class AeroMessengerRouter(PersonalMessengerRouter):
     """Messenger-neutral profile + /aero UX for MAX and VK."""
 
+    home_products = PersonalMessengerRouter.home_products + ("aero",)
+
     def __init__(
         self,
         dependencies: RouterDependencies,
@@ -117,30 +104,6 @@ class AeroMessengerRouter(PersonalMessengerRouter):
             "aero",
         )
 
-    async def _start(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
-        self.sessions.clear(event.platform, event.user_id, event.chat_id)
-        rows: list[list[UiButton]] = []
-        for recipe in self.recipes.quick(event.platform, event.user_id, limit=2):
-            if recipe.product in {"profile", "aero"}:
-                rows.append(
-                    [
-                        UiButton(
-                            _quick_recipe_label(recipe),
-                            "callback",
-                            encode_callback("recipe", "run", recipe.recipe_id),
-                        )
-                    ]
-                )
-        rows.extend(
-            [
-                [
-                    UiButton("📈 Профиль", "callback", encode_callback("product", "open", "profile")),
-                    UiButton("🧾 Аэродиаграмма", "callback", encode_callback("product", "open", "aero")),
-                ],
-                [UiButton("📍 Геолокация", "request_location")],
-            ]
-        )
-        await gateway.send_text(event.chat_id, START_TEXT, keyboard=UiKeyboard.from_rows(rows))
 
     async def _text(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
         command = (event.command or "").lower().lstrip("/")
@@ -297,8 +260,8 @@ class AeroMessengerRouter(PersonalMessengerRouter):
         )
         await gateway.send_text(
             event.chat_id,
-            "🧾 Аэрологическая диаграмма GFS · шаг 1/2. Укажите город, координаты или отправьте геолокацию.",
-            keyboard=UiKeyboard.from_rows([[UiButton("📍 Отправить геолокацию", "request_location")]]),
+            "Аэрограмма · GFS data\nУкажите город, координаты или геолокацию.",
+            keyboard=menu_keyboard([[UiButton("Геолокация", "request_location")]]),
         )
 
     async def _resolve_aero_text(self, event: NormalizedEvent, gateway: MessengerGateway, raw: str) -> None:
@@ -328,7 +291,7 @@ class AeroMessengerRouter(PersonalMessengerRouter):
             await gateway.send_text(
                 event.chat_id,
                 "Найдено несколько точек. Выберите нужную:",
-                keyboard=UiKeyboard.from_rows(rows),
+                keyboard=menu_keyboard(rows),
             )
             return
         point = candidates[0]
@@ -376,7 +339,7 @@ class AeroMessengerRouter(PersonalMessengerRouter):
         await gateway.send_text(
             event.chat_id,
             f"📍 {getattr(state.point, 'label', 'выбранная точка')}\nВыберите срок GFS для Skew-T ({page_text}):",
-            keyboard=UiKeyboard.from_rows(rows),
+            keyboard=menu_keyboard(rows),
         )
 
     async def _send_aero_recipe_card(
@@ -391,7 +354,7 @@ class AeroMessengerRouter(PersonalMessengerRouter):
         await gateway.send_text(
             event.chat_id,
             f"🧾 Аэрологическая диаграмма GFS\n📍 {point.get('label', 'точка')}\nСрок: +{lead} ч · Skew-T log-P · годограф",
-            keyboard=UiKeyboard.from_rows(
+            keyboard=menu_keyboard(
                 [
                     [UiButton("▶ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],
                     [

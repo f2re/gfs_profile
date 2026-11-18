@@ -181,13 +181,16 @@ class ScheduleQuickOfferTests(unittest.TestCase):
 
         asyncio.run(check())
 
-    def test_product_picker_prioritises_meteogram_and_profile(self) -> None:
-        markup = ux._product_keyboard()
+    def test_product_picker_matches_home_product_order(self) -> None:
+        markup = ux.schedules._product_keyboard()
         first_row = markup.inline_keyboard[0]
         self.assertEqual(
             [button.callback_data for button in first_row],
-            ["sched:product:meteogram", "sched:product:profile"],
+            ["sched:product:profile", "sched:product:aero"],
         )
+        callbacks = {button.callback_data for row in markup.inline_keyboard for button in row}
+        for product in ("profile", "aero", "windgram", "cloudgram", "meteogram", "map"):
+            self.assertIn(f"sched:product:{product}", callbacks)
 
 
 if __name__ == "__main__":

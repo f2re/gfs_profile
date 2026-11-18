@@ -4,13 +4,10 @@ import unittest
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-import telegram_result_copy
+import numpy as np
 
 
 class TelegramResultCopyTests(unittest.TestCase):
-    def setUp(self) -> None:
-        telegram_result_copy.install()
-
     def test_aero_caption_keeps_gfs_without_repeated_disclaimer(self) -> None:
         import telegram_aero
 
@@ -38,20 +35,21 @@ class TelegramResultCopyTests(unittest.TestCase):
         self.assertNotIn("не радар", text.lower())
         self.assertNotIn("не наблю", text.lower())
 
-    def test_route_summary_does_not_duplicate_footer_warning(self) -> None:
+    def test_route_summary_keeps_risk_and_spatial_step(self) -> None:
+        import telegram_bot  # Final application composition must not strip source summaries.
         import telegram_route
-
-        original = telegram_route.route_summary
-        try:
-            telegram_route.route_summary = lambda data: "строка\nℹ повторяющийся дисклеймер"
-            # Reinstall on a fresh sentinel state to exercise wrapper behavior.
-            import telegram_map
-
-            telegram_map._RESULT_COPY_PATCHED = False
-            telegram_result_copy.install()
-            self.assertEqual(telegram_route.route_summary(object()), "строка")
-        finally:
-            telegram_route.route_summary = original
+        point = SimpleNamespace(risk_score=1, risk_reasons=["обледенение"], distance_km=0)
+        data = SimpleNamespace(
+            point_risk=np.array([1]), max_risk=1, waypoints=[point], mode="simple",
+            origin=SimpleNamespace(label="Москва"), destination=SimpleNamespace(label="Тула"),
+            run=SimpleNamespace(date="20260712", cycle="12"), departure_lead=24, arrival_lead=25,
+            total_distance_km=170, duration_hours=0.6, speed_kmh=300,
+        )
+        text = telegram_route.route_summary(data)
+        self.assertIn("GFS data", text)
+        self.assertIn("обледенение", text)
+        self.assertIn("пространственный шаг", text)
+        self.assertNotIn("не радиозонд", text)
 
 
 if __name__ == "__main__":

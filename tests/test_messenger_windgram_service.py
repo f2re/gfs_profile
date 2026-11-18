@@ -62,7 +62,7 @@ class WindgramServiceTests(unittest.TestCase):
             self.assertEqual(result.metadata["max_wind_ms"], 15.0)
             self.assertIn("Москва", result.summary)
             self.assertIn("GFS grid", result.summary)
-            self.assertIn("модель, не наблюдение", result.summary)
+            self.assertIn("GFS data", result.summary)
             self.assertIn("run=20260905/00", result.repeat_command)
             self.assertTrue(any(event.stage == "run" for event in progress))
             self.assertEqual(result.attachments[0].path, png)

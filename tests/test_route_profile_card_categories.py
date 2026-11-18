@@ -10,6 +10,12 @@ import route_profile_vertical_policy as vertical_policy
 
 
 class RouteProfileCardCategoryTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        # The production policy is installed explicitly; isolated test runs
+        # must not depend on another module having initialized it first.
+        vertical_policy.install()
+
     @staticmethod
     def _surface(cb_score: int = 0, phenomena: str = "—"):
         return SimpleNamespace(

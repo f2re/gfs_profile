@@ -11,12 +11,9 @@ from pathlib import Path
 
 import numpy as np
 
-from aviation_style import risk_color
 import route_profile_plot as _legacy
-import route_profile_render_common as _common
 import route_profile_render_professional as _professional
 import route_profile_render_simple as _simple
-import route_profile_card_policy as _cards
 from route_profile import RouteProfileData
 from route_profile_icons import draw_hazard_icon
 from route_profile_render_common import confirmed_thunder
@@ -55,39 +52,6 @@ def render_features(mode: str) -> frozenset[str]:
     if name not in ROUTE_RENDER_FEATURES:
         raise ValueError("mode must be simple or pro")
     return ROUTE_RENDER_FEATURES[name]
-
-
-def _draw_card_shell(ax, group, score: int, *, rounded: bool) -> None:
-    from matplotlib.patches import FancyBboxPatch, Rectangle
-
-    xmin, xmax = ax.get_xlim()
-    total = max(1.0, xmax - xmin)
-    x0 = (group.start_km - xmin) / total
-    width = max(0.001, (group.end_km - group.start_km) / total)
-    inset = min(0.002, width * 0.08)
-    if rounded:
-        patch = FancyBboxPatch(
-            (x0 + inset, 0.04),
-            max(0.001, width - 2.0 * inset),
-            0.91,
-            transform=ax.transAxes,
-            boxstyle="round,pad=0.008,rounding_size=0.025",
-            facecolor=risk_color(score, soft=True),
-            edgecolor=risk_color(score),
-            linewidth=0.85,
-            alpha=0.96,
-        )
-    else:
-        patch = Rectangle(
-            (x0 + inset, 0.04),
-            max(0.001, width - 2.0 * inset),
-            0.91,
-            transform=ax.transAxes,
-            facecolor=risk_color(score, soft=True),
-            edgecolor="#FFFFFF",
-            linewidth=1.0,
-        )
-    ax.add_patch(patch)
 
 
 def _surface_masks(data: RouteProfileData) -> tuple[np.ndarray, np.ndarray]:
@@ -143,9 +107,6 @@ def write_route_profile_png(data: RouteProfileData) -> Path:
 
 # Presentation-only integration patches. Objective fields and point risk are not
 # modified here.
-_common._draw_card_shell = _draw_card_shell
 _simple._draw_surface_weather = _draw_simple_surface_weather
 _professional._draw_surface_tags = _draw_professional_surface_tags
-_simple.draw_simple_cards = _cards.draw_simple_cards
-_professional.draw_professional_cards = _cards.draw_professional_cards
 _legacy.write_route_profile_png = write_route_profile_png

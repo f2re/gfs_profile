@@ -347,7 +347,7 @@ def write_meteogram_docx(
 
     header = section.header.paragraphs[0]
     header.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    run = header.add_run("GFS Profile · модельный прогноз · не наблюдение")
+    run = header.add_run("GFS Profile · data")
     run.font.name = REPORT_FONT
     run.font.size = Pt(7)
     run.font.color.rgb = _rgb("60717B")
@@ -371,16 +371,6 @@ def write_meteogram_docx(
 
     for line in (data.point_line, data.period_line, data.source_line):
         document.add_paragraph(line, style="Meteo Small")
-
-    disclaimer = document.add_paragraph()
-    disclaimer.paragraph_format.space_before = Pt(2)
-    disclaimer.paragraph_format.space_after = Pt(4)
-    disclaimer_run = disclaimer.add_run(
-        "Модельный прогноз. Не наблюдение и не официальный выпуск предупреждений."
-    )
-    disclaimer_run.bold = True
-    disclaimer_run.font.size = Pt(8)
-    disclaimer_run.font.color.rgb = _rgb("8A3E25")
 
     document.add_heading("Главное", level=1)
     summary_table = document.add_table(rows=1, cols=1)
@@ -833,7 +823,6 @@ def _build_method_lines(series: Any) -> list[str]:
     sampling = str(getattr(series, "sampling_mode", ""))
     if sampling == "raw_model_grid":
         lines.append("Расчёт выполнен для модельной ячейки без высотной коррекции.")
-    lines.append("Модельный прогноз, не наблюдение.")
     return lines
 
 def _build_warning_lines(series: Any) -> list[str]:

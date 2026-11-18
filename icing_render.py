@@ -75,14 +75,14 @@ def _geographic_grid(ax, bbox, project, clip):
         if west + 0.03 * (east - west) < longitude < east - 0.03 * (east - west):
             lx, ly = project(longitude, south + 0.015 * (north - south))
             suffix = "в.д." if longitude >= 0 else "з.д."
-            ax.text(lx, ly, f"{abs(longitude):g}° {suffix}", ha="center", va="bottom", fontsize=7, color="#526b79", clip_on=True, zorder=8)
+            ax.text(lx, ly, f"{abs(longitude):g}° {suffix}", ha="center", va="bottom", fontsize=8.5, color="#526b79", clip_on=True, zorder=8)
     for latitude in np.arange(np.ceil(south / lat_step) * lat_step, north + 1e-8, lat_step):
         x, y = project(np.linspace(west, east, 150), np.full(150, latitude))
         line, = ax.plot(x, y, color="#9fb2bf", lw=0.4, ls=":", alpha=0.7, zorder=4)
         line.set_clip_path(clip)
         if south + 0.03 * (north - south) < latitude < north - 0.03 * (north - south):
             lx, ly = project(west + 0.012 * (east - west), latitude)
-            ax.text(lx, ly, f"{latitude:g}° с.ш.", ha="left", va="center", fontsize=7, color="#526b79", clip_on=True, zorder=8)
+            ax.text(lx, ly, f"{latitude:g}° с.ш.", ha="left", va="center", fontsize=8.5, color="#526b79", clip_on=True, zorder=8)
 
 
 def _basemap(ax, bbox, project, clip):
@@ -129,7 +129,7 @@ def _cities(ax, bbox, project):
             continue
         x, y = project(lon, lat)
         ax.plot(x, y, "o", color=_BLUE, ms=2, zorder=9)
-        label = ax.annotate(name, (x, y), xytext=(3, 4), textcoords="offset points", fontsize=7.5, color=_BLUE, zorder=10)
+        label = ax.annotate(name, (x, y), xytext=(3, 4), textcoords="offset points", fontsize=10, color=_BLUE, zorder=10)
         label.set_path_effects([patheffects.withStroke(linewidth=2, foreground="white")])
 
 
@@ -210,7 +210,7 @@ def render_icing_png(
         fig = Figure(figsize=(12.8, 9.8), dpi=170, facecolor="white")
         FigureCanvasAgg(fig)
         try:
-            ax = fig.add_axes((0.035, 0.225, 0.93, 0.61))
+            ax = fig.add_axes((0.035, 0.215, 0.93, 0.62))
             ax.set_aspect("equal")
             ax.set_facecolor("#edf2f5")
             border = PathPatch(MplPath(outline), facecolor="#fbfcfd", edgecolor="#8aa0ad", linewidth=0.65, zorder=0)
@@ -237,7 +237,7 @@ def render_icing_png(
                     lines.set_clip_path(border)
                     labels = [v for v in levels if int(v) % 500 == 0]
                     if labels:
-                        ax.clabel(lines, levels=labels, fontsize=7, inline=True, fmt="%d")
+                        ax.clabel(lines, levels=labels, fontsize=9, inline=True, fmt="%d")
             if min(values.shape) >= 2 and product == "slw_level":
                 k = int(np.flatnonzero(np.isclose(fields["pressure_hpa"], level_hpa))[0])
                 temps = np.ma.masked_where(~fields["water_valid_above_ground"][k], fields["temperature_C"][k])
@@ -246,7 +246,7 @@ def render_icing_png(
                 if levels:
                     lines = ax.contour(x, y, temps, levels=levels, colors="#4f6b86", linewidths=0.6, zorder=6)
                     lines.set_clip_path(border)
-                    ax.clabel(lines, fontsize=7, fmt=lambda v: f"{v:g}°")
+                    ax.clabel(lines, fontsize=9, fmt=lambda v: f"{v:g}°")
             censored = np.zeros_like(unknown)
             if product in {"godske_sum", "godske_max", "godske_count"}:
                 censored = (fields["godske20_lower_open"] | fields["godske20_upper_open"] | fields["godske20_interior_missing"]) & (fields["godske20_sum_gpm"] > 0)
@@ -262,7 +262,7 @@ def render_icing_png(
             if censored.any():
                 legend.append(Patch(facecolor="none", edgecolor="#425b6a", hatch="...", label="Незамкнутый слой / пропуск в профиле"))
             if legend:
-                ax.legend(handles=legend, loc="lower left", fontsize=7.5, framealpha=0.95)
+                ax.legend(handles=legend, loc="lower left", fontsize=9.5, framealpha=0.95)
             shown = np.isfinite(values) & ~below_display
             if not shown.any():
                 if unknown.all():
@@ -272,47 +272,40 @@ def render_icing_png(
                 else:
                     message = "Значений выше порога заливки не выявлено"
                 ax.text(0.5, 0.5, message, transform=ax.transAxes, ha="center", va="center", fontsize=12, color=_BLUE, bbox={"facecolor": "white", "alpha": 0.9, "edgecolor": "#b4c4ce", "pad": 8}, zorder=20)
-            fig.text(0.045, 0.956, "ОБЛЕДЕНЕНИЕ · РАСЧЁТНЫЕ ПРОДУКТЫ GFS", fontsize=10.5, weight="bold", color="#44718a")
-            fig.text(0.955, 0.956, f"Цикл {run_dt:%d.%m.%Y %H} UTC · +{int(lead)} ч", fontsize=9.5, color="#526b79", ha="right")
+            fig.text(0.045, 0.956, "ОБЛЕДЕНЕНИЕ · GFS data", fontsize=12, weight="bold", color="#44718a")
+            fig.text(0.955, 0.956, f"Цикл {run_dt:%d.%m.%Y %H} UTC · +{int(lead)} ч", fontsize=11, color="#526b79", ha="right")
             title = PRODUCT_TITLES[product]
-            fig.text(0.045, 0.913, title, fontsize=20 if len(title) < 49 else 17.7, weight="bold", color=_BLUE)
+            fig.text(0.045, 0.913, title, fontsize=22 if len(title) < 49 else 19, weight="bold", color=_BLUE)
             pressure_range = f"{float(fields['pressure_hpa'][0]):g}–{float(fields['pressure_hpa'][-1]):g} гПа"
-            subtitle = f"{level_hpa} гПа · T < 0 °C" if product == "slw_level" else f"Доступные уровни {pressure_range}"
+            subtitle = f"{level_hpa} гПа · T < 0 °C" if product == "slw_level" else f"Уровни {pressure_range}"
             if product.startswith("godske"):
-                subtitle = "M8D20: −20 ≤ T < 0 °C; T + 8(T − Td) ≤ 0 · " + subtitle
-            fig.text(0.045, 0.878, subtitle, fontsize=11, color="#405d6f")
+                subtitle = "Годске M8D20 · " + subtitle
+            fig.text(0.045, 0.878, subtitle, fontsize=12, color="#405d6f")
             if categorical:
                 patches = [Patch(facecolor=color, edgecolor="#a8b5bf", label=label) for color, label in zip(colors, AGREEMENT_LABELS)]
-                fig.legend(handles=patches, loc="lower center", bbox_to_anchor=(0.5, 0.144), ncol=3, fontsize=8.4, frameon=False)
+                fig.legend(handles=patches, loc="lower center", bbox_to_anchor=(0.5, 0.123), ncol=2, fontsize=10, frameon=False)
             else:
-                cax = fig.add_axes((0.20, 0.165, 0.63, 0.018))
+                cax = fig.add_axes((0.15, 0.158, 0.73, 0.022))
                 ticks = range(1, 6) if product == "godske_count" else bounds
                 colorbar = fig.colorbar(mesh, cax=cax, orientation="horizontal", ticks=ticks, spacing="uniform", extend="both" if height_product else "max")
-                colorbar.ax.tick_params(labelsize=8)
+                colorbar.ax.tick_params(labelsize=10.5)
                 colorbar.ax.set_xticklabels([f"{v:g}".replace(".", ",") for v in ticks])
-                colorbar.set_label(PRODUCT_UNITS[product], fontsize=9.5, labelpad=4)
+                colorbar.set_label(PRODUCT_UNITS[product], fontsize=11, labelpad=4)
             if product in {"godske_sum", "godske_max"}:
-                first_note = f"Изолинии: {contour_step} гп.м. Заливка от 100 гп.м. Мощность слоя не является интенсивностью обледенения."
-            elif product in {"godske_base", "godske_top"}:
-                first_note = "Высоты по HGT: геопотенциальные метры от уровня моря. Незамкнутые границы не выдаются за точные."
-            elif product == "slw_height":
-                first_note = "Высота ненулевого максимума среди исходных уровней GFS; геопотенциальные метры от уровня моря."
+                note = f"Изолинии {contour_step} гп.м · заливка от 100 гп.м"
+            elif product in {"godske_base", "godske_top", "slw_height"}:
+                note = "Высоты: геопотенциальные метры от уровня моря (MSL)"
             elif product == "godske_count":
-                first_note = "Число отдельных выявленных слоёв M8D20. Пропуски и неполное покрытие отмечены отдельно."
+                note = "Число отдельных слоёв Годске M8D20"
             elif product == "agreement":
-                first_note = "SLW: T < 0 °C и водность ≥ 0,001 г/м³. Пересечение проверено в одном высотном интервале."
+                note = "Водность ≥ 0,001 г/м³ при T < 0 °C · совпадение по одному высотному интервалу"
             else:
-                first_note = f"Облачная жидкая вода GFS; дождевая фаза не включена. Заливка от {bounds[0]:g} {PRODUCT_UNITS[product]}.".replace("0.001", "0,001")
-            fig.text(0.045, 0.103, first_note, fontsize=9, color="#405d6f")
-            if product in {"slw_level", "slw_max", "slw_height"}:
-                sampling_note = "По исходным изобарическим уровням; подземные и пропущенные отсчёты исключены."
-            else:
-                sampling_note = "Интерполяция между уровнями; участки ниже первого надземного уровня и через пропуски не достраиваются."
-            fig.text(0.045, 0.078, sampling_note, fontsize=9, color="#405d6f")
-            basemap_note = "Natural Earth, офлайн" if has_basemap else "подложка не установлена; координатная сетка"
-            fig.text(0.045, 0.046, f"Действителен {valid_dt:%d.%m.%Y %H} UTC · GFS 0,25° · модель, не наблюдение · {basemap_note}", fontsize=9, color="#526b79")
-            fig.text(0.045, 0.023, f"Район: {west:g}…{east:g}° долготы, {south:g}…{north:g}° с.ш. · NOAA/NCEP NOMADS", fontsize=8.5, color="#526b79")
-            fig.savefig(target, format="png", dpi=170, metadata={"Title": title, "Description": f"GFS {run_dt.isoformat()} +{int(lead)}h; valid {valid_dt.isoformat()}; {PRODUCT_UNITS[product]}; model, not observation"})
+                note = f"Облачная жидкая вода · заливка от {bounds[0]:g} {PRODUCT_UNITS[product]}".replace("0.001", "0,001")
+            fig.text(0.045, 0.082, note, fontsize=11, color="#405d6f")
+            basemap_note = "" if has_basemap else " · подложка: координатная сетка"
+            fig.text(0.045, 0.047, f"Действителен {valid_dt:%d.%m.%Y %H} UTC · NOAA/NCEP · 0,25°{basemap_note}", fontsize=10.5, color="#526b79")
+            fig.text(0.045, 0.021, f"Район: {west:g}…{east:g}° долготы, {south:g}…{north:g}° с.ш.", fontsize=10, color="#526b79")
+            fig.savefig(target, format="png", dpi=170, metadata={"Title": title, "Description": f"GFS {run_dt.isoformat()} +{int(lead)}h; valid {valid_dt.isoformat()}; {PRODUCT_UNITS[product]}; GFS data; model"})
         finally:
             fig.clear()
     return target

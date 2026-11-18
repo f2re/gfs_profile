@@ -19,12 +19,10 @@ import route_profile_contract  # noqa: F401,E402
 import route_profile_vertical_policy  # noqa: F401,E402
 import route_profile_rendering  # noqa: F401,E402
 import telegram_concise_ux  # noqa: E402
-import telegram_result_copy  # noqa: E402
 import meteorological_policy  # noqa: E402
 import telegram_profile_common  # noqa: E402
 
 telegram_concise_ux.install(globals())
-telegram_result_copy.install()
 aero_single_mode.install(globals())
 admin_product_policy.install(globals())
 meteorological_policy.install(globals())
@@ -41,6 +39,9 @@ def _clear_pending(context):
     context.user_data.pop("schedule_route_setup", None)
     context.user_data.pop("weathernext3_wizard", None)
     context.user_data.pop("icing_wizard", None)
+    context.user_data.pop("route_profile_wizard", None)
+    context.user_data.pop("personal_profile", None)
+    context.user_data.pop("personal_meteogram", None)
 
 
 _concise_start_product_wizard = _start_product_wizard
@@ -100,13 +101,25 @@ _core_build_application = build_application
 def build_application():
     application = _core_build_application()
 
+    async def reset_command_navigation(update, context):
+        text = getattr(update.effective_message, "text", "") or ""
+        command = text.split()[0].split("@", 1)[0].lower() if text else ""
+        if command in {"/start", "/help", "/profile", "/aero", "/skewt", "/windgram",
+                       "/cloudgram", "/clouds", "/meteogram", "/map", "/route",
+                       "/schedule", "/settings"}:
+            _clear_pending(context)
+
+    application.add_handler(MessageHandler(filters.COMMAND, reset_command_navigation), group=-29)
+
     async def capture_home_user(update, context):
+        _clear_pending(context)
+        await telegram_concise_ux._remove_reply_keyboard(update.effective_message)
         if update.effective_user:
             context.user_data["_ux_home_user_id"] = int(update.effective_user.id)
 
     application.add_handler(
-        CallbackQueryHandler(capture_home_user, pattern=r"^home:(aero|windgram|cloudgram|map)$"),
-        group=-3,
+        CallbackQueryHandler(capture_home_user, pattern=r"^home:"),
+        group=-11,
     )
     telegram_saved_recipes.register(application, globals())
     telegram_personal_ux.register(application, globals())
