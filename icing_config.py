@@ -9,20 +9,21 @@ from dataclasses import dataclass, field
 
 from gfs_core import GfsProfileError, GfsRun, validate_lead
 
-METHOD_VERSION = "gfs_m8d20_spfh_multilayer_v1"
+METHOD_VERSION = "gfs_cloud_composite_v2"
 ICING_LEVELS_HPA = (1000, 975, 950, 925, 900, 850, 800, 750, 700, 650,
                     600, 550, 500, 450, 400, 350, 300)
 ICING_PRODUCTS = {
     "slw_level": "Переохлаждённая вода на уровне",
-    "godske_sum": "Суммарная мощность слоёв по Годске",
-    "godske_max": "Мощность наибольшего слоя по Годске",
-    "godske_base": "Нижняя граница первого слоя по Годске",
-    "godske_top": "Верхняя граница первого слоя по Годске",
-    "godske_count": "Число слоёв по Годске",
+    "godske_sum": "Суммарная мощность облачных слоёв по Годске",
+    "godske_max": "Мощность наибольшего облачного слоя по Годске",
+    "godske_base": "Основание первого облачного слоя по Годске",
+    "godske_top": "Верх первого облачного слоя по Годске",
+    "godske_count": "Число облачных слоёв по Годске",
     "slw_max": "Переохлаждённая вода: максимум по высоте",
     "slw_height": "Высота максимума переохлаждённой воды",
     "slwp": "Запас переохлаждённой воды в столбе",
-    "agreement": "Годске и переохлаждённая вода",
+    "agreement": "Годске и жидкая вода в облаках: сравнение",
+    "composite": "Композит обледенения в облаках",
 }
 DEFAULT_ICING_BBOX = (12.0, 85.0, 40.5, 70.5)
 LEGACY_DEFAULT_ICING_BBOX = (-15.0, 100.0, 34.0, 80.0)
@@ -58,7 +59,7 @@ def default_icing_bbox() -> tuple[float, float, float, float]:
 
 @dataclass(frozen=True)
 class IcingRequest:
-    product: str = "godske_sum"
+    product: str = "composite"
     lead: int = 24
     level_hpa: int = 850
     contour_step: int = 500
@@ -138,7 +139,7 @@ def parse_icing_input(text: str) -> IcingRequest:
         elif token in ICING_PRODUCTS:
             key, value = "product", token
         else:
-            raise GfsProfileError("Пример: /icing product=godske_sum +24 contours=10dam")
+            raise GfsProfileError("Пример: /icing product=composite +24")
         if key in values:
             raise GfsProfileError(f"Параметр {key} задан дважды")
         if key == "contour_step":

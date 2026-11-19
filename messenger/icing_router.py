@@ -41,6 +41,7 @@ LOG = logging.getLogger(__name__)
 PRODUCT_CODES = (
     "slw_level", "godske_sum", "godske_max", "godske_base", "godske_top",
     "godske_count", "slw_max", "slw_height", "slwp", "agreement",
+    "composite",
 )
 _WIRE = struct.Struct("!8sBHHBffffIB")
 # Version 2 adds a point without exceeding Telegram's 64-byte callback limit.
@@ -154,13 +155,13 @@ def _point_keyboard(request: IcingRequest) -> UiKeyboard:
 
 def icing_menu_keyboard(request: IcingRequest) -> UiKeyboard:
     return menu_keyboard([
+        [_button(LABELS["composite"], "c", replace(request, product="composite"))],
         [_button(LABELS["water_level"], "c", replace(request, product="slw_level")),
-         _button(LABELS["thickness"], "g", request)],
-        [_button(LABELS["bounds"], "b", request),
+         _button(LABELS["maximum"], "w", request)],
+        [_button(LABELS["thickness"], "g", request),
          _button(LABELS["water_column"], "c", replace(request, product="slwp"))],
-        [_button(LABELS["maximum"], "w", request)],
-        [_button(LABELS["comparison"], "c", replace(request, product="agreement"))],
-        [_button(LABELS["point"], "p", request)],
+        [_button(LABELS["comparison"], "c", replace(request, product="agreement")),
+         _button(LABELS["point"], "p", request)],
         [_button(LABELS["help"], "a", request), _button(LABELS["cancel"], "x", request)],
     ])
 
@@ -410,17 +411,23 @@ class IcingMessengerRouter(CloudgramMessengerRouter):
                 rows.append([_button(LABELS["back"], "c", request)])
                 await self._icing_page(event, gateway, request, "Переохлаждённая облачная вода · уровень", menu_keyboard(rows))
             elif action == "o":
-                await self._icing_page(event, gateway, request, "Шаг изолиний толщины слоя\n1 дам = 10 м.", menu_keyboard([
+                await self._icing_page(event, gateway, request, "Шаг изолиний мощности облачного слоя\n1 дам = 10 м.", menu_keyboard([
                     [_button(("✓ " if request.contour_step == 100 else "") + "10 дам", "c", replace(request, contour_step=100)),
                      _button(("✓ " if request.contour_step == 500 else "") + "50 дам", "c", replace(request, contour_step=500))],
                     [_button(LABELS["back"], "c", request)],
                 ]))
             elif action in {"g", "b", "w"}:
-                groups = {"g": ("Толщина слоёв с условиями обледенения\nМетод Годске", ("godske_sum", "godske_max")),
-                          "b": ("Слои по Годске", ("godske_base", "godske_top", "godske_count")),
+                groups = {"g": ("Облачные слои по Годске\nКритерий Годске, облачность и жидкая вода совпадают по высоте.",
+                                ("godske_sum", "godske_max", "godske_base", "godske_top", "godske_count")),
+                          "b": ("Границы облачных слоёв по Годске", ("godske_base", "godske_top", "godske_count")),
                           "w": ("Переохлаждённая облачная вода\nНаибольшее содержание капель над каждой точкой и высота этого максимума.", ("slw_max", "slw_height"))}
                 title, products = groups[action]
-                rows = [[_button(ICING_PRODUCTS[p], "c", replace(request, product=p))] for p in products]
+                short_titles = {"godske_sum": "Σ Суммарная мощность", "godske_max": "↕ Наибольший слой",
+                                "godske_base": "↓ Основание слоя", "godske_top": "↑ Верх слоя",
+                                "godske_count": "≡ Число слоёв", "slw_max": "💧 Максимум по высоте",
+                                "slw_height": "↕ Высота максимума"}
+                buttons = [_button(short_titles[p], "c", replace(request, product=p)) for p in products]
+                rows = [buttons[i:i+2] for i in range(0, len(buttons), 2)]
                 rows.append([_button(LABELS["products"], "h", request)])
                 if request.run:
                     title += "\n\n" + forecast_time_lines(request.run, request.lead)
@@ -607,8 +614,8 @@ class IcingMessengerRouter(CloudgramMessengerRouter):
             return
         request, event, _ = ready
         await self._icing_page(event, gateway, request,
-            f"❄ Обледенение\n{forecast_time_lines(request.run, request.lead)}\n"
-            f"{_region_text(request)}\nВыберите карту.",
+            f"❄️ Обледенение в облаках\n{forecast_time_lines(request.run, request.lead)}\n"
+            f"{_region_text(request)}\nКомпозит объединяет условия в одном слое. Выберите карту.",
             icing_menu_keyboard(request))
 
     async def _icing_card(self, event, gateway, request, *, verify=False, allow_fallback=False, note=""):

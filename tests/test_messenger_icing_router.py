@@ -125,7 +125,7 @@ class IcingRouterTests(unittest.IsolatedAsyncioTestCase):
             build = last_keyboard(gateway).rows[0][0].payload
             await router.handle(event(platform, payload=build), gateway)
             await router.icing_wait_idle()
-            self.assertEqual(self.built[-1].product, "slw_level")
+            self.assertEqual(self.built[-1].product, "composite")
             self.assertTrue(any(c[0] == "image" for c in gateway.calls))
             self.assertFalse(any(c[0] == "file" and c[1].endswith(".csv") for c in gateway.calls))
         self.assertEqual(labels[0], labels[1])
@@ -515,6 +515,11 @@ class IcingRouterTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("NOAA", gateway.calls[-1][1])
             await click("h")
             await click("g")
+            geometry = {icing_request_from_payload(button.payload)[1].product
+                        for row in last_keyboard(gateway).rows for button in row
+                        if (button.payload or "").startswith("v1|icing|c|")}
+            self.assertEqual(geometry, {"godske_sum", "godske_max", "godske_base", "godske_top", "godske_count"})
+            assert_controls()
             await click("c", product="godske_max")
             await click("m")
             self.assertIn("дам", gateway.calls[-1][1])
@@ -757,7 +762,9 @@ class IcingCallbackTests(unittest.TestCase):
         self.assertNotIn("осадки", text)
         self.assertIn("Пункт на карте", text)
         self.assertIn("Меню", text)
-        self.assertEqual(len(icing_menu_keyboard(IcingRequest()).rows), 7)
+        self.assertEqual(len(icing_menu_keyboard(IcingRequest()).rows), 6)
+        first = icing_menu_keyboard(IcingRequest()).rows[0][0]
+        self.assertEqual(icing_request_from_payload(first.payload)[1].product, "composite")
 
     def test_marker_wire_roundtrips_signed_coordinates_in64bytes_and_keeps_old_wire(self):
         for bbox, point in (((-180, -1, 34, 80), (55.7558, -37.6173)),
@@ -776,6 +783,21 @@ class IcingCallbackTests(unittest.TestCase):
             self.assertEqual(len(raw), 35)
             self.assertEqual(icing_request_from_payload(payload)[1], old)
 
+    def test_callbacks_from_before_composite_keep_the_original_product_indices(self):
+        # Fixed tokens from the previous 35-byte wire format, not regenerated
+        # through today's encoder: adding a primary product must not shift them.
+        for token, product in (
+            ("v1|icing|c|AAAAAAAAAAABABgDUgFBQAAAQqoAAEIiAABCjQAAATUo_gw", "godske_sum"),
+            ("v1|icing|c|AAAAAAAAAAAJABgDUgFBQAAAQqoAAEIiAABCjQAAATUo_gw", "agreement"),
+        ):
+            action, request = icing_request_from_payload(token)
+            self.assertEqual(action, "c")
+            self.assertEqual(request.product, product)
+            self.assertEqual(request.run, GfsRun("20261118", "12"))
+            self.assertEqual(request.bbox, (12., 85., 40.5, 70.5))
+            self.assertEqual(request.lead, 24)
+            self.assertIsNone(request.point)
+
     def test_unknown_marker_wire_version_is_rejected(self):
         payload = icing_payload("q", IcingRequest(point=(55.75, 37.62)))
         value = decode_callback(payload).value
@@ -793,7 +815,7 @@ class IcingCallbackTests(unittest.TestCase):
         self.assertIn("01.01.2027 18:00 UTC", icing_card_text(request))
 
     def test_card_uses_decametres_without_altering_internal_step(self):
-        request = IcingRequest(contour_step=500, run=GfsRun("20261118", "06"))
+        request = IcingRequest(product="godske_sum", contour_step=500, run=GfsRun("20261118", "06"))
         self.assertIn("через 50 дам", icing_card_text(request))
         self.assertEqual(request.contour_step, 500)
 

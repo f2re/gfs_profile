@@ -23,9 +23,9 @@ from gfs_core import (CACHE_DIR, NOMADS_BASE, REQUEST_TIMEOUT, GfsProfileError,
 from icing_config import (ICING_LEVELS_HPA, ICING_MAX_GRID_POINTS, IcingRequest,
                           validate_icing_request)
 
-ATMOSPHERIC_VARIABLES = ("TMP", "SPFH", "HGT", "CLWMR")
+ATMOSPHERIC_VARIABLES = ("TMP", "SPFH", "HGT", "CLWMR", "TCDC", "ICMR", "RWMR", "VVEL")
 SURFACE_VARIABLES = ("PRES", "HGT")
-RAW_SCHEMA = "icing_raw_v1"
+RAW_SCHEMA = "icing_raw_v2"
 
 
 class IcingCancelled(GfsProfileError):
@@ -306,7 +306,9 @@ def read_icing_grib(atmosphere_path: Path, surface_path: Path, run: GfsRun,
                         raise GfsProfileError("Сетки приземных и высотных полей различаются")
                     variables = ({"sp": ("surface_pressure_pa", "Pa"), "orog": ("surface_height_m", "m")}
                                  if surface else {"t": ("temperature_k", "K"), "q": ("specific_humidity", "kg kg**-1"),
-                                                  "gh": ("height_gpm", "gpm"), "clwmr": ("cloud_water_kgkg", "kg kg**-1")})
+                                                  "gh": ("height_gpm", "gpm"), "clwmr": ("cloud_water_kgkg", "kg kg**-1"),
+                                                  "tcc": ("cloud_fraction_pct", "%"), "icmr": ("cloud_ice_kgkg", "kg kg**-1"),
+                                                  "rwmr": ("rain_water_kgkg", "kg kg**-1"), "w": ("vertical_velocity_pas", "Pa s**-1")})
                     if not surface:
                         if "isobaricInhPa" not in ds.coords or not set(ICING_LEVELS_HPA).issubset(set(ds.isobaricInhPa.values)):
                             raise GfsProfileError("В GRIB отсутствуют требуемые изобарические уровни")
@@ -316,7 +318,16 @@ def read_icing_grib(atmosphere_path: Path, surface_path: Path, run: GfsRun,
                             raise GfsProfileError(f"В GRIB отсутствует поле {short}")
                         if ds[short].attrs.get("units") != units:
                             raise GfsProfileError(f"Неподдерживаемые единицы {short}: {ds[short].attrs.get('units')}")
+                        expected_level_type = "surface" if surface else "isobaricInhPa"
+                        if ds[short].attrs.get("GRIB_typeOfLevel") != expected_level_type:
+                            raise GfsProfileError(f"Поле {short} не относится к ожидаемому типу уровней {expected_level_type}")
+                        if ds[short].attrs.get("GRIB_stepType") != "instant":
+                            raise GfsProfileError(f"Поле {short} должно относиться к одному сроку, без временного осреднения")
                         dims = (("latitude", "longitude") if surface else ("isobaricInhPa", "latitude", "longitude"))
+                        if set(ds[short].dims) != set(dims):
+                            raise GfsProfileError(f"Неподдерживаемые координаты поля {short}")
+                        # Preserve missing cells as NaN. A missing cloud/phase
+                        # sample must never be replaced by a clear/zero sample.
                         value = np.asarray(ds[short].transpose(*dims).values, dtype=float)
                         result[name] = np.take(np.take(value, iy, axis=-2), ix, axis=-1)
             except (GfsProfileError, IcingCancelled):
@@ -365,6 +376,7 @@ def load_icing_input(request: IcingRequest, *, progress_callback=None, cancel_ev
             inputs = read_icing_grib(*paths, run, r.lead, r.bbox, cancel_event=cancel_event)
             metadata = {"schema": RAW_SCHEMA, "run_date": run.date, "run_cycle": run.cycle,
                         "lead": r.lead, "bbox": r.bbox, "levels_hpa": ICING_LEVELS_HPA,
+                        "atmospheric_variables": ATMOSPHERIC_VARIABLES, "surface_variables": SURFACE_VARIABLES,
                         "source_urls": urls, "retrieved_utc": now_utc().isoformat(),
                         "source_index_sha256": hashlib.sha256(index.encode()).hexdigest(),
                         "files": [{"name": p.name, "bytes": p.stat().st_size,

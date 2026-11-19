@@ -24,7 +24,8 @@ RUN = GfsRun("20261117", "06")
 
 
 def index_text(run=RUN):
-    rows = [(v, f"{p} mb") for p in ICING_LEVELS_HPA for v in ("TMP", "SPFH", "HGT", "CLWMR")]
+    rows = [(v, f"{p} mb") for p in ICING_LEVELS_HPA for v in
+            ("TMP", "SPFH", "HGT", "CLWMR", "TCDC", "ICMR", "RWMR", "VVEL")]
     rows += [("PRES", "surface"), ("HGT", "surface")]
     return "\n".join(f"{i}:0:d={run.date}{run.cycle}:{v}:{level}:24 hour fcst:" for i, (v, level) in enumerate(rows, 1))
 
@@ -44,8 +45,12 @@ def dataset(surface=False):
         coords["isobaricInhPa"] = list(ICING_LEVELS_HPA)
         dims, shape = ("isobaricInhPa", "latitude", "longitude"), (17, 2, 2)
         variables = {"t": (270., "K"), "q": (.002, "kg kg**-1"),
-                     "gh": (1000., "gpm"), "clwmr": (.0001, "kg kg**-1")}
-    return xr.Dataset({k: (dims, np.full(shape, v), {"units": u}) for k, (v, u) in variables.items()}, coords=coords)
+                     "gh": (1000., "gpm"), "clwmr": (.0001, "kg kg**-1"),
+                     "tcc": (60., "%"), "icmr": (.00002, "kg kg**-1"),
+                     "rwmr": (.0000005, "kg kg**-1"), "w": (-.12, "Pa s**-1")}
+    return xr.Dataset({k: (dims, np.full(shape, v),
+                          {"units": u, "GRIB_typeOfLevel": "surface" if surface else "isobaricInhPa",
+                           "GRIB_stepType": "instant"}) for k, (v, u) in variables.items()}, coords=coords)
 
 
 class IcingConfigTests(unittest.TestCase):
@@ -109,6 +114,13 @@ class IcingInputTests(unittest.TestCase):
         self.assertEqual(missing_index_fields(bad, RUN), ["CLWMR 850 mb"])
         self.assertTrue(missing_index_fields(index_text(), GfsRun("20261117", "12")))
 
+    def test_index_requires_cloud_and_phase_fields_at_each_pressure_level(self):
+        for variable in ("TCDC", "ICMR", "RWMR", "VVEL"):
+            for pressure in (1000, 850, 300):
+                with self.subTest(variable=variable, pressure=pressure):
+                    bad = index_text().replace(f":{variable}:{pressure} mb:", f":{variable}:entire atmosphere:")
+                    self.assertEqual(missing_index_fields(bad, RUN), [f"{variable} {pressure} mb"])
+
     def test_incomplete_new_cycle_falls_back_for_the_exact_lead(self):
         new, old = GfsRun("20261117", "12"), RUN
         selector = Mock(side_effect=[new, old])
@@ -130,9 +142,12 @@ class IcingInputTests(unittest.TestCase):
         query = parse_qs(urlparse(icing_subset_url(RUN, 384, bbox)).query, keep_blank_values=True)
         self.assertEqual(query["file"], ["gfs.t06z.pgrb2.0p25.f384"])
         self.assertEqual(query["leftlon"], ["-15.000"])
-        self.assertIn("var_CLWMR", query)
+        for variable in ("TMP", "SPFH", "HGT", "CLWMR", "TCDC", "ICMR", "RWMR", "VVEL"):
+            self.assertEqual(query[f"var_{variable}"], ["on"])
         self.assertIn("lev_300_mb", query)
         self.assertNotIn("all_lev", query)
+        self.assertNotIn("lev_entire_atmosphere", query)
+        self.assertTrue(raw_cache_key(RUN, 24, bbox).startswith("icing_raw_v2_"))
         self.assertNotEqual(raw_cache_key(RUN, 24, bbox), raw_cache_key(RUN, 384, bbox))
         self.assertNotEqual(raw_cache_key(RUN, 24, bbox), raw_cache_key(RUN, 24, (-15, 99, 34, 80)))
 
@@ -177,6 +192,71 @@ class IcingInputTests(unittest.TestCase):
             bad["gh"].attrs["units"] = "Pa"
             with patch("xarray.open_dataset", return_value=bad), self.assertRaises(GfsProfileError):
                 read_icing_grib(p, p, RUN, 24, (-15, -14.75, 34, 34.25))
+
+    def test_cloud_phase_and_vertical_motion_arrays_preserve_units_and_missing_values(self):
+        keys = {"tcc": "cloud_fraction_pct", "icmr": "cloud_ice_kgkg",
+                "rwmr": "rain_water_kgkg", "w": "vertical_velocity_pas"}
+        atmosphere = dataset()
+        for name in keys:
+            atmosphere[name].values[0, 0, 0] = np.nan
+            atmosphere[name].values[0, 0, 1] = 0
+        with tempfile.TemporaryDirectory() as directory:
+            p = Path(directory) / "sample.grib2"
+            p.write_bytes(framed_bytes())
+            with patch("xarray.open_dataset", side_effect=[atmosphere, dataset(True)]):
+                result = read_icing_grib(p, p, RUN, 24, (-15, -14.75, 34, 34.25))
+        for short, key in keys.items():
+            self.assertEqual(result.fields[key].shape, (17, 2, 2))
+            np.testing.assert_equal(result.fields[key], atmosphere[short].values)
+            self.assertTrue(np.isnan(result.fields[key][0, 0, 0]))
+            self.assertEqual(result.fields[key][0, 0, 1], 0)
+        self.assertEqual(result.fields["cloud_fraction_pct"][1, 0, 0], 60)
+        self.assertEqual(result.fields["vertical_velocity_pas"][1, 0, 0], -.12)
+
+    def test_new_fields_are_required_and_wrong_cloud_layer_or_units_are_rejected(self):
+        invalid = []
+        for short in ("tcc", "icmr", "rwmr", "w"):
+            invalid.append((f"missing {short}", dataset().drop_vars(short)))
+        for short, units in (("tcc", "1"), ("w", "m s**-1"), ("icmr", "g kg**-1"), ("rwmr", "g kg**-1")):
+            bad = dataset()
+            bad[short].attrs["units"] = units
+            invalid.append((f"units {short}", bad))
+        whole_column = dataset()
+        whole_column["tcc"] = whole_column["tcc"].isel(isobaricInhPa=0, drop=True)
+        whole_column["tcc"].attrs["GRIB_typeOfLevel"] = "atmosphere"
+        invalid.append(("whole-column cloud cover", whole_column))
+        average = dataset()
+        average["tcc"].attrs["GRIB_stepType"] = "avg"
+        invalid.append(("averaged cloud cover", average))
+        with tempfile.TemporaryDirectory() as directory:
+            p = Path(directory) / "sample.grib2"
+            p.write_bytes(framed_bytes())
+            for label, bad in invalid:
+                with self.subTest(label=label), patch("xarray.open_dataset", return_value=bad), self.assertRaises(GfsProfileError):
+                    read_icing_grib(p, p, RUN, 24, (-15, -14.75, 34, 34.25))
+
+    def test_old_four_field_cache_is_not_reused_for_cloud_composite(self):
+        bbox = (-15.0, -14.75, 34.0, 34.25)
+        request = IcingRequest(run=RUN, lead=24, bbox=bbox)
+        with patch("icing_io.RAW_SCHEMA", "icing_raw_v1"), patch("icing_io.ATMOSPHERIC_VARIABLES", ("TMP", "SPFH", "HGT", "CLWMR")):
+            old_key = raw_cache_key(RUN, 24, bbox)
+        with tempfile.TemporaryDirectory() as directory, patch("icing_io.CACHE_DIR", Path(directory)):
+            old_paths = [Path(directory) / f"{old_key}_{kind}.grib2" for kind in ("levels", "surface")]
+            for path in old_paths:
+                path.write_bytes(framed_bytes())
+            with patch("icing_io.read_icing_index", return_value=index_text()), \
+                 patch("icing_io._download", side_effect=lambda url, path, **kwargs: path.write_bytes(framed_bytes())) as download, \
+                 patch("xarray.open_dataset", side_effect=[dataset(), dataset(True)]):
+                result = load_icing_input(request)
+            self.assertEqual(download.call_count, 2)
+            self.assertTrue(all(path.exists() for path in old_paths))
+            self.assertTrue(all(path.name.startswith("icing_raw_v2_") for path in result.paths))
+            metadata = json.loads((Path(directory) / f"{raw_cache_key(RUN, 24, bbox)}.json").read_text())
+            self.assertEqual(metadata["schema"], "icing_raw_v2")
+            self.assertEqual(metadata["atmospheric_variables"], ["TMP", "SPFH", "HGT", "CLWMR", "TCDC", "ICMR", "RWMR", "VVEL"])
+            self.assertEqual(metadata["surface_variables"], ["PRES", "HGT"])
+            self.assertEqual(metadata["run_date"], RUN.date)
+            self.assertEqual(metadata["lead"], 24)
 
     def test_cancellation_prevents_network_and_output(self):
         cancel = threading.Event()

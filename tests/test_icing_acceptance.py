@@ -26,6 +26,8 @@ class IcingPhysicalAcceptanceTests(unittest.TestCase):
         return compute_icing_fields(
             pressure, temperature, specific, height, liquid,
             np.array([[101300.0]]), np.array([[0.0]]),
+            cloud_fraction_pct=np.full((3, 1, 1), 100.0),
+            vertical_velocity_pas=np.zeros((3, 1, 1)),
         )
 
     def test_water_amount_does_not_relabel_godske_geometry(self):

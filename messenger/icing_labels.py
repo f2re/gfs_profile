@@ -8,12 +8,13 @@ from __future__ import annotations
 from .menu_catalog import CANCEL_TEXT
 
 BUTTON_LABELS = {
+    "composite": "❄️ Композит в облаках",
     "water_level": "💧 Вода на уровне",
-    "thickness": "↕ Толщина слоёв",
+    "thickness": "↕ Слои по Годске",
     "bounds": "↕ Границы слоёв",
-    "maximum": "💧 Максимум по высоте",
+    "maximum": "💧 Максимум воды",
     "water_column": "💧 Запас воды",
-    "comparison": "⇄ Сравнение методов",
+    "comparison": "⇄ Сравнение условий",
     "point": "📍 Пункт на карте",
     "help": "ℹ Как читать карту",
     "cancel": CANCEL_TEXT,

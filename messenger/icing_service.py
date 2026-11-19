@@ -20,7 +20,10 @@ from icing_config import (ICING_PRODUCTS, METHOD_VERSION, IcingRequest,
 from icing_io import check_cancel, load_icing_input
 from icing_meteorology import AGREEMENT_LABELS, PRODUCT_UNITS, compute_icing_fields, select_icing_field
 from icing_render import render_icing_png
-from icing_presentation import DISPLAY_UNITS, PRODUCT_HINTS, SOURCE_LABEL, SOURCE_URL, water_profile_missing
+from icing_presentation import (
+    DISPLAY_UNITS, PRODUCT_HINTS, SOURCE_LABEL, SOURCE_URL,
+    icing_profile_missing, water_profile_missing,
+)
 
 from .contracts import CommonProductResult, ProductAttachment, ProgressEvent
 
@@ -31,19 +34,21 @@ def _emit(callback, stage, message, **data):
 
 
 def _coverage(fields: dict, request: IcingRequest) -> tuple[np.ndarray, np.ndarray]:
+    if request.product == "composite":
+        return fields["composite_has_coverage"], fields["composite_profile_missing"]
     if request.product.startswith("godske_"):
-        return fields["godske20_has_coverage"], fields["godske20_interior_missing"]
+        return fields["cloud_godske_has_coverage"], icing_profile_missing(fields, request.product)
     if request.product == "agreement":
         covered = fields["agreement_has_coverage"]
         return covered, ~covered
     if request.product == "slw_level":
         k = list(fields["pressure_hpa"]).index(request.level_hpa)
-        valid = fields["water_valid_above_ground"][k]
+        valid = fields["cloud_liquid_valid_above_ground"][k]
         return valid, np.zeros_like(valid, dtype=bool)
     if request.product in ("slw_max", "slw_height"):
-        valid = fields["water_valid_above_ground"].any(axis=0)
-        return valid, fields["SLWP_interior_missing"]
-    return fields["SLWP_has_coverage"], fields["SLWP_interior_missing"]
+        valid = fields["cloud_liquid_valid_above_ground"].any(axis=0)
+        return valid, fields["cloud_profile_missing"]
+    return fields["cloud_liquid_has_coverage"], fields["cloud_profile_missing"]
 
 
 def write_icing_csv(path: Path, fields: dict, lat: np.ndarray, lon: np.ndarray,
@@ -74,11 +79,11 @@ def write_icing_csv(path: Path, fields: dict, lat: np.ndarray, lon: np.ndarray,
                              METHOD_VERSION, request.level_hpa if request.product == "slw_level" else "",
                              "1000..300", bbox_text, request.contour_step if godske else "",
                              int(known[iy, ix]), int(missing[iy, ix]),
-                             int(fields["godske20_lower_open"][iy, ix]) if godske else "",
-                             int(fields["godske20_upper_open"][iy, ix]) if godske else "",
-                             int(fields["godske20_base_first_open"][iy, ix]) if godske else "",
-                             int(fields["godske20_top_first_open"][iy, ix]) if godske else "",
-                             number(fields["godske20_n_layers"][iy, ix]) if godske else "",
+                             int(fields["cloud_godske_lower_open"][iy, ix]) if godske else "",
+                             int(fields["cloud_godske_upper_open"][iy, ix]) if godske else "",
+                             int(fields["cloud_godske_base_first_open"][iy, ix]) if godske else "",
+                             int(fields["cloud_godske_top_first_open"][iy, ix]) if godske else "",
+                             number(fields["cloud_godske_n_layers"][iy, ix]) if godske else "",
                              AGREEMENT_LABELS[int(values[iy, ix])] if request.product == "agreement" and np.isfinite(values[iy, ix]) else ""))
     check_cancel(cancel_event)
 
@@ -119,7 +124,7 @@ def build_icing_product_result(
     inputs = (input_loader or load_icing_input)(request, progress_callback=progress, cancel_event=cancel_event)
     request = replace(request, run=inputs.run)
     check_cancel(cancel_event)
-    _emit(progress_callback, "calculate", "3/5 Выделяю слои и рассчитываю водность",
+    _emit(progress_callback, "calculate", "3/5 Совмещаю облачность, воду и условия обледенения по высоте",
           run_date=inputs.run.date, run_cycle=inputs.run.cycle)
     fields = (calculator or compute_icing_fields)(**inputs.fields)
     check_cancel(cancel_event)
@@ -139,8 +144,13 @@ def build_icing_product_result(
         valid_time = inputs.run.run_datetime_utc + timedelta(hours=request.lead)
         values = select_icing_field(fields, request.product, request.level_hpa)
         known, missing = _coverage(fields, request)
-        water_column = request.product in {"slw_max", "slw_height", "slwp"}
-        incomplete = water_profile_missing(fields) if water_column else np.zeros_like(known)
+        incomplete = (icing_profile_missing(fields, request.product)
+                      if request.product != "slw_level" else np.zeros_like(known))
+        if request.product == "slw_level":
+            level_index = list(fields["pressure_hpa"]).index(request.level_hpa)
+            conflict = fields["cloud_input_conflict_level"][level_index]
+        else:
+            conflict = fields["cloud_input_conflict"]
         title = ICING_PRODUCTS[request.product]
         time_line = forecast_time_lines(inputs.run, request.lead)
         west, east, south, north = request.bbox
@@ -153,17 +163,19 @@ def build_icing_product_result(
         if request.point is not None:
             summary += f"\nОтмеченный пункт: {request.point[0]:g}°, {request.point[1]:g}°."
         if not np.isfinite(values).any():
-            if request.product in {"slw_max", "slw_height"} and np.any(known) and not np.any(incomplete & known) and not np.any(fields["max_slwc_gm3"] > 0):
+            if request.product in {"slw_max", "slw_height"} and np.any(known) and not np.any(incomplete & known) and not np.any(fields["cloud_max_slwc_gm3"] > 0):
                 summary += "\nВ доступных данных переохлаждённая облачная вода не выявлена."
             elif request.product in {"godske_base", "godske_top"} and np.any(known):
-                if np.any(fields["godske20_n_layers"] > 0):
+                if np.any(fields["cloud_godske_n_layers"] > 0):
                     summary += "\nГраница слоя не определяется по доступным уровням."
                 else:
-                    summary += "\nВ доступных данных слои с условиями по Годске не выявлены."
+                    summary += "\nВ доступных данных облачные слои с жидкой водой и условиями по Годске не выявлены."
             else:
                 summary += "\nНедостаточно данных для этой карты; пояснение — в «Как читать карту»."
         if np.any(incomplete):
             summary += "\nЕсть неполные данные по высоте: доступные значения отмечены штриховкой, неопределённые — серым."
+        if np.any(conflict):
+            summary += "\nШтриховка «Вода без облачности модели»: на одном уровне есть холодная жидкая вода при нулевой облачной доле."
         metadata = {
             "product": "icing", "icing_product": request.product, "model": "GFS 0.25",
             "source": "NOAA/NCEP NOMADS GRIB Filter", "source_url": SOURCE_URL,
@@ -178,9 +190,17 @@ def build_icing_product_result(
             "pressure_levels_hpa": [int(x) for x in fields["pressure_hpa"]],
             "grid_shape": list(inputs.lat.shape), "covered_nodes": int(np.count_nonzero(known)),
             "nodes_with_internal_gaps": int(np.count_nonzero(missing)),
-            "nodes_with_incomplete_water_profile": int(np.count_nonzero(incomplete)),
+            "nodes_with_incomplete_profile": int(np.count_nonzero(incomplete)),
+            "nodes_with_incomplete_water_profile": int(np.count_nonzero(water_profile_missing(fields))),
+            "nodes_with_cloud_water_conflict": int(np.count_nonzero(conflict)),
+            "nodes_with_ice_only_cloud": int(np.count_nonzero(fields["cloud_ice_only_present"])),
+            "nodes_with_cold_rain": int(np.count_nonzero(fields["cold_rain_present"])),
+            "nodes_with_missing_ice_phase": int(np.count_nonzero(fields["ice_profile_missing"])),
+            "nodes_with_missing_rain_phase": int(np.count_nonzero(fields["rain_profile_missing"])),
             "finite_value_nodes": int(np.isfinite(values).sum()),
             "no_surface_extrapolation": True, "meteorological_skill_validated": False,
+            "cloud_mask": "T < 0 degC; TCDC_level > 0%; LWC >= 0.001 g/m3; same vertical interval",
+            "composite_scale": "index 0..100, not probability" if request.product == "composite" else None,
             "source_files": [path.name for path in inputs.paths],
         }
         check_cancel(cancel_event)

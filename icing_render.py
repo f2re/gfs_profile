@@ -17,6 +17,7 @@ from icing_meteorology import (
 )
 from icing_presentation import (
     DISPLAY_UNITS, PRODUCT_HINTS, SOURCE_LABEL, display_icing_field, water_profile_missing,
+    icing_profile_missing,
 )
 from icing_geography import (
     draw_basemap as _basemap, draw_cities as _cities, draw_selected_point,
@@ -92,6 +93,8 @@ def _geographic_grid(ax, bbox, project, clip):
 
 
 def _presentation(product):
+    if product == "composite":
+        return [0, 20, 40, 60, 80, 100], "PuBu"
     if product in {"godske_sum", "godske_max"}:
         return [10, 50, 100, 150, 200, 250, 300, 400, 500], "YlGnBu"
     if product in {"godske_base", "godske_top", "slw_height"}:
@@ -108,16 +111,18 @@ def _presentation(product):
 def _unknown_mask(fields, product, values, level_hpa):
     unknown = ~np.isfinite(values)
     if product in {"godske_base", "godske_top"}:
-        unknown &= ~np.isfinite(fields["godske20_sum_gpm"]) | (fields["godske20_n_layers"] > 0)
+        unknown &= ~np.isfinite(fields["cloud_godske_sum_gpm"]) | (fields["cloud_godske_n_layers"] > 0)
     elif product == "slw_height":
         complete = ~water_profile_missing(fields)
-        known_dry = np.isfinite(fields["max_slwc_gm3"]) & (fields["max_slwc_gm3"] == 0)
-        known_warm = fields["water_valid_above_ground"].any(axis=0) & ~fields["SLWC_has_cold_levels"]
+        known_dry = np.isfinite(fields["cloud_max_slwc_gm3"]) & (fields["cloud_max_slwc_gm3"] == 0)
+        valid = fields["cloud_liquid_valid_above_ground"]
+        known_warm = valid.any(axis=0) & ~(valid & (fields["temperature_C"] < 0)).any(axis=0)
         unknown &= ~((known_dry | known_warm) & complete)
     elif product == "slw_max":
         # A fully available, entirely warm column has no cold-level maximum.
-        known_warm = (fields["water_valid_above_ground"].any(axis=0)
-                      & ~fields["SLWC_has_cold_levels"] & ~water_profile_missing(fields))
+        valid = fields["cloud_liquid_valid_above_ground"]
+        known_warm = (valid.any(axis=0) & ~(valid & (fields["temperature_C"] < 0)).any(axis=0)
+                      & ~water_profile_missing(fields))
         unknown &= ~known_warm
     return unknown
 
@@ -129,9 +134,10 @@ def render_icing_png(
     """Render one regional PNG with explicit physical units and provenance."""
     from matplotlib import colormaps
     from matplotlib.backends.backend_agg import FigureCanvasAgg
-    from matplotlib.colors import BoundaryNorm, ListedColormap
+    from matplotlib.colors import BoundaryNorm, LinearSegmentedColormap, ListedColormap, Normalize
     from matplotlib.figure import Figure
     from matplotlib.patches import Patch, PathPatch
+    from matplotlib.lines import Line2D
     from matplotlib.path import Path as MplPath
     lat, lon = np.asarray(lat, dtype=float), np.asarray(lon, dtype=float)
     values = display_icing_field(fields, product, level_hpa)
@@ -167,13 +173,18 @@ def render_icing_png(
     outline = _boundary(bbox, project)
     bounds, palette = _presentation(product)
     categorical = product == "agreement"
+    composite = product == "composite"
     # No diagnosed conditions leave the geographic base visible, including sea
     # and lakes; category zero must not paint the whole map opaque white.
     colors = [(1, 1, 1, 0), "#d7a55d", "#64acb9", "#574895", "#bf7892"] if categorical else colormaps[palette](np.linspace(0.12, 0.95, len(bounds) - 1))
-    cmap = ListedColormap(colors)
-    norm = BoundaryNorm(bounds, cmap.N)
+    cmap = (LinearSegmentedColormap.from_list("cloud_icing_index",
+            ["#c4e8ec", "#6bc5d3", "#278da9", "#4369aa", "#755399", "#a24878"])
+            if composite else ListedColormap(colors))
+    norm = Normalize(0, 100) if composite else BoundaryNorm(bounds, cmap.N)
     height_product = product in {"godske_base", "godske_top", "slw_height"}
     below_display = np.zeros(values.shape, dtype=bool) if height_product else values < bounds[0]
+    if composite:
+        below_display = values <= 0
     masked = np.ma.masked_where(~np.isfinite(values) | below_display, values)
     unknown = _unknown_mask(fields, product, values, level_hpa)
     run_dt = run.run_datetime_utc
@@ -184,7 +195,7 @@ def render_icing_png(
         figure_width = 12.8
         map_ratio = float(np.ptp(outline[:, 0]) / np.ptp(outline[:, 1]))
         map_height = min(11.4, max(4.4, (figure_width - 0.28) / map_ratio))
-        header_height, footer_height = 1.00, 1.12 if categorical else 1.00
+        header_height, footer_height = 0.96, 1.12 if categorical else 1.00
         figure_height = map_height + header_height + footer_height
         fig = Figure(figsize=(figure_width, figure_height), dpi=170, facecolor="white")
         FigureCanvasAgg(fig)
@@ -206,6 +217,20 @@ def render_icing_png(
                 missing.set_clip_path(border)
             has_basemap = _basemap(ax, bbox, project, border)
             _geographic_grid(ax, bbox, project, border)
+            agreement_outline = composite & np.any(fields["cloud_godske_sum_gpm"] > 0)
+            if agreement_outline:
+                # Padding with clear cells draws the outer boundary even when
+                # every available grid cell agrees. No extrapolation is used:
+                # the line follows the same half-cell edges as the colour fill.
+                longitude = np.r_[2 * lon_edges[0] - lon[0, 0], lon[0], 2 * lon_edges[-1] - lon[0, -1]]
+                latitude = np.r_[2 * lat_edges[0] - lat[0, 0], lat[:, 0], 2 * lat_edges[-1] - lat[-1, 0]]
+                outline_lon, outline_lat = np.meshgrid(longitude, latitude)
+                outline_x, outline_y = project(outline_lon, outline_lat)
+                same_layer = np.pad((fields["cloud_godske_sum_gpm"] > 0).astype(float), 1)
+                lines = ax.contour(outline_x, outline_y, same_layer, levels=[0.5],
+                                   colors=_BLUE, linewidths=0.9, zorder=6)
+                lines.set_clip_path(border)
+                lines.set_gid("icing_same_layer_godske")
             if min(values.shape) >= 2 and product in {"godske_sum", "godske_max"}:
                 valid_values = values[np.isfinite(values)]
                 vmax = min(float(valid_values.max()), 2000) if len(valid_values) else 0
@@ -221,7 +246,7 @@ def render_icing_png(
                             label.set_gid("icing_contour")
             if min(values.shape) >= 2 and product == "slw_level":
                 k = int(np.flatnonzero(np.isclose(fields["pressure_hpa"], level_hpa))[0])
-                temps = np.ma.masked_where(~fields["water_valid_above_ground"][k], fields["temperature_C"][k])
+                temps = np.ma.masked_where(~fields["cloud_liquid_valid_above_ground"][k], fields["temperature_C"][k])
                 finite_t = temps.compressed()
                 levels = [v for v in (-20, -10, 0) if len(finite_t) and finite_t.min() < v < finite_t.max()]
                 if levels:
@@ -233,13 +258,16 @@ def render_icing_png(
             censored = np.zeros_like(unknown)
             interior_missing = np.zeros_like(unknown)
             if product in {"godske_sum", "godske_max", "godske_count"}:
-                active = fields["godske20_sum_gpm"] > 0
-                censored = (fields["godske20_lower_open"] | fields["godske20_upper_open"]) & active
-            if product.startswith("godske_"):
-                interior_missing = fields["godske20_interior_missing"] & ~unknown
-            elif product in {"slwp", "slw_max", "slw_height"}:
-                interior_missing = water_profile_missing(fields) & ~unknown
-            for mask, pattern in ((censored, ".."), (interior_missing, "//")):
+                active = fields["cloud_godske_sum_gpm"] > 0
+                censored = (fields["cloud_godske_lower_open"] | fields["cloud_godske_upper_open"]) & active
+            if product.startswith("godske_") or composite or product in {"slwp", "slw_max", "slw_height"}:
+                interior_missing = icing_profile_missing(fields, product) & ~unknown
+            if product == "slw_level":
+                k = int(np.flatnonzero(np.isclose(fields["pressure_hpa"], level_hpa))[0])
+                conflict = fields["cloud_input_conflict_level"][k] & ~unknown
+            else:
+                conflict = fields["cloud_input_conflict"] & ~unknown
+            for mask, pattern in ((censored, ".."), (interior_missing, "//"), (conflict, "\\\\")):
                 if not mask.any():
                     continue
                 if min(values.shape) >= 2:
@@ -251,6 +279,8 @@ def render_icing_png(
                 hatch.set_edgecolor("#657783")
                 hatch.set_linewidth(0.15)
             legend = []
+            if agreement_outline:
+                legend.append(Line2D([], [], color=_BLUE, lw=1.1, label="Облачные слои по Годске"))
             if unknown.any():
                 missing_label = ("Ниже поверхности / нет данных" if product == "slw_level" else
                                  "Граница не определена" if product in {"godske_base", "godske_top"} else
@@ -259,17 +289,21 @@ def render_icing_png(
             if censored.any():
                 legend.append(Patch(facecolor="none", edgecolor="#657783", hatch="..", label="Слой выходит за доступные уровни"))
             if interior_missing.any():
-                missing_text = "Неполные данные по высоте" if product in {"slwp", "slw_max", "slw_height"} else "Пропуски между уровнями"
+                missing_text = "Неполные данные по высоте"
                 legend.append(Patch(facecolor="none", edgecolor="#657783", hatch="//", label=missing_text))
+            if conflict.any():
+                legend.append(Patch(facecolor="none", edgecolor="#657783", hatch="\\\\", label="Вода без облачности модели"))
             if legend:
-                ax.legend(handles=legend, loc="lower left", fontsize=9.5, framealpha=0.97,
-                          edgecolor="#d2dbe0", borderpad=0.5)
+                ax.legend(handles=legend, loc="lower left", fontsize=9.2, framealpha=0.95,
+                          edgecolor="#d2dbe0", borderpad=0.4, labelspacing=0.3)
             shown = np.isfinite(values) & ~below_display
             if not shown.any():
                 if unknown.all():
                     message = "Поле не определено в доступных данных"
-                elif product in {"godske_base", "godske_top"} and (fields["godske20_n_layers"] > 0).any():
+                elif product in {"godske_base", "godske_top"} and (fields["cloud_godske_n_layers"] > 0).any():
                     message = "Высота границы вне доступных уровней"
+                elif composite:
+                    message = "Индекс в облаках равен нулю в доступной части профиля"
                 else:
                     message = "Значений выше порога заливки не выявлено"
                 ax.text(0.5, 0.5, message, transform=ax.transAxes, ha="center", va="center", fontsize=12, color=_BLUE, bbox={"facecolor": "white", "alpha": 0.9, "edgecolor": "#b4c4ce", "pad": 8}, zorder=20)
@@ -278,14 +312,17 @@ def render_icing_png(
             _cities(ax, bbox, project, border)
             top = lambda inches: 1.0 - inches / figure_height
             bottom = lambda inches: inches / figure_height
-            fig.text(0.022, top(0.23), "ОБЛЕДЕНЕНИЕ · GFS 0,25°", fontsize=9.5, weight="bold", color="#44718a")
+            header = "СРАВНЕНИЕ УСЛОВИЙ" if categorical else "ОБЛЕДЕНЕНИЕ В ОБЛАКАХ"
+            fig.text(0.022, top(0.23), f"{header} · GFS 0,25°", fontsize=9.5, weight="bold", color="#44718a")
             fig.text(0.978, top(0.23), f"Исходные данные {run_dt:%d.%m.%Y %H} UTC · +{int(lead)} ч", fontsize=10, color="#526b79", ha="right")
             title = PRODUCT_TITLES[product]
             fig.text(0.022, top(0.58), title, fontsize=19.5 if len(title) < 49 else 17.5, weight="bold", color=_BLUE)
             pressure_range = f"{float(fields['pressure_hpa'][0]):g}–{float(fields['pressure_hpa'][-1]):g} гПа"
             subtitle = f"{level_hpa} гПа · температура ниже 0 °C" if product == "slw_level" else f"{pressure_range}"
             if product.startswith("godske"):
-                subtitle = "Метод Годске · " + subtitle
+                subtitle = "Годске + облачность + жидкая вода · " + subtitle
+            if composite:
+                subtitle = "Максимум индекса · " + subtitle
             if product in {"godske_sum", "godske_max"}:
                 subtitle += f" · изолинии {contour_step // 10} дам"
             fig.text(0.022, top(0.87), f"Прогноз на {valid_dt:%d.%m.%Y %H:%M} UTC", fontsize=11.4, weight="bold", color=_BLUE)
@@ -296,10 +333,12 @@ def render_icing_png(
             else:
                 cax = fig.add_axes((0.045, bottom(0.76), 0.84, bottom(0.14)))
                 ticks = range(1, 6) if product == "godske_count" else bounds
-                colorbar = fig.colorbar(mesh, cax=cax, orientation="horizontal", ticks=ticks, spacing="uniform", extend="both" if height_product else "max")
+                colorbar = fig.colorbar(mesh, cax=cax, orientation="horizontal", ticks=ticks, spacing="uniform",
+                                       extend="neither" if composite else "both" if height_product else "max")
                 colorbar.ax.tick_params(labelsize=9, length=3, pad=3)
                 colorbar.ax.set_xticklabels([f"{v:g}".replace(".", ",") for v in ticks])
-                fig.text(0.91, bottom(0.80), DISPLAY_UNITS[product], fontsize=11.5, weight="bold", color=_BLUE)
+                fig.text(0.91, bottom(0.80), "Индекс" if composite else DISPLAY_UNITS[product],
+                         fontsize=11.5, weight="bold", color=_BLUE)
             note = PRODUCT_HINTS[product]
             fig.text(0.022, bottom(0.37), note, fontsize=9.7, color="#405d6f")
             if has_basemap and "ocean" in has_basemap:

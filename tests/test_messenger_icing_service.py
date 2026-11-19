@@ -24,6 +24,7 @@ def input_case():
            "specific_humidity": np.full(shape, .002),
            "height_gpm": np.broadcast_to(np.linspace(100, 9000, len(pressure))[:, None, None], shape).copy(),
            "cloud_water_kgkg": np.full(shape, .0001),
+           "cloud_fraction_pct": np.full(shape, 100.0), "vertical_velocity_pas": np.zeros(shape),
            "surface_pressure_pa": np.full((2, 2), 102000.), "surface_height_m": np.zeros((2, 2))}
     lon, lat = np.meshgrid([37, 37.25], [55.25, 55])
     return IcingInput(lat, lon, raw, GfsRun("20261117", "06"), 24,
@@ -51,8 +52,9 @@ class IcingServiceTests(unittest.TestCase):
             self.assertFalse(first.metadata["meteorological_skill_validated"])
             self.assertEqual([a.kind for a in first.attachments], ["image"])
             self.assertEqual(list((Path(directory)/"icing").glob("*.csv")), [])
-            self.assertEqual(first.metadata["units"], "дам")
-            self.assertEqual(first.metadata["raw_units"], "гп.м")
+            self.assertEqual(first.metadata["units"], "индекс 0–100")
+            self.assertEqual(first.metadata["raw_units"], "индекс 0–100")
+            self.assertEqual(first.metadata["icing_product"], "composite")
             self.assertEqual(first.metadata["contour_step_dam"], 50)
             self.assertIn("18.11.2026 06:00 UTC", first.summary)
             self.assertIn("NOAA/NCEP", first.summary)
@@ -113,12 +115,42 @@ class IcingServiceTests(unittest.TestCase):
                     self.assertIn("вода не выявлена", result.summary)
                 cleanup_product_result(result)
 
+    def test_composite_missing_velocity_is_explained_and_cloud_conflict_remains_visible(self):
+        case = input_case()
+        case.fields["vertical_velocity_pas"][:, 0, 0] = np.nan
+        case.fields["cloud_fraction_pct"][:, 1, 1] = 0
+        with tempfile.TemporaryDirectory() as directory, patch("messenger.icing_service.CACHE_DIR", Path(directory)):
+            result = build_icing_product_result(IcingRequest(), input_loader=lambda *a, **kw: case, renderer=renderer)
+            self.assertIn("неполные данные по высоте", result.summary)
+            self.assertIn("Вода без облачности модели", result.summary)
+            self.assertEqual(result.metadata["nodes_with_incomplete_profile"], 1)
+            self.assertEqual(result.metadata["nodes_with_incomplete_water_profile"], 0)
+            self.assertEqual(result.metadata["nodes_with_cloud_water_conflict"], 1)
+            self.assertEqual(result.metadata["method_version"], "gfs_cloud_composite_v2")
+            self.assertEqual([item.kind for item in result.attachments], ["image"])
+            self.assertNotIn("Вероятность", result.summary)
+            cleanup_product_result(result)
+
+    def test_godske_dewpoint_gap_is_not_hidden_by_complete_cloud_and_water(self):
+        case = input_case()
+        case.fields["specific_humidity"][8] = 0
+        fields = compute_icing_fields(**case.fields)
+        self.assertFalse(fields["cloud_profile_missing"].any())
+        self.assertTrue(fields["cloud_godske_interior_missing"].all())
+        with tempfile.TemporaryDirectory() as directory, patch("messenger.icing_service.CACHE_DIR", Path(directory)):
+            result = build_icing_product_result(IcingRequest(product="godske_sum"),
+                input_loader=lambda *a, **kw: case, renderer=renderer)
+            self.assertIn("неполные данные по высоте", result.summary)
+            self.assertEqual(result.metadata["nodes_with_incomplete_profile"], 4)
+            self.assertEqual(result.metadata["nodes_with_incomplete_water_profile"], 0)
+            cleanup_product_result(result)
+
     def test_csv_distinguishes_first_layer_boundary_from_column_boundary(self):
         case = input_case()
         fields = compute_icing_fields(**case.fields)
-        fields["godske20_top_first_gpm"][:] = 1300
-        fields["godske20_top_first_open"][:] = False
-        fields["godske20_upper_open"][:] = True
+        fields["cloud_godske_top_first_gpm"][:] = 1300
+        fields["cloud_godske_top_first_open"][:] = False
+        fields["cloud_godske_upper_open"][:] = True
         request = IcingRequest(product="godske_top", run=case.run)
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)/"result.csv"
