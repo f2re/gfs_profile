@@ -5,11 +5,11 @@ import unittest
 import numpy as np
 
 from icing_meteorology import (
-    G0, compute_icing_fields, layer_products, select_icing_field,
+    G0, compute_icing_fields, layer_products, select_icing_field, sfip_index, sfip_memberships,
 )
 
 
-def column(temperature, *, margin=None, water=None, heights=None, pressure=None):
+def column(temperature, *, margin=None, water=None, heights=None, pressure=None, cloud=None, omega=None):
     """Idealised columns test numerical contracts, not meteorological accuracy."""
     t = np.array(temperature, dtype=float)
     n = len(t)
@@ -27,6 +27,9 @@ def column(temperature, *, margin=None, water=None, heights=None, pressure=None)
         specific_humidity=q[:, None, None],
         height_gpm=z[:, None, None],
         cloud_water_kgkg=(lwc / (1000 * rho))[:, None, None],
+        cloud_fraction_pct=np.asarray(cloud if cloud is not None else np.full(n, 100.0))[:, None, None],
+        vertical_velocity_pas=np.asarray(omega if omega is not None else np.zeros(n))[:, None, None],
+        cloud_ice_kgkg=np.zeros((n, 1, 1)), rain_water_kgkg=np.zeros((n, 1, 1)),
         surface_pressure_pa=np.array([[101000.0]]),
         surface_height_m=np.array([[-10.0]]),
     )
@@ -160,6 +163,175 @@ class IcingMeteorologyTests(unittest.TestCase):
             args.update(change)
             with self.subTest(change=tuple(change)), self.assertRaises(ValueError):
                 compute_icing_fields(**args)
+
+
+class CloudCompositeTests(unittest.TestCase):
+    def test_godske_alone_never_creates_cloud_icing(self):
+        for cloud, water in (([0, 0], [.1, .1]), ([100, 100], [0, 0]), ([0, 0], [0, 0])):
+            fields = compute_icing_fields(**column([-10, -10], cloud=cloud, water=water))
+            self.assertGreater(fields["godske20_sum_gpm"][0, 0], 0)
+            for product in ("composite", "godske_sum", "slw_max", "slwp"):
+                self.assertEqual(select_icing_field(fields, product)[0, 0], 0, product)
+
+    def test_cloud_and_water_must_coincide_vertically(self):
+        args = column([-10] * 6, cloud=[100, 100, 0, 0, 0, 0], water=[0, 0, 0, 0, .1, .1])
+        fields = compute_icing_fields(**args)
+        self.assertEqual(fields["cloud_liquid_sum_gpm"][0, 0], 0)
+        self.assertEqual(fields["cloud_godske_sum_gpm"][0, 0], 0)
+        self.assertEqual(fields["composite_index"][0, 0], 0)
+        self.assertTrue(fields["cloud_input_conflict"][0, 0])
+
+    def test_cloud_godske_geometry_is_intersection_not_column_mask(self):
+        args = column([-10] * 4, margin=[-1, -1, 1, 1], cloud=[0, 0, 100, 100],
+                      water=[.1] * 4, heights=[0, 1000, 2000, 3000])
+        fields = compute_icing_fields(**args)
+        # Cloud starts immediately above z=1000; G ends at z=1500.
+        self.assertAlmostEqual(fields["cloud_godske_sum_gpm"][0, 0], 500, places=8)
+        self.assertAlmostEqual(fields["cloud_godske_base_first_gpm"][0, 0], 1000, places=8)
+        self.assertAlmostEqual(fields["cloud_godske_top_first_gpm"][0, 0], 1500, places=8)
+        self.assertAlmostEqual(fields["godske20_sum_gpm"][0, 0], 1500, places=8)
+
+    def test_cloud_water_between_samples_is_not_lost(self):
+        args = column([10, -10], cloud=[100, 0], water=[.1, .1], heights=[0, 1000])
+        fields = compute_icing_fields(**args)
+        self.assertFalse(fields["cloud_liquid_eligible"].any())
+        self.assertAlmostEqual(fields["cloud_liquid_sum_gpm"][0, 0], 500)
+        self.assertAlmostEqual(fields["cloud_max_slwc_gm3"][0, 0], .1)
+        self.assertGreater(fields["cloud_slwp_gm2"][0, 0], 0)
+        self.assertGreater(fields["composite_index"][0, 0], 0)
+
+    def test_missing_cloud_is_unknown_and_never_falls_back_to_humidity(self):
+        args = column([-10, -10])
+        args.pop("cloud_fraction_pct")
+        fields = compute_icing_fields(**args)
+        self.assertGreater(fields["godske20_sum_gpm"][0, 0], 0)
+        self.assertGreater(fields["max_slwc_gm3"][0, 0], 0)
+        for product in ("composite", "godske_sum", "slw_max", "slwp", "agreement"):
+            self.assertTrue(np.isnan(select_icing_field(fields, product)[0, 0]), product)
+        self.assertTrue(fields["cloud_profile_missing"][0, 0])
+
+    def test_missing_omega_does_not_change_water_but_prevents_index(self):
+        args = column([-10, -10])
+        args["vertical_velocity_pas"][:] = np.nan
+        fields = compute_icing_fields(**args)
+        self.assertTrue(np.isnan(fields["composite_index"][0, 0]))
+        self.assertTrue(fields["composite_profile_missing"][0, 0])
+        self.assertGreater(fields["cloud_godske_sum_gpm"][0, 0], 0)
+        self.assertGreater(fields["cloud_slwp_gm2"][0, 0], 0)
+
+    def test_cloud_missing_level_is_not_bridged(self):
+        fields = compute_icing_fields(**column([-10] * 5, cloud=[100, 100, np.nan, 100, 100]))
+        self.assertEqual(fields["cloud_godske_n_layers"][0, 0], 2)
+        self.assertAlmostEqual(fields["cloud_godske_sum_gpm"][0, 0], 200)
+        self.assertTrue(fields["cloud_profile_missing"][0, 0])
+        self.assertTrue(fields["cloud_godske_interior_missing"][0, 0])
+
+    def test_unknown_dewpoint_at_profile_edge_is_recorded(self):
+        for edge in (0, -1):
+            args = column([-10] * 3)
+            args["specific_humidity"][edge] = 0
+            fields = compute_icing_fields(**args)
+            self.assertFalse(fields["cloud_profile_missing"][0, 0])
+            self.assertFalse(fields["cloud_godske_interior_missing"][0, 0])
+            self.assertTrue(fields["cloud_godske_profile_missing"][0, 0])
+
+    def test_cloud_cover_is_presence_not_a_water_multiplier(self):
+        one = compute_icing_fields(**column([-10, -10], cloud=[1, 1]))
+        hundred = compute_icing_fields(**column([-10, -10], cloud=[100, 100]))
+        for key in ("cloud_slwp_gm2", "cloud_max_slwc_gm3", "cloud_godske_sum_gpm", "composite_index"):
+            np.testing.assert_allclose(one[key], hundred[key], err_msg=key)
+
+    def test_warm_and_zero_plateaus_never_receive_composite(self):
+        for t in (0, 0.5, 10):
+            fields = compute_icing_fields(**column([t, t]))
+            self.assertEqual(fields["composite_index"][0, 0], 0)
+            self.assertEqual(fields["cloud_godske_sum_gpm"][0, 0], 0)
+
+    def test_very_cold_cloud_water_is_not_cut_off_by_godske(self):
+        fields = compute_icing_fields(**column([-25, -25]))
+        self.assertEqual(fields["cloud_godske_sum_gpm"][0, 0], 0)
+        self.assertGreater(fields["cloud_slwp_gm2"][0, 0], 0)
+        self.assertGreater(fields["composite_index"][0, 0], 0)
+
+    def test_ice_and_rain_never_become_cloud_liquid(self):
+        args = column([-10, -10], water=[0, 0])
+        args["cloud_ice_kgkg"][:] = 0.001
+        args["rain_water_kgkg"][:] = 0.001
+        fields = compute_icing_fields(**args)
+        self.assertEqual(fields["composite_index"][0, 0], 0)
+        self.assertEqual(fields["cloud_godske_sum_gpm"][0, 0], 0)
+        self.assertEqual(fields["cloud_slwp_gm2"][0, 0], 0)
+        self.assertTrue(fields["cloud_ice_only_present"][0, 0])
+        self.assertTrue(fields["cold_rain_present"][0, 0])
+
+    def test_water_path_integrates_only_cloud_godske_intersection(self):
+        args = column([-10] * 3, margin=[-1, 1, 1], pressure=[1000, 900, 800],
+                      cloud=[100] * 3, water=[.1] * 3)
+        args["cloud_water_kgkg"][:] = 1e-4
+        fields = compute_icing_fields(**args)
+        self.assertAlmostEqual(fields["cloud_godske_slwp_gm2"][0, 0], 1000 / G0 * 1e-4 * 5000, places=8)
+        self.assertAlmostEqual(fields["cloud_slwp_gm2"][0, 0], 1000 / G0 * 1e-4 * 20000, places=8)
+
+    def test_godske_inclusive_zero_boundary_survives_roundoff(self):
+        fields = compute_icing_fields(**column([-5, -5], margin=[0, 0]))
+        self.assertAlmostEqual(fields["godske20_sum_gpm"][0, 0], 100)
+        self.assertAlmostEqual(fields["cloud_godske_sum_gpm"][0, 0], 100)
+
+    def test_invalid_cloud_range_and_new_field_shape_are_rejected(self):
+        for cover in (-1, 101):
+            fields = compute_icing_fields(**column([-10, -10], cloud=[cover, cover]))
+            self.assertTrue(np.isnan(fields["composite_index"][0, 0]))
+        args = column([-10, -10])
+        args["vertical_velocity_pas"] = np.zeros((2, 3))
+        with self.assertRaises(ValueError):
+            compute_icing_fields(**args)
+
+    def test_sfip_membership_knots_and_units(self):
+        mt, mrh, mw, ml = sfip_memberships(
+            np.array([-28., -12., -1., 1.]), np.array([60., 77.5, 95., 100.]),
+            np.array([0., .0001, .0004, .001]), np.array([-.1, 0., .05, .2]),
+        )
+        np.testing.assert_allclose(mt, [0, 1, 1, 0])
+        np.testing.assert_allclose(mrh, [0, .25, 1, 1])
+        np.testing.assert_allclose(mw, [-.4, 0, 1, 1])
+        np.testing.assert_allclose(ml, [0, .25, 1, 1])
+        self.assertAlmostEqual(float(sfip_index(-10., 95., .0004, .05)), 100.)
+        self.assertAlmostEqual(float(sfip_index(-10., 95., .0004, 0.)), 80.)
+        self.assertAlmostEqual(float(sfip_index(-10., 95., .0004, -.1)), 72.)
+        self.assertEqual(float(sfip_index(-10., 60., 0., -.1)), 0.)
+        self.assertTrue(np.isnan(sfip_index(-10., 95., np.nan, 0.)))
+
+    def test_omega_sign_and_density_conversion(self):
+        args = column([-10, -10], omega=[-0.5, 0.5])
+        fields = compute_icing_fields(**args)
+        expected = -args["vertical_velocity_pas"] / (fields["air_density_kgm3"] * G0)
+        np.testing.assert_allclose(fields["upward_velocity_ms"], expected)
+        self.assertGreater(fields["upward_velocity_ms"][0, 0, 0], 0)
+        self.assertLess(fields["upward_velocity_ms"][1, 0, 0], 0)
+        self.assertGreater(fields["composite_index_level"][0, 0, 0], fields["composite_index_level"][1, 0, 0])
+
+    def test_composite_finds_interior_cubic_maximum(self):
+        args = column([-28, -12], heights=[0, 3000])
+        t = args["temperature_k"] - 273.15
+        e = np.array([95., 60.])[:, None, None] / 100 * 610.94 * np.exp(17.625*t/(243.04+t))
+        args["specific_humidity"] = .622*e / (args["pressure_hpa"][:, None, None]*100 - .378*e)
+        args["cloud_water_kgkg"][:] = .000004
+        fields = compute_icing_fields(**args)
+        # s*(.35*(1-s)^2 + .0045) has its maximum strictly inside 0..1.
+        root = (1.4 - np.sqrt(1.4**2 - 4*1.05*.3545)) / (2*1.05)
+        expected = 100*root*(.35*(1-root)**2 + .0045)
+        self.assertAlmostEqual(fields["composite_index"][0, 0], expected, places=10)
+        self.assertGreater(fields["composite_index"][0, 0], fields["composite_index_level"].max())
+
+    def test_increasing_water_cannot_lower_composite_when_cloud_gate_expands(self):
+        args = column([-70, -.1], water=[0, .0012], heights=[0, 6000])
+        t = args["temperature_k"] - 273.15
+        e = .95 * 610.94 * np.exp(17.625*t/(243.04+t))
+        args["specific_humidity"] = .622*e / (args["pressure_hpa"][:, None, None]*100 - .378*e)
+        first = compute_icing_fields(**args)
+        args["cloud_water_kgkg"] *= 4
+        second = compute_icing_fields(**args)
+        self.assertGreaterEqual(second["composite_index"][0, 0], first["composite_index"][0, 0])
 
 
 if __name__ == "__main__":

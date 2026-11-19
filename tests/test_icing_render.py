@@ -21,6 +21,7 @@ def small_fields():
         [1000, 850, 700], np.full(shape, 263.15), np.full(shape, 0.0015),
         np.broadcast_to(np.array([0, 1500, 3000])[:, None, None], shape),
         np.full(shape, 1e-4), np.full((2, 3), 101000.0), np.full((2, 3), -10.0),
+        cloud_fraction_pct=np.full(shape, 100.0), vertical_velocity_pas=np.zeros(shape),
     )
     lat, lon = np.meshgrid([55.0, 56.0], [35.0, 37.0, 39.0], indexing="ij")
     return fields, lat, lon
@@ -36,12 +37,71 @@ def water_coverage_fields():
         [1000, 850, 700], temperature, np.full(shape, .0015),
         np.broadcast_to(np.array([0, 1500, 3000])[:, None, None], shape),
         np.full(shape, 1e-4), np.full((2, 3), 101000.), np.full((2, 3), -10.),
+        cloud_fraction_pct=np.full(shape, 100.0), vertical_velocity_pas=np.zeros(shape),
     )
     lat, lon = np.meshgrid([55., 56.], [35., 37., 39.], indexing="ij")
     return fields, lat, lon
 
 
 class IcingRenderTests(unittest.TestCase):
+    def test_composite_uses_index_and_same_layer_outline_with_distinct_quality_marks(self):
+        from matplotlib.figure import Figure
+        from matplotlib.colors import Normalize, BoundaryNorm
+        fields, lat, lon = small_fields()
+        fields["composite_index"] = np.array([[15., 75., np.nan], [0., 55., 40.]])
+        fields["cloud_godske_sum_gpm"] = np.array([[0., 500., 0.], [0., 500., 0.]])
+        fields["godske20_sum_gpm"][:] = 1000.  # A raw signal must not draw the outline.
+        fields["composite_profile_missing"] = np.array([[False, True, True], [False, False, False]])
+        fields["cloud_input_conflict"] = np.array([[True, False, False], [False, False, False]])
+        original = Figure.savefig
+
+        def capture_composite(figure, *args, **kwargs):
+            axis = figure.axes[0]
+            colour = axis.collections[0]
+            self.assertIsInstance(colour.norm, Normalize)
+            self.assertNotIsInstance(colour.norm, BoundaryNorm)
+            self.assertEqual(colour.get_clim(), (0., 100.))
+            self.assertEqual(np.ma.max(colour.get_array()), 75.)
+            self.assertEqual(int(np.ma.getmaskarray(colour.get_array()).sum()), 2)
+            outlines = [item for item in axis.collections if item.get_gid() == "icing_same_layer_godske"]
+            self.assertEqual(len(outlines), 1)
+            labels = [text.get_text() for text in axis.get_legend().get_texts()]
+            self.assertIn("Облачные слои по Годске", labels)
+            self.assertIn("Вода без облачности модели", labels)
+            self.assertIn("Неполные данные по высоте", labels)
+            self.assertIn("Нет данных для расчёта", labels)
+            hatches = [hatch for collection in axis.collections
+                       for hatch in (getattr(collection, "hatches", None) or [collection.get_hatch()])]
+            self.assertIn("//", hatches)
+            self.assertIn("\\\\", hatches)
+            self.assertNotIn("%", " ".join(text.get_text() for text in figure.texts))
+            return original(figure, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory, patch("icing_render._basemap", return_value=False), \
+                patch.object(Figure, "savefig", new=capture_composite):
+            render_icing_png(fields, lat, lon, "composite", run=GfsRun("20261117", "06"), lead=24,
+                             bbox=(34, 40, 54, 57), output_path=Path(directory) / "composite.png")
+
+    def test_level_map_does_not_show_conflict_from_another_height(self):
+        from matplotlib.figure import Figure
+        fields, lat, lon = small_fields()
+        fields["cloud_input_conflict"][:] = True
+        fields["cloud_input_conflict_level"][:] = False
+        fields["cloud_input_conflict_level"][0] = True
+        original = Figure.savefig
+
+        def capture_level(figure, *args, **kwargs):
+            legend = figure.axes[0].get_legend()
+            labels = [text.get_text() for text in legend.get_texts()] if legend is not None else []
+            self.assertNotIn("Вода без облачности модели", labels)
+            return original(figure, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as directory, patch("icing_render._basemap", return_value=False), \
+                patch.object(Figure, "savefig", new=capture_level):
+            render_icing_png(fields, lat, lon, "slw_level", level_hpa=850,
+                             run=GfsRun("20261117", "06"), lead=24, bbox=(34, 40, 54, 57),
+                             output_path=Path(directory) / "level.png")
+
     def test_products_render_without_network_with_provenance(self):
         fields, lat, lon = small_fields()
         with tempfile.TemporaryDirectory() as directory, patch("icing_render._basemap", return_value=False), patch("requests.get", side_effect=AssertionError("renderer must remain offline")):
@@ -124,7 +184,7 @@ class IcingRenderTests(unittest.TestCase):
         from matplotlib.axes import Axes
         fields, lat, lon = small_fields()
         metres = np.array([[0., 1000., 2000.], [0., 1000., 2000.]])
-        fields["godske20_sum_gpm"] = metres.copy()
+        fields["cloud_godske_sum_gpm"] = metres.copy()
         contour_calls = []
         original = Axes.contour
 
@@ -138,7 +198,7 @@ class IcingRenderTests(unittest.TestCase):
                              bbox=(34, 40, 54, 57), output_path=target, contour_step=100)
             np.testing.assert_array_equal(contour_calls[0][0], metres / 10)
             np.testing.assert_array_equal(contour_calls[0][1], np.arange(10, 201, 10))
-            np.testing.assert_array_equal(fields["godske20_sum_gpm"], metres)
+            np.testing.assert_array_equal(fields["cloud_godske_sum_gpm"], metres)
             with Image.open(target) as image:
                 self.assertIn("; дам;", image.info["Description"])
 
