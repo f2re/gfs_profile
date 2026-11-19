@@ -757,7 +757,7 @@ class IcingCallbackTests(unittest.TestCase):
         self.assertNotIn("осадки", text)
         self.assertIn("Пункт на карте", text)
         self.assertIn("Меню", text)
-        self.assertEqual(len(icing_menu_keyboard(IcingRequest()).rows), 6)
+        self.assertEqual(len(icing_menu_keyboard(IcingRequest()).rows), 7)
 
     def test_marker_wire_roundtrips_signed_coordinates_in64bytes_and_keeps_old_wire(self):
         for bbox, point in (((-180, -1, 34, 80), (55.7558, -37.6173)),

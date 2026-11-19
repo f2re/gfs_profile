@@ -14,6 +14,7 @@ from weathernext3_provider import WeatherNext3Error
 
 from .callback_codec import CallbackCodecError, decode_callback, encode_callback
 from .contracts import MessengerGateway, NormalizedEvent, ProgressEvent, UiButton, UiKeyboard
+from .menu_catalog import is_cancel_text
 from .profile_service import cleanup_product_result
 from .router import RouterDependencies, _command_args, _short_label, menu_keyboard
 from .schedule_router import ScheduleMessengerRouter
@@ -70,7 +71,7 @@ def _card_text(point: Any, params: dict[str, Any]) -> str:
 
 def _card_keyboard(params: dict[str, Any], page: int = 0) -> UiKeyboard:
     p = normalize_wn3_params(params)
-    rows = [[UiButton('▶ Построить', 'callback', encode_callback('wn3', 'run'))]]
+    rows = [[UiButton('▶️ Построить', 'callback', encode_callback('wn3', 'run'))]]
     page = max(0, min(2, int(page)))
     choices = KIND_BUTTONS[page*8:(page+1)*8]
     for i in range(0, len(choices), 2):
@@ -86,12 +87,12 @@ def _card_keyboard(params: dict[str, Any], page: int = 0) -> UiKeyboard:
     else:
         rows.append([UiButton(f'до +{h}', 'callback', encode_callback('wn3', 'to', h)) for h in (24, 48, 120, 360)])
         rows.append([UiButton(f'шаг {h}', 'callback', encode_callback('wn3', 'step', h)) for h in (1, 3, 6, 12)])
-    rows.append([UiButton('⚙ Параметры', 'callback', encode_callback('wn3', 'options')),
+    rows.append([UiButton('⚙️ Параметры', 'callback', encode_callback('wn3', 'options')),
                  UiButton('📍 Точка', 'callback', encode_callback('wn3', 'point'))])
     rows.append([UiButton('📋 Сценарии', 'callback', encode_callback('settings', 'recipes', 0)),
                  UiButton('🕒 Расписания', 'callback', encode_callback('schedule', 'open'))])
-    rows.append([UiButton('Статус', 'callback', encode_callback('wn3', 'status')),
-                 UiButton('✖ Отмена', 'callback', encode_callback('wn3', 'cancel'))])
+    rows.append([UiButton('⏳ Статус', 'callback', encode_callback('wn3', 'status')),
+                 UiButton('✖️ Отмена', 'callback', encode_callback('wn3', 'cancel'))])
     return menu_keyboard(rows)
 
 
@@ -123,7 +124,7 @@ def _lead_keyboard(params, page):
     rows = [[UiButton(f'+{hour}', 'callback', encode_callback('wn3', action, hour)) for hour in values[i:i+3]] for i in range(0, len(values), 3)]
     rows.append([UiButton('←', 'callback', encode_callback('wn3', 'page', max(0, page-1))),
                  UiButton(f'{page+1}/15 →', 'callback', encode_callback('wn3', 'page', min(14, page+1)))])
-    rows.append([UiButton('Назад', 'callback', encode_callback('wn3', 'card'))])
+    rows.append([UiButton('⬅️ Назад', 'callback', encode_callback('wn3', 'card'))])
     return menu_keyboard(rows)
 
 
@@ -181,7 +182,7 @@ class WeatherNext3MessengerRouter(ScheduleMessengerRouter):
         command = (event.command or "").lower().lstrip("/")
         text = (event.text or "").strip()
         state = self.sessions.get(event.platform, event.user_id, event.chat_id)
-        if (command == 'cancel' or text in {'✖ Отмена', 'Отмена', '/cancel'}) and (self._job_key(event) in self.wn3_jobs or (state is not None and state.product == 'weathernext3')):
+        if (command == 'cancel' or is_cancel_text(text)) and (self._job_key(event) in self.wn3_jobs or (state is not None and state.product == 'weathernext3')):
             await self.cancel_wn3(event, gateway)
             self.sessions.clear(event.platform, event.user_id, event.chat_id)
             return
@@ -344,7 +345,7 @@ class WeatherNext3MessengerRouter(ScheduleMessengerRouter):
         await gateway.send_text(
             event.chat_id,
             "🛰 WeatherNext 3\nУкажите город, координаты или отправьте геолокацию.",
-            keyboard=menu_keyboard([[UiButton("📍 Отправить геолокацию", "request_location")], [UiButton("🏠 Главное меню", "callback", encode_callback("wn3", "home"))]]),
+            keyboard=menu_keyboard([[UiButton("📍 Отправить геолокацию", "request_location")], [UiButton("🏠 Меню", "callback", encode_callback("wn3", "home"))]]),
         )
 
     async def _resolve_wn3_direct(self, event: NormalizedEvent, gateway: MessengerGateway, raw: str) -> None:
@@ -368,7 +369,7 @@ class WeatherNext3MessengerRouter(ScheduleMessengerRouter):
             state = FlowState(product="weathernext3", step="choose_place", candidates=list(candidates[:5]), params=dict(params))
             self.sessions.set(event.platform, event.user_id, event.chat_id, state)
             rows = [[UiButton(_short_label(point), "callback", self.wn3_cards.payload(self.wn3_cards.save(event, point, normalize_wn3_params(params)), "run" if params.get("_direct") else "card"))] for point in state.candidates]
-            rows.append([UiButton("🏠 Главное меню", "callback", encode_callback("wn3", "home"))])
+            rows.append([UiButton("🏠 Меню", "callback", encode_callback("wn3", "home"))])
             await gateway.send_text(event.chat_id, "Найдено несколько точек. Выберите нужную:", keyboard=menu_keyboard(rows))
             return
         point = candidates[0]
@@ -427,7 +428,7 @@ class WeatherNext3MessengerRouter(ScheduleMessengerRouter):
         self.wn3_jobs[key] = job
         try:
             token = self.wn3_cards.save(event, point, p)
-            keyboard = menu_keyboard([[UiButton('✖ Отмена', 'callback', self.wn3_cards.payload(token, 'cancel'))]])
+            keyboard = menu_keyboard([[UiButton('✖️ Отмена', 'callback', self.wn3_cards.payload(token, 'cancel'))]])
             job['status'] = await gateway.send_text(event.chat_id, '⏳ WeatherNext 3 · ожидаю свободный слот', keyboard=keyboard)
         except BaseException:
             self.wn3_jobs.pop(key, None)
@@ -504,9 +505,9 @@ class WeatherNext3MessengerRouter(ScheduleMessengerRouter):
                     gateway.remember_point(event.user_id, point)
                 recipe = self.recipes.record_success(event.platform, event.user_id, 'weathernext3', p, point)
                 await gateway.send_text(event.chat_id, 'WeatherNext 3: сценарий сохранён. При повторе будет выбран новый опубликованный цикл.', keyboard=menu_keyboard([
-                    [UiButton('Повторить', 'callback', encode_callback('recipe', 'run', recipe.recipe_id)),
-                     UiButton('Закрепить/открепить', 'callback', encode_callback('recipe', 'toggle', recipe.recipe_id))],
-                    [UiButton('По расписанию', 'callback', encode_callback('schedule', 'recipe', recipe.recipe_id))]]))
+                    [UiButton('🔄 Повторить', 'callback', encode_callback('recipe', 'run', recipe.recipe_id)),
+                     UiButton('📌 Закрепить/открепить', 'callback', encode_callback('recipe', 'toggle', recipe.recipe_id))],
+                    [UiButton('🕒 По расписанию', 'callback', encode_callback('schedule', 'recipe', recipe.recipe_id))]]))
             except Exception as exc:
                 job['stop'].set()
                 if reporter:

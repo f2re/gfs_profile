@@ -171,7 +171,7 @@ class SettingsMessengerRouter(RouteMessengerRouter):
             else "📍 Основная точка: ещё не выбрана"
         )
         return (
-            "⚙ Настройки\n"
+            "⚙️ Настройки\n"
             f"{point_line}\n"
             f"📌 Сохранённых сценариев: {len(recipes)} · закреплено: {pinned}\n\n"
             "Выберите точку или сохранённый сценарий."
@@ -180,11 +180,11 @@ class SettingsMessengerRouter(RouteMessengerRouter):
     def _settings_keyboard(self) -> UiKeyboard:
         return menu_keyboard(
             [
-                [UiButton("📍 Мои точки", "callback", encode_callback("settings", "locations"))],
-                [UiButton("📌 Сценарии", "callback", encode_callback("settings", "recipes", 0))],
+                [UiButton("📍 Мои точки", "callback", encode_callback("settings", "locations")),
+                 UiButton("📌 Сценарии", "callback", encode_callback("settings", "recipes", 0))],
                 [UiButton("🧹 Очистить точки", "callback", encode_callback("settings", "clearp"))],
-                [UiButton("🗑 Удалить мои настройки", "callback", encode_callback("settings", "cleara"))],
-                [UiButton("Меню", "callback", encode_callback("settings", "home"))],
+                [UiButton("🗑️ Удалить мои настройки", "callback", encode_callback("settings", "cleara"))],
+                [UiButton("🏠 Меню", "callback", encode_callback("settings", "home"))],
             ]
         )
 
@@ -251,8 +251,8 @@ class SettingsMessengerRouter(RouteMessengerRouter):
                 event.chat_id,
                 f"Удалить сценарий «{_recipe_label(recipe)[2:]}»?",
                 keyboard=menu_keyboard([
-                    [UiButton("Удалить", "callback", encode_callback("settings", "del", recipe_id))],
-                    [UiButton("Отмена", "callback", encode_callback("settings", "recipes", 0))],
+                    [UiButton("🗑️ Удалить", "callback", encode_callback("settings", "del", recipe_id))],
+                    [UiButton("✖️ Отмена", "callback", encode_callback("settings", "recipes", 0))],
                 ]),
             )
             return
@@ -269,8 +269,8 @@ class SettingsMessengerRouter(RouteMessengerRouter):
                 event.chat_id,
                 "Удалить историю и основную точку? Сценарии и расписания останутся.",
                 keyboard=menu_keyboard([
-                    [UiButton("Удалить точки", "callback", encode_callback("settings", "clearpy"))],
-                    [UiButton("Отмена", "callback", encode_callback("settings", "back"))],
+                    [UiButton("🗑️ Удалить точки", "callback", encode_callback("settings", "clearpy"))],
+                    [UiButton("✖️ Отмена", "callback", encode_callback("settings", "back"))],
                 ]),
             )
             return
@@ -283,8 +283,8 @@ class SettingsMessengerRouter(RouteMessengerRouter):
                 event.chat_id,
                 "Удалить все точки и сохранённые сценарии этой платформы? Расписания удаляются отдельно.",
                 keyboard=menu_keyboard([
-                    [UiButton("Удалить мои настройки", "callback", encode_callback("settings", "clearay"))],
-                    [UiButton("Отмена", "callback", encode_callback("settings", "back"))],
+                    [UiButton("🗑️ Удалить настройки", "callback", encode_callback("settings", "clearay"))],
+                    [UiButton("✖️ Отмена", "callback", encode_callback("settings", "back"))],
                 ]),
             )
             return
@@ -303,14 +303,14 @@ class SettingsMessengerRouter(RouteMessengerRouter):
             await gateway.send_text(
                 event.chat_id,
                 prefix + "📍 Сохранённых точек пока нет.",
-                keyboard=menu_keyboard([[UiButton("← Настройки", "callback", encode_callback("settings", "back"))]]),
+                keyboard=menu_keyboard([[UiButton("⬅️ Настройки", "callback", encode_callback("settings", "back"))]]),
             )
             return
         rows = [
             [UiButton(("✓ " if item.active else "") + item.label[:54], "callback", encode_callback("settings", "loc", item.location_id))]
             for item in items
         ]
-        rows.append([UiButton("← Настройки", "callback", encode_callback("settings", "back"))])
+        rows.append([UiButton("⬅️ Настройки", "callback", encode_callback("settings", "back"))])
         await gateway.send_text(event.chat_id, prefix + "📍 Выберите основную точку:", keyboard=menu_keyboard(rows))
 
     async def _show_recipes(self, event: NormalizedEvent, gateway: MessengerGateway, page: int, prefix: str = "") -> None:
@@ -334,6 +334,6 @@ class SettingsMessengerRouter(RouteMessengerRouter):
             nav.append(UiButton("›", "callback", encode_callback("settings", "recipes", page + 1)))
         if nav:
             rows.append(nav)
-        rows.append([UiButton("← Настройки", "callback", encode_callback("settings", "back"))])
+        rows.append([UiButton("⬅️ Настройки", "callback", encode_callback("settings", "back"))])
         text = prefix + ("📌 Сохранённые сценарии:" if items else "📌 Сохранённых сценариев пока нет.")
         await gateway.send_text(event.chat_id, text, keyboard=menu_keyboard(rows))

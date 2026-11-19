@@ -16,9 +16,9 @@ from telegram.constants import ParseMode
 from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler
 
 from feature_flags import weathernext3_enabled
-from messenger.menu_catalog import HOME_TEXT, PRODUCT_LABELS
+from messenger.menu_catalog import HOME_TEXT, PRODUCT_LABELS, product_button_label
 from telegram_product_wizard import PRODUCT_WIZARD_KEY, copy_command, wizard_forecast_text
-from telegram_ui import CANCEL_TEXT, location_keyboard, product_button_rows
+from telegram_ui import CANCEL_TEXT, is_cancel_text, location_keyboard, product_button_rows
 from user_location_session import RECENT_LOCATION_PREFIX
 
 
@@ -28,7 +28,7 @@ def home_text() -> str:
 
 def help_text() -> str:
     return (
-        "Как пользоваться · GFS data\n\n"
+        "❓ Помощь · GFS data\n\n"
         "Выберите продукт, точку и срок. Быстрый запрос: Москва +24.\n\n"
         "/profile — вертикальный профиль\n"
         "/aero — аэрограмма\n"
@@ -52,9 +52,9 @@ def help_text() -> str:
 def home_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         *product_button_rows(),
-        [InlineKeyboardButton("Расписания", callback_data="home:schedule"),
-         InlineKeyboardButton("Настройки", callback_data="home:settings")],
-        [InlineKeyboardButton("Помощь", callback_data="home:help")],
+        [InlineKeyboardButton("🕒 Расписания", callback_data="home:schedule"),
+         InlineKeyboardButton("⚙️ Настройки", callback_data="home:settings")],
+        [InlineKeyboardButton("❓ Помощь", callback_data="home:help")],
     ])
 
 
@@ -63,8 +63,9 @@ def point_keyboard(recent_locations: list[Any] | None = None) -> ReplyKeyboardMa
 
 
 def point_prompt_text(state: dict[str, object]) -> str:
-    product = PRODUCT_LABELS.get(str(state.get("product", "")), "GFS data")
-    return f"{product}\n\nУкажите город, координаты или отправьте геолокацию."
+    product = str(state.get("product", ""))
+    title = product_button_label(product) if product in PRODUCT_LABELS else "🌦️ GFS data"
+    return f"{title}\n\n📍 Укажите город, координаты или отправьте геолокацию."
 
 
 def _point_line(state: dict[str, object]) -> str:
@@ -82,11 +83,11 @@ def params_text(state: dict[str, object]) -> str:
     command_line = f"\n<code>{html.escape(command)}</code>" if command else ""
 
     if product == "aero":
-        body = f"Аэрограмма\n{point}\n+{int(state.get('lead', 24))} ч · Skew-T · годограф"
+        body = f"{product_button_label(product)}\n{point}\n+{int(state.get('lead', 24))} ч · Skew-T · годограф"
     elif product == "windgram":
         param = {"wind": "ветер", "temp": "температура", "rh": "влажность"}.get(str(state.get("param", "wind")), "ветер")
         body = (
-            f"🟦 Срок × уровень\n{point}\n"
+            f"{product_button_label(product)}\n{point}\n"
             f"{param} · +{int(state.get('from', 0))}…+{int(state.get('to', 120))} ч · "
             f"шаг {int(state.get('time_step', 6))} ч · до {int(state.get('top', 500))} гПа"
         )
@@ -158,7 +159,7 @@ def _patch_route_messages() -> None:
             "<code>Москва -&gt; Санкт-Петербург</code>\n\n"
             "Далее выберите срок, скорость, детализацию и режим.",
             parse_mode=ParseMode.HTML,
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data="route:cancel")]]),
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✖️ Отмена", callback_data="route:cancel")]]),
         )
 
     def route_settings_text(state: dict[str, object]) -> str:
@@ -346,7 +347,7 @@ def install(namespace: dict[str, Any]) -> None:
         if not message or not message.text:
             return
         text = message.text.strip()
-        if text == CANCEL_TEXT:
+        if is_cancel_text(text):
             await cancel_command(update, context)
             return
         if text in {"❓ Помощь", "Помощь", "help"}:

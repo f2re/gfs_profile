@@ -8,6 +8,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler
 
 from messenger.user_recipes import RecipeLimitError, UserRecipe, UserRecipeStore
+from telegram_ui import button_rows
 import telegram_personal_ux as personal
 import telegram_user_state as user_state
 
@@ -52,7 +53,7 @@ def _result_actions_keyboard(recipe: UserRecipe | None, *, include_schedule: boo
         ], [InlineKeyboardButton(_pin(recipe), callback_data=f"recipe:toggle:{recipe.recipe_id}")]]
     else:
         rows.append([InlineKeyboardButton("🔄 Обновить", callback_data="quick:last")])
-    rows.append([InlineKeyboardButton("🏠 Главное меню", callback_data="prefs:home")])
+    rows.append([InlineKeyboardButton("🏠 Меню", callback_data="prefs:home")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -62,8 +63,10 @@ def _home_keyboard(user_id: int) -> InlineKeyboardMarkup:
     if not recipes:
         return base
     rows = [list(row) for row in base.inline_keyboard if not any(str(b.callback_data or "").startswith("quick:") for b in row)]
-    quick = [[InlineKeyboardButton(("★ " if r.pinned else "▶ ") + _summary(r)[:58], callback_data=f"recipe:run:{r.recipe_id}")]
-             for r in recipes]
+    active = personal.get_active_location(user_id)
+    buttons = [InlineKeyboardButton(personal._home_quick_label(_pref(recipe), active),
+               callback_data=f"recipe:run:{recipe.recipe_id}") for recipe in recipes]
+    quick = button_rows(buttons, 2 if all(len(button.text) <= 28 for button in buttons) else 1)
     return InlineKeyboardMarkup([*quick, *rows])
 
 
@@ -83,19 +86,19 @@ def _list_view(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     items = _store().list(_PLATFORM, user_id, limit=20)
     text = "⭐ Сохранённые сценарии\n\n" + ("\n".join(("★" if r.pinned else "•") + f" {_summary(r)} · запусков {r.success_count}" for r in items) if items else "Пока нет успешных сценариев.")
     rows = [[InlineKeyboardButton(("★ " if r.pinned else "") + _summary(r)[:58], callback_data=f"recipe:view:{r.recipe_id}")] for r in items]
-    rows.append([InlineKeyboardButton("← Настройки", callback_data="home:settings")])
+    rows.append([InlineKeyboardButton("⬅️ Настройки", callback_data="home:settings")])
     return text, InlineKeyboardMarkup(rows)
 
 
 def _card(recipe: UserRecipe) -> tuple[str, InlineKeyboardMarkup]:
     point = personal._point_line(recipe.point) if recipe.point else "📍 Точка не сохранена"
-    rows = [[InlineKeyboardButton("▶ Построить", callback_data=f"recipe:run:{recipe.recipe_id}")], [
+    rows = [[InlineKeyboardButton("▶️ Построить", callback_data=f"recipe:run:{recipe.recipe_id}")], [
         InlineKeyboardButton("⚙️ Изменить", callback_data=f"recipe:edit:{recipe.recipe_id}"),
         InlineKeyboardButton(_pin(recipe), callback_data=f"recipe:toggle:{recipe.recipe_id}"),
     ]]
     if _schedulable(recipe): rows.append([InlineKeyboardButton("🕒 В расписание", callback_data=f"recipe:schedule:{recipe.recipe_id}")])
     rows += [[InlineKeyboardButton("🗑 Удалить", callback_data=f"recipe:deleteconfirm:{recipe.recipe_id}")],
-             [InlineKeyboardButton("← Все сценарии", callback_data="recipe:list")]]
+             [InlineKeyboardButton("⬅️ Все сценарии", callback_data="recipe:list")]]
     return f"{'★ ' if recipe.pinned else ''}{_summary(recipe)}\n{point}\nУспешных запусков: {recipe.success_count}\n\nПовтор обновляет прогноз по последнему доступному циклу.", InlineKeyboardMarkup(rows)
 
 
@@ -214,6 +217,6 @@ def register(application, namespace: dict[str, Any]) -> None:
             except schedules.ScheduleError: await schedules._show_manager(query,uid); raise ApplicationHandlerStop
             sx._clear_nested_product_state(context); await schedules._begin_timing(query,context,{"product":recipe.product,"point":dict(recipe.point),"params":dict(recipe.params)}); raise ApplicationHandlerStop
         if action=="deleteconfirm":
-            await query.answer(); await query.edit_message_text(f"Удалить сценарий «{_summary(recipe)}»?",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Удалить",callback_data=f"recipe:delete:{rid}")],[InlineKeyboardButton("Отмена",callback_data=f"recipe:view:{rid}")]])); raise ApplicationHandlerStop
+            await query.answer(); await query.edit_message_text(f"Удалить сценарий «{_summary(recipe)}»?",reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🗑️ Удалить",callback_data=f"recipe:delete:{rid}")],[InlineKeyboardButton("✖️ Отмена",callback_data=f"recipe:view:{rid}")]])); raise ApplicationHandlerStop
         if action=="delete": store.delete(_PLATFORM,uid,rid); await query.answer("Сценарий удалён"); text,kb=_list_view(uid); await query.edit_message_text(text,reply_markup=kb); raise ApplicationHandlerStop
     application.add_handler(CallbackQueryHandler(callback,pattern=r"^recipe:"),group=-7)

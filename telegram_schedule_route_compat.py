@@ -47,16 +47,12 @@ def install() -> None:
     import telegram_schedules as schedules
 
     original_product_keyboard = schedules._product_keyboard
-    original_product_title = schedules._product_title
     original_params_summary = schedules._params_summary
     original_start_product_setup = schedules._start_product_setup
     original_execute_schedule = schedules.execute_schedule
 
     def product_keyboard() -> InlineKeyboardMarkup:
         return original_product_keyboard(products=("profile", "aero", "windgram", "cloudgram", "map", "meteogram", "route"))
-
-    def product_title(product: str) -> str:
-        return "✈ Маршрут" if str(product) == "route" else original_product_title(product)
 
     def params_summary(item_or_spec) -> str:
         if isinstance(item_or_spec, schedules.ProductSchedule):
@@ -129,7 +125,6 @@ def install() -> None:
             return bool(await telegram_route.run_route_product(message, origin, destination, parsed, user=user))
 
     schedules._product_keyboard = product_keyboard
-    schedules._product_title = product_title
     schedules._params_summary = params_summary
     schedules._start_product_setup = start_product_setup
     schedules.execute_schedule = execute_schedule

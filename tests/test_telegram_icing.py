@@ -246,7 +246,7 @@ class TelegramIcingTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaises(ApplicationHandlerStop):
                 await tg.icing_update(update(payload=payload), self.context)
             markup = self.bot.send_message.call_args.kwargs["reply_markup"]
-            self.assertIn("Меню", [button.text for row in markup.keyboard for button in row])
+            self.assertIn(LABELS["home"], [button.text for row in markup.keyboard for button in row])
             with self.assertRaises(ApplicationHandlerStop):
                 await tg.icing_update(menu_update, self.context)
         self.assertNotIn(tg.SESSION_KEY, self.context.user_data)

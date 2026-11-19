@@ -71,7 +71,7 @@ def install() -> None:
                 ]
             )
         rows.append(
-            [InlineKeyboardButton("🏠 Главное меню", callback_data="prefs:home")]
+            [InlineKeyboardButton("🏠 Меню", callback_data="prefs:home")]
         )
         await message.reply_text(
             "Действия с результатом:",

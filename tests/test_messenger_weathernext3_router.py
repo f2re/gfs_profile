@@ -102,7 +102,7 @@ class WeatherNext3RouterTests(unittest.IsolatedAsyncioTestCase):
             await self.router.handle(event, gateway)
             keyboards = [call[2] for call in gateway.calls if call[0] == "send_text" and call[2] is not None]
             labels = [button.text for keyboard in keyboards for row in keyboard.rows for button in row]
-            self.assertIn("WeatherNext 3", labels)
+            self.assertIn("🌐 WeatherNext 3", labels)
 
     async def test_direct_point_forecast_uses_common_builder(self):
         gateway = Gateway("max")

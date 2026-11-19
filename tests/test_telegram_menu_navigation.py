@@ -10,9 +10,11 @@ from unittest.mock import AsyncMock, patch
 from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler
 
 from gfs_core import GfsRun
-from messenger.menu_catalog import PRODUCT_LABELS, product_rows
+from geocode import GeoPoint
+from messenger.menu_catalog import PRODUCT_ICONS, PRODUCT_LABELS, product_rows
 import telegram_personal_ux as personal
 import telegram_product_wizard as wizard
+import telegram_saved_recipes as saved
 import telegram_user_state
 from telegram_ui import canonical_leads, lead_keyboard, lead_page_count
 
@@ -144,10 +146,57 @@ class TelegramMenuNavigationTests(unittest.IsolatedAsyncioTestCase):
                            for row in keyboard.inline_keyboard]
         rows = [tuple(button.callback_data.split(":")[1] for button in row) for row in product_buttons if row]
         self.assertEqual(tuple(rows), product_rows(set(PRODUCT_LABELS) - {"weathernext3"}))
+        self.assertEqual(len(rows), 4)
         for row in product_buttons:
             self.assertLessEqual(len(row), 2)
             for button in row:
-                self.assertEqual(button.text, PRODUCT_LABELS[button.callback_data.split(":")[1]])
+                product = button.callback_data.split(":")[1]
+                self.assertTrue(button.text.startswith(PRODUCT_ICONS[product] + " "))
+                self.assertIn(PRODUCT_LABELS[product], button.text)
+
+    async def test_two_saved_leads_share_row_and_run_their_exact_recipes(self):
+        point = GeoPoint(58.7352, 29.8479, "г Луга, Лужский р-н, Ленинградская обл", "test")
+        telegram_user_state.remember_location(42, point)
+        recipes = [saved._store().record_success("telegram", 42, "profile", {"lead": lead}, point)
+                   for lead in (21, 24)]
+        query = await self.press("prefs:home")
+        text = query.edit_message_text.call_args.args[0]
+        self.assertIn("🌦️ GFS data", text)
+        self.assertIn("📍 Луга · Ленинградская обл", text)
+        self.assertNotIn("Лужский р-н", text)
+        self.assertNotIn("58.7352", text)
+        rows = query.edit_message_text.call_args.kwargs["reply_markup"].inline_keyboard
+        quick_rows = [row for row in rows if any(str(button.callback_data).startswith("recipe:run:") for button in row)]
+        self.assertEqual(len(quick_rows), 1)
+        self.assertEqual({button.text for button in quick_rows[0]}, {"▶️ Профиль · +21 ч", "▶️ Профиль · +24 ч"})
+        with patch.object(personal, "_run_preference", new_callable=AsyncMock) as run:
+            for recipe in recipes:
+                await self.press(f"recipe:run:{recipe.recipe_id}")
+                sent = run.call_args.args[-1]
+                self.assertEqual(sent.params["lead"], recipe.params["lead"])
+                self.assertEqual(sent.point["lat"], point.lat)
+        saved._store().set_pinned("telegram", 42, recipes[0].recipe_id, True)
+        query = await self.press("prefs:home")
+        first = query.edit_message_text.call_args.kwargs["reply_markup"].inline_keyboard[0][0]
+        self.assertEqual(first.callback_data, f"recipe:run:{recipes[0].recipe_id}")
+        self.assertTrue(first.text.startswith("📌 "))
+
+    async def test_same_lead_at_different_points_has_distinct_quick_labels(self):
+        first = GeoPoint(55.75, 37.62, "Москва", "test")
+        second = GeoPoint(59.93, 30.31, "Санкт-Петербург", "test")
+        telegram_user_state.remember_location(42, first)
+        recipes = [saved._store().record_success("telegram", 42, "profile", {"lead": 24}, point)
+                   for point in (first, second)]
+        query = await self.press("prefs:home")
+        rows = query.edit_message_text.call_args.kwargs["reply_markup"].inline_keyboard
+        quick = {button.callback_data: button.text for row in rows for button in row
+                 if str(button.callback_data).startswith("recipe:run:")}
+        self.assertEqual(len(set(quick.values())), 2)
+        self.assertIn("Санкт-Петербург", quick[f"recipe:run:{recipes[1].recipe_id}"])
+        with patch.object(personal, "_run_preference", new_callable=AsyncMock) as run:
+            for recipe in recipes:
+                await self.press(f"recipe:run:{recipe.recipe_id}")
+                self.assertEqual(run.call_args.args[-1].point["lat"], recipe.point["lat"])
 
     async def test_dense_wizard_options_keep_callbacks_and_fit_three_columns(self):
         states = [wizard.start_aero_wizard_state(24), wizard.start_windgram_wizard_state(),

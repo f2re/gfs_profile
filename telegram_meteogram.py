@@ -23,6 +23,7 @@ from meteogram_plot import write_meteogram_png
 from meteogram_request import MeteogramRequest, parse_meteogram_request
 from meteogram_report import MeteogramReportError, write_meteogram_report
 from telegram_file_send import reply_png_file
+from telegram_ui import is_cancel_text
 from user_location_session import get_recent_locations, match_recent_location_button, remember_location
 
 SESSION_KEY = "meteogram_wizard"
@@ -82,8 +83,8 @@ def _output_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("🧾 PDF · отчёт", callback_data="meteo:format:pdf"),
             ],
             [
-                InlineKeyboardButton("Назад", callback_data="meteo:back:period"),
-                InlineKeyboardButton("Отмена", callback_data="meteo:cancel"),
+                InlineKeyboardButton("⬅️ Назад", callback_data="meteo:back:period"),
+                InlineKeyboardButton("✖️ Отмена", callback_data="meteo:cancel"),
             ],
         ]
     )
@@ -93,8 +94,8 @@ def _output_prompt(source_id: str, days: int) -> str:
     source = source_for_id(source_id)
     kind = "ансамбль" if source.ensemble else "одна модель"
     return (
-        f"{source.label} · {kind} · {days} сут\n"
-        "Выберите результат.\n\n"
+        f"📊 {source.label} · {kind} · {days} сут\n"
+        "📄 Выберите формат результата.\n\n"
         "🖼 PNG — только метеограмма.\n"
         "📄 DOCX / 🧾 PDF — краткая сводка, таблицы по суткам и срокам и метеограмма."
     )
@@ -102,20 +103,20 @@ def _output_prompt(source_id: str, days: int) -> str:
 
 def _confirm_keyboard(output_format: str) -> InlineKeyboardMarkup:
     action = {
-        "png": "Построить PNG",
-        "docx": "Создать DOCX",
-        "pdf": "Создать PDF",
+        "png": "▶️ Построить PNG",
+        "docx": "📄 Создать DOCX",
+        "pdf": "🧾 Создать PDF",
     }[_normalise_output_format(output_format)]
     return InlineKeyboardMarkup(
         [
             [InlineKeyboardButton(action, callback_data="meteo:run")],
             [
-                InlineKeyboardButton("Формат", callback_data="meteo:back:format"),
-                InlineKeyboardButton("Период", callback_data="meteo:back:period"),
+                InlineKeyboardButton("📄 Формат", callback_data="meteo:back:format"),
+                InlineKeyboardButton("🗓️ Период", callback_data="meteo:back:period"),
             ],
             [
-                InlineKeyboardButton("Модель", callback_data="meteo:back:model"),
-                InlineKeyboardButton("Отмена", callback_data="meteo:cancel"),
+                InlineKeyboardButton("🌐 Модель", callback_data="meteo:back:model"),
+                InlineKeyboardButton("✖️ Отмена", callback_data="meteo:cancel"),
             ],
         ]
     )
@@ -141,14 +142,14 @@ def _remove_keyboard(message):
 
 def _type_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("Одна модель", callback_data="meteo:kind:deterministic"), InlineKeyboardButton("Ансамбль", callback_data="meteo:kind:ensemble")],
-        [InlineKeyboardButton("Отмена", callback_data="meteo:cancel")],
+        [InlineKeyboardButton("🌐 Одна модель", callback_data="meteo:kind:deterministic"), InlineKeyboardButton("🔀 Ансамбль", callback_data="meteo:kind:ensemble")],
+        [InlineKeyboardButton("✖️ Отмена", callback_data="meteo:cancel")],
     ])
 
 
 def _model_keyboard(ensemble: bool) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(source.label, callback_data=f"meteo:source:{source.source_id}")] for source in sources_by_kind(ensemble)]
-    rows.append([InlineKeyboardButton("Назад", callback_data="meteo:back:type"), InlineKeyboardButton("Отмена", callback_data="meteo:cancel")])
+    rows.append([InlineKeyboardButton("⬅️ Назад", callback_data="meteo:back:type"), InlineKeyboardButton("✖️ Отмена", callback_data="meteo:cancel")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -158,13 +159,13 @@ def _period_keyboard(source_id: str) -> InlineKeyboardMarkup:
     rows = []
     for index in range(0, len(periods), 3):
         rows.append([InlineKeyboardButton(f"{days} сут", callback_data=f"meteo:days:{days}") for days in periods[index:index + 3]])
-    rows.append([InlineKeyboardButton("Другая модель", callback_data="meteo:back:model"), InlineKeyboardButton("Отмена", callback_data="meteo:cancel")])
+    rows.append([InlineKeyboardButton("🌐 Другая модель", callback_data="meteo:back:model"), InlineKeyboardButton("✖️ Отмена", callback_data="meteo:cancel")])
     return InlineKeyboardMarkup(rows)
 
 
 def _place_keyboard(candidates: list[GeoPoint]) -> InlineKeyboardMarkup:
     rows = [[InlineKeyboardButton(" ".join(point.label.split())[:58], callback_data=f"meteo:place:{index}")] for index, point in enumerate(candidates[:5])]
-    rows.append([InlineKeyboardButton("Отмена", callback_data="meteo:cancel")])
+    rows.append([InlineKeyboardButton("✖️ Отмена", callback_data="meteo:cancel")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -442,7 +443,7 @@ async def meteogram_text(update: Update, context) -> None:
     if not isinstance(state, dict) or not message or not message.text:
         return
     text = message.text.strip()
-    if text == "✖ Отмена":
+    if is_cancel_text(text):
         context.user_data.pop(SESSION_KEY, None)
         await _show_home(message, "Выбор метеограммы сброшен.")
         raise ApplicationHandlerStop
@@ -472,7 +473,7 @@ async def meteogram_location(update: Update, context) -> None:
     remember_location(user_id, point)
     state.update({"point": _pack_point(point), "step": "type"})
     await _remove_keyboard(message)
-    await message.reply_text(f"📍 {point.label}\nВыберите тип прогноза.", reply_markup=_type_keyboard())
+    await message.reply_text(f"📊 Метеограмма\n📍 {point.label}\n\nВыберите тип прогноза.", reply_markup=_type_keyboard())
     raise ApplicationHandlerStop
 
 
@@ -488,7 +489,7 @@ async def _accept_candidates(message, context, state, candidates, user_id):
     remember_location(user_id, point)
     state.update({"point": _pack_point(point), "step": "type"})
     await _remove_keyboard(message)
-    await message.reply_text(f"📍 {point.label}\nВыберите тип прогноза.", reply_markup=_type_keyboard())
+    await message.reply_text(f"📊 Метеограмма\n📍 {point.label}\n\nВыберите тип прогноза.", reply_markup=_type_keyboard())
 
 
 async def meteogram_callback(update: Update, context) -> None:
@@ -522,7 +523,7 @@ async def meteogram_callback(update: Update, context) -> None:
         await query.edit_message_text(home_text(user_id), reply_markup=home_keyboard(user_id))
         raise ApplicationHandlerStop
     if not isinstance(state, dict):
-        await query.edit_message_text("Выбор устарел. Запустите /meteogram.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Меню", callback_data="prefs:home")]]))
+        await query.edit_message_text("Выбор устарел. Запустите /meteogram.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Меню", callback_data="prefs:home")]]))
         raise ApplicationHandlerStop
     if data.startswith("meteo:place:"):
         index = int(data.rsplit(":", 1)[1])
@@ -538,21 +539,21 @@ async def meteogram_callback(update: Update, context) -> None:
         state.update({"point": _pack_point(point), "step": "type"})
         state.pop("candidates", None)
         await query.edit_message_text(
-            f"📍 {point.label}\nВыберите тип прогноза.",
+            f"📊 Метеограмма\n📍 {point.label}\n\nВыберите тип прогноза.",
             reply_markup=_type_keyboard(),
         )
     elif data.startswith("meteo:kind:"):
         ensemble = data.endswith("ensemble")
         state.update({"ensemble": ensemble, "step": "model"})
         await query.edit_message_text(
-            "Выберите ансамблевую систему." if ensemble else "Выберите модель.",
+            "🔀 Выберите ансамблевую систему." if ensemble else "🌐 Выберите модель.",
             reply_markup=_model_keyboard(ensemble),
         )
     elif data.startswith("meteo:source:"):
         source_id = data.rsplit(":", 1)[1]
         state.update({"source_id": source_id, "step": "period"})
         await query.edit_message_text(
-            f"{source_for_id(source_id).label}\nВыберите период.",
+            f"{source_for_id(source_id).label}\n🗓️ Выберите период.",
             reply_markup=_period_keyboard(source_id),
         )
     elif data.startswith("meteo:days:"):
@@ -572,21 +573,21 @@ async def meteogram_callback(update: Update, context) -> None:
     elif data == "meteo:back:type":
         state["step"] = "type"
         await query.edit_message_text(
-            "Выберите тип прогноза.",
+            "📊 Метеограмма · выберите тип прогноза.",
             reply_markup=_type_keyboard(),
         )
     elif data == "meteo:back:model":
         state["step"] = "model"
         await query.edit_message_text(
-            "Выберите ансамблевую систему."
+            "🔀 Выберите ансамблевую систему."
             if bool(state.get("ensemble"))
-            else "Выберите модель.",
+            else "🌐 Выберите модель.",
             reply_markup=_model_keyboard(bool(state.get("ensemble"))),
         )
     elif data == "meteo:back:period":
         state["step"] = "period"
         await query.edit_message_text(
-            f"{source_for_id(str(state['source_id'])).label}\nВыберите период.",
+            f"{source_for_id(str(state['source_id'])).label}\n🗓️ Выберите период.",
             reply_markup=_period_keyboard(str(state["source_id"])),
         )
     elif data == "meteo:back:format":

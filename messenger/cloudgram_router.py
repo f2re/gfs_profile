@@ -108,7 +108,7 @@ def _params_keyboard(params: dict[str, Any]) -> UiKeyboard:
     step = int(params["step"])
     return menu_keyboard(
         [
-            [UiButton("▶ Построить", "callback", encode_callback("cloudgram", "run"))],
+            [UiButton("▶️ Построить", "callback", encode_callback("cloudgram", "run"))],
             [
                 UiButton(("✓ " if mode == key else "") + label, "callback", encode_callback("cloudgram", "mode", key))
                 for key, label in CLOUDGRAM_MODES
@@ -123,7 +123,7 @@ def _params_keyboard(params: dict[str, Any]) -> UiKeyboard:
             ],
             [
                 UiButton("📍 Другая точка", "callback", encode_callback("cloudgram", "point")),
-                UiButton("Отмена", "callback", encode_callback("cloudgram", "cancel")),
+                UiButton("✖️ Отмена", "callback", encode_callback("cloudgram", "cancel")),
             ],
         ]
     )
@@ -353,8 +353,8 @@ class CloudgramMessengerRouter(WindgramMessengerRouter):
         )
         await gateway.send_text(
             event.chat_id,
-            "Облака и осадки · GFS data\nУкажите город, координаты или геолокацию.",
-            keyboard=menu_keyboard([[UiButton("Геолокация", "request_location")]]),
+            "☁️ Облака и осадки · GFS data\n📍 Укажите город, координаты или геолокацию.",
+            keyboard=menu_keyboard([[UiButton("📍 Геолокация", "request_location")]]),
         )
 
     async def _resolve_cloudgram_point_text(
@@ -381,7 +381,7 @@ class CloudgramMessengerRouter(WindgramMessengerRouter):
             )
             self.sessions.set(event.platform, event.user_id, event.chat_id, state)
             rows = [[UiButton(_short_label(point), "callback", encode_callback("cloudgram", "place", index))] for index, point in enumerate(state.candidates)]
-            rows.append([UiButton("Отмена", "callback", encode_callback("cloudgram", "cancel"))])
+            rows.append([UiButton("✖️ Отмена", "callback", encode_callback("cloudgram", "cancel"))])
             await gateway.send_text(event.chat_id, "Найдено несколько точек. Выберите нужную:", keyboard=menu_keyboard(rows))
             return
         await self._send_cloudgram_params_card(
@@ -411,7 +411,7 @@ class CloudgramMessengerRouter(WindgramMessengerRouter):
             )
             self.sessions.set(event.platform, event.user_id, event.chat_id, state)
             rows = [[UiButton(_short_label(point), "callback", encode_callback("cloudgram", "place", index))] for index, point in enumerate(state.candidates)]
-            rows.append([UiButton("Отмена", "callback", encode_callback("cloudgram", "cancel"))])
+            rows.append([UiButton("✖️ Отмена", "callback", encode_callback("cloudgram", "cancel"))])
             await gateway.send_text(event.chat_id, "Найдено несколько точек. Выберите нужную:", keyboard=menu_keyboard(rows))
             return
         await self._run_cloudgram(event, gateway, candidates[0], params, parsed.run)
@@ -433,10 +433,10 @@ class CloudgramMessengerRouter(WindgramMessengerRouter):
             f"{MODE_TITLES[params['mode']]} · +{params['from']}…+{params['to']} ч · шаг {params['step']} ч",
             lambda _: menu_keyboard(
                 [
-                    [UiButton("▶ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],
+                    [UiButton("▶️ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],
                     [
                         UiButton(pin_text, "callback", encode_callback("recipe", "toggle", recipe.recipe_id)),
-                        UiButton("⚙ Изменить", "callback", encode_callback("recipe", "change", recipe.recipe_id)),
+                        UiButton("⚙️ Изменить", "callback", encode_callback("recipe", "change", recipe.recipe_id)),
                     ],
                 ]
             ),

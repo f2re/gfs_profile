@@ -62,26 +62,26 @@ def _card_text(point: Any, params: dict[str, Any]) -> str:
 def _main_keyboard(params: dict[str, Any]) -> UiKeyboard:
     source = source_for_id(params["source"])
     return menu_keyboard([
-        [UiButton("▶ Построить", "callback", encode_callback("meteo", "run"))],
+        [UiButton("▶️ Построить", "callback", encode_callback("meteo", "run"))],
         [
             UiButton("✓ Одна модель" if not source.ensemble else "Одна модель", "callback", encode_callback("meteo", "kind", "det")),
             UiButton("✓ Ансамбль" if source.ensemble else "Ансамбль", "callback", encode_callback("meteo", "kind", "ens")),
         ],
         [
-            UiButton("Модель", "callback", encode_callback("meteo", "model")),
-            UiButton("Период", "callback", encode_callback("meteo", "period")),
+            UiButton("🌐 Модель", "callback", encode_callback("meteo", "model")),
+            UiButton("🗓️ Период", "callback", encode_callback("meteo", "period")),
         ],
-        [UiButton("Формат", "callback", encode_callback("meteo", "format"))],
+        [UiButton("📎 Формат", "callback", encode_callback("meteo", "format"))],
         [
             UiButton("📍 Другая точка", "callback", encode_callback("meteo", "point")),
-            UiButton("Отмена", "callback", encode_callback("meteo", "cancel")),
+            UiButton("✖️ Отмена", "callback", encode_callback("meteo", "cancel")),
         ],
     ])
 
 
 def _sources_keyboard(ensemble: bool) -> UiKeyboard:
     rows = [[UiButton(source.label, "callback", encode_callback("meteo", "source", source.source_id))] for source in sources_by_kind(ensemble)]
-    rows.append([UiButton("Назад", "callback", encode_callback("meteo", "back"))])
+    rows.append([UiButton("⬅️ Назад", "callback", encode_callback("meteo", "back"))])
     return menu_keyboard(rows)
 
 
@@ -93,14 +93,14 @@ def _period_keyboard(source_id: str, current: int) -> UiKeyboard:
             UiButton(("✓ " if value == current else "") + f"{value} сут", "callback", encode_callback("meteo", "days", value))
             for value in values[start:start + 3]
         ])
-    rows.append([UiButton("Назад", "callback", encode_callback("meteo", "back"))])
+    rows.append([UiButton("⬅️ Назад", "callback", encode_callback("meteo", "back"))])
     return menu_keyboard(rows)
 
 
 def _format_keyboard(current: str) -> UiKeyboard:
     return menu_keyboard([
         [UiButton(("✓ " if key == current else "") + label, "callback", encode_callback("meteo", "out", key)) for key, label in OUTPUTS],
-        [UiButton("Назад", "callback", encode_callback("meteo", "back"))],
+        [UiButton("⬅️ Назад", "callback", encode_callback("meteo", "back"))],
     ])
 
 
@@ -250,10 +250,10 @@ class MeteogramMessengerRouter(MapMessengerRouter):
 
         p = _meteogram_params(state.params)
         if data.action == "kind":
-            await gateway.send_text(event.chat_id, "Выберите ансамблевую систему." if data.value == "ens" else "Выберите модель.", keyboard=_sources_keyboard(data.value == "ens"))
+            await gateway.send_text(event.chat_id, "🌐 Выберите ансамблевую систему." if data.value == "ens" else "🌐 Выберите модель.", keyboard=_sources_keyboard(data.value == "ens"))
             return
         if data.action == "model":
-            await gateway.send_text(event.chat_id, "Выберите модель.", keyboard=_sources_keyboard(source_for_id(p["source"]).ensemble))
+            await gateway.send_text(event.chat_id, "🌐 Выберите модель.", keyboard=_sources_keyboard(source_for_id(p["source"]).ensemble))
             return
         if data.action == "source":
             source = source_for_id(str(data.value))
@@ -264,7 +264,7 @@ class MeteogramMessengerRouter(MapMessengerRouter):
             await self._send_meteogram_card(event, gateway, state)
             return
         if data.action == "period":
-            await gateway.send_text(event.chat_id, "Выберите период.", keyboard=_period_keyboard(p["source"], p["days"]))
+            await gateway.send_text(event.chat_id, "🗓️ Выберите период.", keyboard=_period_keyboard(p["source"], p["days"]))
             return
         if data.action == "days":
             p["days"] = int(data.value or 5)
@@ -272,7 +272,7 @@ class MeteogramMessengerRouter(MapMessengerRouter):
             await self._send_meteogram_card(event, gateway, state)
             return
         if data.action == "format":
-            await gateway.send_text(event.chat_id, "Выберите формат.", keyboard=_format_keyboard(p["format"]))
+            await gateway.send_text(event.chat_id, "📎 Выберите формат.", keyboard=_format_keyboard(p["format"]))
             return
         if data.action == "out":
             p["format"] = str(data.value)
@@ -295,7 +295,7 @@ class MeteogramMessengerRouter(MapMessengerRouter):
 
     async def _ask_meteogram_point(self, event: NormalizedEvent, gateway: MessengerGateway, params: dict[str, Any]) -> None:
         self.sessions.set(event.platform, event.user_id, event.chat_id, FlowState(product="meteogram", step="await_point", params=_meteogram_params(params)))
-        await gateway.send_text(event.chat_id, "📊 Метеограмма · укажите город, координаты или геолокацию.", keyboard=menu_keyboard([[UiButton("Геолокация", "request_location")]]))
+        await gateway.send_text(event.chat_id, "📊 Метеограмма · укажите город, координаты или геолокацию.", keyboard=menu_keyboard([[UiButton("📍 Геолокация", "request_location")]]))
 
     async def _resolve_meteogram_point(self, event: NormalizedEvent, gateway: MessengerGateway, raw: str, params: dict[str, Any]) -> None:
         try:
@@ -347,8 +347,8 @@ class MeteogramMessengerRouter(MapMessengerRouter):
         p = _meteogram_params(recipe.params)
         pin = "★ Открепить" if recipe.pinned else "⭐ Закрепить"
         await gateway.send_text(event.chat_id, _card_text(point, p), keyboard=menu_keyboard([
-            [UiButton("▶ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],
-            [UiButton(pin, "callback", encode_callback("recipe", "toggle", recipe.recipe_id)), UiButton("⚙ Изменить", "callback", encode_callback("recipe", "change", recipe.recipe_id))],
+            [UiButton("▶️ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],
+            [UiButton(pin, "callback", encode_callback("recipe", "toggle", recipe.recipe_id)), UiButton("⚙️ Изменить", "callback", encode_callback("recipe", "change", recipe.recipe_id))],
         ]))
 
     async def _run_meteogram(self, event: NormalizedEvent, gateway: MessengerGateway, point: Any, params: dict[str, Any]) -> bool:

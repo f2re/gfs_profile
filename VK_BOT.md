@@ -282,6 +282,9 @@ GFS-продукты подписываются `GFS data` с фактическ
 
 Общий обход меню, возвраты и приёмка новой раскладки:
 [UI_MENU_ACCEPTANCE.md](docs/UI_MENU_ACCEPTANCE.md).
+Главное меню использует четыре парных ряда с теми же эмодзи и названиями,
+что Telegram/MAX; подробности:
+[MENU_ICONS_ACCEPTANCE_2026-11-19.md](docs/MENU_ICONS_ACCEPTANCE_2026-11-19.md).
 
 ## WeatherNext 3
 

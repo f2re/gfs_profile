@@ -157,9 +157,9 @@ def icing_menu_keyboard(request: IcingRequest) -> UiKeyboard:
         [_button(LABELS["water_level"], "c", replace(request, product="slw_level")),
          _button(LABELS["thickness"], "g", request)],
         [_button(LABELS["bounds"], "b", request),
-         _button(LABELS["maximum"], "w", request)],
-        [_button(LABELS["water_column"], "c", replace(request, product="slwp")),
-         _button(LABELS["comparison"], "c", replace(request, product="agreement"))],
+         _button(LABELS["water_column"], "c", replace(request, product="slwp"))],
+        [_button(LABELS["maximum"], "w", request)],
+        [_button(LABELS["comparison"], "c", replace(request, product="agreement"))],
         [_button(LABELS["point"], "p", request)],
         [_button(LABELS["help"], "a", request), _button(LABELS["cancel"], "x", request)],
     ])

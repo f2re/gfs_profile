@@ -6,11 +6,10 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton,
 
 from geocode import GeoPoint
 from gfs_core import canonical_leads
-from messenger.menu_catalog import PRODUCT_LABELS, product_rows
+from messenger.menu_catalog import CANCEL_TEXT, PRODUCT_LABELS, is_cancel_text, product_button_label, product_rows
 from forecast_time import forecast_lead_label, forecast_time_lines
 from user_location_session import recent_location_button_label
 
-CANCEL_TEXT = "✖ Отмена"
 COMMON_LEADS = (0, 3, 6, 12, 24, 48)
 LEAD_PAGE_SIZE = 12
 MAX_LEAD = 384
@@ -31,7 +30,7 @@ def button_rows(buttons, columns: int = 2) -> list[list[InlineKeyboardButton]]:
 def product_button_rows(prefix: str = "home", products=None) -> list[list[InlineKeyboardButton]]:
     enabled = products if products is not None else set(PRODUCT_LABELS) - {"weathernext3"}
     return [
-        [InlineKeyboardButton(PRODUCT_LABELS[product], callback_data=f"{prefix}:{product}") for product in row]
+        [InlineKeyboardButton(product_button_label(product), callback_data=f"{prefix}:{product}") for product in row]
         for row in product_rows(enabled)
     ]
 
@@ -53,9 +52,9 @@ def lead_keyboard(page: int = 0, run=None) -> InlineKeyboardMarkup:
         width = 2 if run is not None else 3
         return InlineKeyboardMarkup(
             [buttons[i:i + width] for i in range(0, len(buttons), width)] + [
-                [InlineKeyboardButton("Все сроки →", callback_data="leadpage:1")],
+                [InlineKeyboardButton("🕒 Все сроки →", callback_data="leadpage:1")],
                 [InlineKeyboardButton(_lead_label(384, run), callback_data="lead:384"),
-                 InlineKeyboardButton("Отмена", callback_data="cancel")],
+                 InlineKeyboardButton("✖️ Отмена", callback_data="cancel")],
             ]
         )
 
@@ -76,16 +75,16 @@ def lead_keyboard(page: int = 0, run=None) -> InlineKeyboardMarkup:
     if page < total_pages:
         nav.append(InlineKeyboardButton("→", callback_data=f"leadpage:{page + 1}"))
     rows.append(nav)
-    rows.append([InlineKeyboardButton("Популярные", callback_data="leadpage:0"), InlineKeyboardButton(_lead_label(384, run), callback_data="lead:384")])
-    rows.append([InlineKeyboardButton("Отмена", callback_data="cancel")])
+    rows.append([InlineKeyboardButton("⭐ Популярные", callback_data="leadpage:0"), InlineKeyboardButton(_lead_label(384, run), callback_data="lead:384")])
+    rows.append([InlineKeyboardButton("✖️ Отмена", callback_data="cancel")])
     return InlineKeyboardMarkup(rows)
 
 
 def lead_page_text(page: int = 0, run=None, lead: int = 24) -> str:
     time_text = f"{forecast_time_lines(run, lead)}\n\n" if run is not None else ""
     if page <= 0:
-        return time_text + "Выберите срок (UTC)." if run is not None else "Выберите срок."
-    return time_text + f"Все сроки: страница {max(1, min(page, lead_page_count()))}/{lead_page_count()}."
+        return time_text + "🕒 Выберите срок (UTC)." if run is not None else "🕒 Выберите срок."
+    return time_text + f"🕒 Все сроки · {max(1, min(page, lead_page_count()))}/{lead_page_count()}"
 
 
 def place_keyboard(labels: list[str]) -> InlineKeyboardMarkup:
@@ -93,8 +92,8 @@ def place_keyboard(labels: list[str]) -> InlineKeyboardMarkup:
     for index, label in enumerate(labels[:3]):
         if len(label) > 54:
             label = label[:51] + "…"
-        rows.append([InlineKeyboardButton(label, callback_data=f"place:{index}")])
-    rows.append([InlineKeyboardButton("Отмена", callback_data="cancel")])
+        rows.append([InlineKeyboardButton(f"📍 {label}", callback_data=f"place:{index}")])
+    rows.append([InlineKeyboardButton("✖️ Отмена", callback_data="cancel")])
     return InlineKeyboardMarkup(rows)
 
 
