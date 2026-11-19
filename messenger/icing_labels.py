@@ -5,6 +5,8 @@ text aliases. Keep their old labels accepted when a bot update changes styling.
 """
 from __future__ import annotations
 
+from .menu_catalog import CANCEL_TEXT
+
 BUTTON_LABELS = {
     "water_level": "💧 Вода на уровне",
     "thickness": "↕ Толщина слоёв",
@@ -14,21 +16,21 @@ BUTTON_LABELS = {
     "comparison": "⇄ Сравнение методов",
     "point": "📍 Пункт на карте",
     "help": "ℹ Как читать карту",
-    "cancel": "✕ Отмена",
-    "build": "▶ Построить",
+    "cancel": CANCEL_TEXT,
+    "build": "▶️ Построить",
     "lead": "🕒 Срок",
     "level": "↕ Уровень",
     "contours": "≋ Изолинии",
     "products": "🗺 Другие карты",
     "refresh": "↻ Обновить данные",
     "png": "⬇ PNG целиком",
-    "params": "⚙ Параметры",
-    "back": "← Назад",
-    "back_card": "← К карте",
+    "params": "⚙️ Параметры",
+    "back": "⬅️ Назад",
+    "back_card": "⬅️ К карте",
     "geolocation": "📍 Моя геолокация",
     "remove_point": "× Убрать пункт",
     "cancel_point": "↩ Отмена выбора пункта",
-    "home": "Меню",
+    "home": "🏠 Меню",
     "all_leads": "⋯ Все сроки до +384",
     "quick_leads": "⚡ Быстрые сроки",
     "retry": "↻ Проверить снова",
@@ -42,10 +44,11 @@ POINT_REPLY_LABELS = {
 
 _REPLY_ACTIONS = {
     "back": {"Назад", "Назад к карте", "Отмена выбора пункта",
+             "← Назад", "← К карте",
              BUTTON_LABELS["back"], BUTTON_LABELS["back_card"], BUTTON_LABELS["cancel_point"]},
     "remove": {"Убрать пункт", BUTTON_LABELS["remove_point"]},
-    "cancel": {"Отмена", "✖ Отмена", BUTTON_LABELS["cancel"]},
-    "home": {"Меню", BUTTON_LABELS["home"]},
+    "cancel": {"Отмена", "✖ Отмена", "✕ Отмена", BUTTON_LABELS["cancel"]},
+    "home": {"Меню", "🏠 Главное меню", BUTTON_LABELS["home"]},
 }
 
 

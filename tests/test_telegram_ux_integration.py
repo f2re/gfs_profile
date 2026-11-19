@@ -8,7 +8,7 @@ import telegram_bot
 class TelegramUxIntegrationTests(unittest.TestCase):
     def test_embedded_core_uses_concise_copy(self) -> None:
         text = telegram_bot.point_prompt_text({"product": "map"})
-        self.assertEqual(text, "Карта\n\nУкажите город, координаты или отправьте геолокацию.")
+        self.assertEqual(text, "🗺️ Карта\n\n📍 Укажите город, координаты или отправьте геолокацию.")
         self.assertTrue(getattr(telegram_bot, "_CONCISE_UX_INSTALLED", False))
 
     def test_embedded_core_uses_temporary_location_keyboard(self) -> None:

@@ -35,7 +35,7 @@ class TelegramConciseUxTests(unittest.TestCase):
         self.assertIn("home:help", callbacks)
         self.assertEqual(callbacks.count("home:meteogram"), 1)
         meteogram_button = next(button for button in buttons if button.callback_data == "home:meteogram")
-        self.assertEqual(meteogram_button.text, "Метеограмма")
+        self.assertEqual(meteogram_button.text, "📊 Метеограмма")
         commands = [command.command for command in BOT_COMMANDS]
         self.assertEqual(commands.count("meteogram"), 1)
 

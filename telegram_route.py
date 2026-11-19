@@ -194,8 +194,8 @@ def route_settings_keyboard(state: dict[str, object]) -> InlineKeyboardMarkup:
         *button_rows([InlineKeyboardButton(("✓ " if speed == value else "") + f"{value} км/ч", callback_data=f"route:speed:{value}") for value in ROUTE_SPEEDS], 2),
         [InlineKeyboardButton(("✓ " if spatial_step == value else "") + f"сетка {value} км", callback_data=f"route:grid:{value}") for value in ROUTE_SPATIAL_STEPS_KM],
         [InlineKeyboardButton(("✓ " if mode == key else "") + label, callback_data=f"route:mode:{key}") for key, label in ROUTE_MODES],
-        [InlineKeyboardButton("▶ Построить", callback_data="route:run")],
-        [InlineKeyboardButton("↩ Другой маршрут", callback_data="route:restart"), InlineKeyboardButton("Отмена", callback_data="route:cancel")],
+        [InlineKeyboardButton("▶️ Построить", callback_data="route:run")],
+        [InlineKeyboardButton("↩ Другой маршрут", callback_data="route:restart"), InlineKeyboardButton("✖️ Отмена", callback_data="route:cancel")],
     ])
 
 
@@ -400,7 +400,7 @@ async def route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.edit_message_text("Введите новый маршрут через → или ->. Пример: Москва -> Санкт-Петербург")
         return
     if not isinstance(state, dict) or state.get("step") != "settings":
-        await query.edit_message_text("Сценарий маршрута устарел. Начните заново: /route", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Меню", callback_data="prefs:home")]]))
+        await query.edit_message_text("Сценарий маршрута устарел. Начните заново: /route", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Меню", callback_data="prefs:home")]]))
         return
     state = dict(state)
     try:

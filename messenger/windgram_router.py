@@ -96,7 +96,7 @@ def _windgram_progress_text(point: Any, params: dict[str, Any], event: ProgressE
 
 def _params_text(point: Any, params: dict[str, Any]) -> str:
     return (
-        "🟦 Срок × уровень GFS\n"
+        "🌬️ Срок × уровень GFS\n"
         f"📍 {getattr(point, 'label', 'точка')}\n"
         f"Параметр: {PARAM_NAMES.get(str(params['param']), params['param'])}\n"
         f"Период: +{params['from']}…+{params['to']} ч\n"
@@ -112,7 +112,7 @@ def _params_keyboard(params: dict[str, Any]) -> UiKeyboard:
     step = int(params["step"])
     return menu_keyboard(
         [
-            [UiButton("▶ Построить", "callback", encode_callback("windgram", "run"))],
+            [UiButton("▶️ Построить", "callback", encode_callback("windgram", "run"))],
             [
                 UiButton(("✓ " if param == key else "") + label, "callback", encode_callback("windgram", "param", key))
                 for key, label in WINDGRAM_PARAMS
@@ -127,7 +127,7 @@ def _params_keyboard(params: dict[str, Any]) -> UiKeyboard:
             ],
             [
                 UiButton("📍 Другая точка", "callback", encode_callback("windgram", "point")),
-                UiButton("Отмена", "callback", encode_callback("windgram", "cancel")),
+                UiButton("✖️ Отмена", "callback", encode_callback("windgram", "cancel")),
             ],
         ]
     )
@@ -361,8 +361,8 @@ class WindgramMessengerRouter(AeroMessengerRouter):
         )
         await gateway.send_text(
             event.chat_id,
-            "Высота × срок · GFS data\nУкажите город, координаты или геолокацию.",
-            keyboard=menu_keyboard([[UiButton("Геолокация", "request_location")]]),
+            "🌬️ Высота × срок · GFS data\n📍 Укажите город, координаты или геолокацию.",
+            keyboard=menu_keyboard([[UiButton("📍 Геолокация", "request_location")]]),
         )
 
     async def _resolve_windgram_point_text(
@@ -392,7 +392,7 @@ class WindgramMessengerRouter(AeroMessengerRouter):
                 [UiButton(_short_label(point), "callback", encode_callback("windgram", "place", index))]
                 for index, point in enumerate(state.candidates)
             ]
-            rows.append([UiButton("Отмена", "callback", encode_callback("windgram", "cancel"))])
+            rows.append([UiButton("✖️ Отмена", "callback", encode_callback("windgram", "cancel"))])
             await gateway.send_text(event.chat_id, "Найдено несколько точек. Выберите нужную:", keyboard=menu_keyboard(rows))
             return
         await self._send_windgram_params_card(
@@ -425,7 +425,7 @@ class WindgramMessengerRouter(AeroMessengerRouter):
                 [UiButton(_short_label(point), "callback", encode_callback("windgram", "place", index))]
                 for index, point in enumerate(state.candidates)
             ]
-            rows.append([UiButton("Отмена", "callback", encode_callback("windgram", "cancel"))])
+            rows.append([UiButton("✖️ Отмена", "callback", encode_callback("windgram", "cancel"))])
             await gateway.send_text(event.chat_id, "Найдено несколько точек. Выберите нужную:", keyboard=menu_keyboard(rows))
             return
         await self._run_windgram(event, gateway, candidates[0], params, parsed.run)
@@ -452,16 +452,16 @@ class WindgramMessengerRouter(AeroMessengerRouter):
         pin_text = "★ Открепить" if recipe.pinned else "⭐ Закрепить"
         await self._send_forecast_parameter_card(
             event, gateway, self._forecast_recipe_state(recipe, params),
-            lambda *_: "🟦 Срок × уровень GFS\n"
+            lambda *_: "🌬️ Срок × уровень GFS\n"
             f"📍 {point.get('label', 'точка')}\n"
             f"{PARAM_NAMES.get(str(params['param']), params['param'])} · +{params['from']}…+{params['to']} ч · "
             f"шаг {params['step']} ч · до {params['top']} гПа",
             lambda _: menu_keyboard(
                 [
-                    [UiButton("▶ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],
+                    [UiButton("▶️ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],
                     [
                         UiButton(pin_text, "callback", encode_callback("recipe", "toggle", recipe.recipe_id)),
-                        UiButton("⚙ Изменить", "callback", encode_callback("recipe", "change", recipe.recipe_id)),
+                        UiButton("⚙️ Изменить", "callback", encode_callback("recipe", "change", recipe.recipe_id)),
                     ],
                 ]
             ),

@@ -565,14 +565,8 @@ def _interval_label(days: int) -> str:
 
 
 def _product_title(product: str) -> str:
-    return {
-        "profile": "📈 Профиль",
-        "aero": "🧾 Аэродиаграмма",
-        "windgram": "🟦 Срок × уровень",
-        "cloudgram": "☁️ Облака и осадки",
-        "map": "🗺️ Карта",
-        "meteogram": "📊 Метеограмма",
-    }.get(product, product)
+    from messenger.menu_catalog import product_button_label
+    return product_button_label(product)
 
 
 def _params_summary(item_or_spec: ProductSchedule | dict[str, object]) -> str:
@@ -656,14 +650,15 @@ def _manager_keyboard(items: list[ProductSchedule]) -> InlineKeyboardMarkup:
     rows: list[list[InlineKeyboardButton]] = []
     for index, item in enumerate(items, 1):
         point = _unpack_point(item.point)
-        label = f"{index}. {_product_title(item.product).split(' ', 1)[0]} {point.label}"[:56]
+        from messenger.menu_catalog import compact_point_label
+        label = f"{index}. {_product_title(item.product)} · {compact_point_label(point.label)}"[:56]
         rows.append([InlineKeyboardButton(label, callback_data=f"sched:view:{item.schedule_id}")])
     if len(items) < MAX_SCHEDULES_PER_USER:
         rows.append([InlineKeyboardButton("➕ Новое расписание", callback_data="sched:new")])
     rows.append(
         [
             InlineKeyboardButton("🔄 Обновить", callback_data="sched:list"),
-            InlineKeyboardButton("🏠 Главное меню", callback_data="sched:home"),
+            InlineKeyboardButton("🏠 Меню", callback_data="sched:home"),
         ]
     )
     return InlineKeyboardMarkup(rows)
@@ -673,7 +668,7 @@ def _product_keyboard(products=("profile", "aero", "windgram", "cloudgram", "map
     from telegram_ui import product_button_rows
     return InlineKeyboardMarkup([
         *product_button_rows("sched:product", products),
-        [InlineKeyboardButton("← Расписания", callback_data="sched:list")],
+        [InlineKeyboardButton("⬅️ Расписания", callback_data="sched:list")],
     ])
 
 
@@ -688,8 +683,8 @@ def _frequency_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("Каждые 3 дня", callback_data="sched:freq:3"),
                 InlineKeyboardButton("Раз в неделю", callback_data="sched:freq:7"),
             ],
-            [InlineKeyboardButton("Другой интервал…", callback_data="sched:freq:custom")],
-            [InlineKeyboardButton("Отмена", callback_data="sched:abort")],
+            [InlineKeyboardButton("🗓️ Другой интервал…", callback_data="sched:freq:custom")],
+            [InlineKeyboardButton("✖️ Отмена", callback_data="sched:abort")],
         ]
     )
 
@@ -705,8 +700,8 @@ def _time_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("13:00", callback_data="sched:time:13:00"),
                 InlineKeyboardButton("18:00", callback_data="sched:time:18:00"),
             ],
-            [InlineKeyboardButton("Другое время…", callback_data="sched:time:custom")],
-            [InlineKeyboardButton("Отмена", callback_data="sched:abort")],
+            [InlineKeyboardButton("🕒 Другое время…", callback_data="sched:time:custom")],
+            [InlineKeyboardButton("✖️ Отмена", callback_data="sched:abort")],
         ]
     )
 
@@ -718,8 +713,8 @@ def _timezone_fallback_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton("Europe/Moscow", callback_data="sched:tz:Europe/Moscow"),
                 InlineKeyboardButton("UTC", callback_data="sched:tz:UTC"),
             ],
-            [InlineKeyboardButton("Ввести часовой пояс…", callback_data="sched:tz:manual")],
-            [InlineKeyboardButton("Отмена", callback_data="sched:abort")],
+            [InlineKeyboardButton("🌐 Часовой пояс…", callback_data="sched:tz:manual")],
+            [InlineKeyboardButton("✖️ Отмена", callback_data="sched:abort")],
         ]
     )
 
@@ -729,10 +724,10 @@ def _confirmation_keyboard() -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton("✅ Сохранить расписание", callback_data="sched:save")],
             [
-                InlineKeyboardButton("Частота", callback_data="sched:edit:freq"),
-                InlineKeyboardButton("Время", callback_data="sched:edit:time"),
+                InlineKeyboardButton("🗓️ Частота", callback_data="sched:edit:freq"),
+                InlineKeyboardButton("🕒 Время", callback_data="sched:edit:time"),
             ],
-            [InlineKeyboardButton("Отмена", callback_data="sched:abort")],
+            [InlineKeyboardButton("✖️ Отмена", callback_data="sched:abort")],
         ]
     )
 
@@ -751,9 +746,9 @@ def _delivery_control_keyboard(item: ProductSchedule) -> InlineKeyboardMarkup:
 def _detail_keyboard(item: ProductSchedule) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("▶ Прислать сейчас", callback_data=f"sched:run:{item.schedule_id}")],
+            [InlineKeyboardButton("▶️ Прислать сейчас", callback_data=f"sched:run:{item.schedule_id}")],
             [InlineKeyboardButton("🗑 Отменить расписание", callback_data=f"sched:delete:{item.schedule_id}")],
-            [InlineKeyboardButton("← Все расписания", callback_data="sched:list")],
+            [InlineKeyboardButton("⬅️ Все расписания", callback_data="sched:list")],
         ]
     )
 
@@ -761,8 +756,8 @@ def _detail_keyboard(item: ProductSchedule) -> InlineKeyboardMarkup:
 def _delete_confirmation_keyboard(item: ProductSchedule) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("Да, удалить", callback_data=f"sched:delete-confirm:{item.schedule_id}")],
-            [InlineKeyboardButton("Нет, оставить", callback_data=f"sched:view:{item.schedule_id}")],
+            [InlineKeyboardButton("🗑️ Да, удалить", callback_data=f"sched:delete-confirm:{item.schedule_id}")],
+            [InlineKeyboardButton("⬅️ Оставить", callback_data=f"sched:view:{item.schedule_id}")],
         ]
     )
 
@@ -1246,7 +1241,7 @@ async def schedule_callback(update: Update, context, namespace: dict[str, Any]) 
             state["step"] = "custom_interval"
             await query.edit_message_text(
                 "Введите интервал в днях от 1 до 30.\nНапример: 3",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data="sched:abort")]]),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✖️ Отмена", callback_data="sched:abort")]]),
             )
         else:
             state["every_days"] = _validate_interval(int(value))
@@ -1261,7 +1256,7 @@ async def schedule_callback(update: Update, context, namespace: dict[str, Any]) 
             state["step"] = "custom_time"
             await query.edit_message_text(
                 "Введите местное время как ЧЧ:ММ.\nНапример: 06:30",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data="sched:abort")]]),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✖️ Отмена", callback_data="sched:abort")]]),
             )
         else:
             state["local_time"] = _normalise_time(value)
@@ -1276,7 +1271,7 @@ async def schedule_callback(update: Update, context, namespace: dict[str, Any]) 
             state["step"] = "manual_timezone"
             await query.edit_message_text(
                 "Введите IANA-часовой пояс.\nНапример: Europe/Moscow, Europe/London, Asia/Yekaterinburg",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Отмена", callback_data="sched:abort")]]),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("✖️ Отмена", callback_data="sched:abort")]]),
             )
         else:
             state["timezone"] = _validate_timezone(value)
@@ -1309,7 +1304,7 @@ async def schedule_callback(update: Update, context, namespace: dict[str, Any]) 
                 every_days=int(state["every_days"]),
             )
         except ScheduleError as exc:
-            await query.edit_message_text(str(exc), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("← Расписания", callback_data="sched:list")]]))
+            await query.edit_message_text(str(exc), reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Расписания", callback_data="sched:list")]]))
             raise ApplicationHandlerStop
         context.user_data.pop(SCHEDULE_WIZARD_KEY, None)
         await query.edit_message_text(
@@ -1322,13 +1317,13 @@ async def schedule_callback(update: Update, context, namespace: dict[str, Any]) 
         schedule_id = data.rsplit(":", 1)[1]
         item = schedule_store().get(schedule_id)
         if item is None or item.user_id != user_id:
-            await query.edit_message_text("Расписание не найдено.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("← Расписания", callback_data="sched:list")]]))
+            await query.edit_message_text("Расписание не найдено.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Расписания", callback_data="sched:list")]]))
             raise ApplicationHandlerStop
         if data.startswith("sched:view:"):
             await query.edit_message_text(_detail_text(item), reply_markup=_detail_keyboard(item))
         elif data.startswith("sched:delete-confirm:"):
             schedule_store().delete(item.schedule_id, user_id)
-            await query.edit_message_text("🗑 Расписание удалено.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("← Расписания", callback_data="sched:list")], [InlineKeyboardButton("➕ Новое", callback_data="sched:new")]]))
+            await query.edit_message_text("🗑 Расписание удалено.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Расписания", callback_data="sched:list")], [InlineKeyboardButton("➕ Новое", callback_data="sched:new")]]))
         elif data.startswith("sched:delete:"):
             await query.edit_message_text(
                 "Удалить это расписание?\n\n" + _detail_text(item),
@@ -1437,10 +1432,10 @@ async def schedule_meteogram_format_interceptor(update: Update, context) -> None
             [
                 [InlineKeyboardButton("🕒 Далее: расписание", callback_data="meteo:run")],
                 [
-                    InlineKeyboardButton("Формат", callback_data="meteo:back:format"),
-                    InlineKeyboardButton("Период", callback_data="meteo:back:period"),
+                    InlineKeyboardButton("📄 Формат", callback_data="meteo:back:format"),
+                    InlineKeyboardButton("🗓️ Период", callback_data="meteo:back:period"),
                 ],
-                [InlineKeyboardButton("Отмена", callback_data="meteo:cancel")],
+                [InlineKeyboardButton("✖️ Отмена", callback_data="meteo:cancel")],
             ]
         ),
     )

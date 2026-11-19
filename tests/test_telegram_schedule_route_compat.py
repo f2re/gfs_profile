@@ -55,7 +55,7 @@ class TelegramScheduleRouteCompatTests(unittest.TestCase):
                 "spatial_step": 50,
             },
         }
-        self.assertEqual(schedules._product_title("route"), "✈ Маршрут")
+        self.assertEqual(schedules._product_title("route"), "✈️ Маршрут")
         summary = schedules._params_summary(spec)
         self.assertIn("Москва → Санкт-Петербург", summary)
         self.assertIn("сетка 50 км", summary)

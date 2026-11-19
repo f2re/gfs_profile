@@ -83,7 +83,7 @@ def _card_text(point: Any, params: dict[str, Any], run=None) -> str:
     period = f"+{params['from']} ч" if params["mode"] == "single" else f"+{params['from']}…+{params['to']} ч · шаг {params['step']} ч"
     timing = forecast_range_lines(run, params["from"], params["to"]) if run is not None else UNVERIFIED_TIME_TEXT
     return (
-        "🗺 Композитная карта GFS\n"
+        "🗺️ Композитная карта GFS\n"
         f"📍 {getattr(point, 'label', 'точка')}\n"
         f"Режим: {mode}\nПериод: {period}\n{timing}\n"
         f"Радиус: {int(params['radius'])} км\nПодложка: {dict(MAP_BASEMAP_CHOICES).get(params['basemap'], params['basemap'])}\n\n"
@@ -98,14 +98,14 @@ def _keyboard(params: dict[str, Any], run=None) -> UiKeyboard:
                             (forecast_lead_label(run, value) if run is not None else f"+{value}"),
                             "callback", encode_callback("map", "to", value)) for value in MAP_TO_HOURS]
     return menu_keyboard([
-        [UiButton("▶ Построить", "callback", encode_callback("map", "run"))],
+        [UiButton("▶️ Построить", "callback", encode_callback("map", "run"))],
         [UiButton(("✓ " if mode == key else "") + label, "callback", encode_callback("map", "mode", key)) for key, label in MAP_MODES],
         *[time_buttons[index:index + 2] for index in range(0, len(time_buttons), 2)],
         [UiButton(("✓ " if int(params["step"]) == value else "") + f"шаг {value}ч", "callback", encode_callback("map", "step", value)) for value in MAP_STEPS],
         [UiButton(("✓ " if int(params["radius"]) == value else "") + f"{value} км", "callback", encode_callback("map", "radius", value)) for value in MAP_RADII],
         [UiButton(("✓ " if params["basemap"] == key else "") + label, "callback", encode_callback("map", "base", key)) for key, label in MAP_BASEMAP_CHOICES],
-        [UiButton("📍 Другая точка", "callback", encode_callback("map", "point")), UiButton("Отмена", "callback", encode_callback("map", "cancel"))],
-        [UiButton("❄ Обледенение по району", "callback", encode_callback("product", "open", "icing"))],
+        [UiButton("📍 Другая точка", "callback", encode_callback("map", "point")), UiButton("✖️ Отмена", "callback", encode_callback("map", "cancel"))],
+        [UiButton("❄️ Обледенение по району", "callback", encode_callback("product", "open", "icing"))],
     ])
 
 
@@ -275,7 +275,7 @@ class MapMessengerRouter(IcingMessengerRouter):
 
     async def _ask_map_point(self, event: NormalizedEvent, gateway: MessengerGateway, params: dict[str, Any]) -> None:
         self.sessions.set(event.platform, event.user_id, event.chat_id, FlowState(product="map", step="await_point", params=_params(params)))
-        await gateway.send_text(event.chat_id, "Карта · GFS data\nУкажите город, координаты или геолокацию.", keyboard=menu_keyboard([[UiButton("Геолокация", "request_location")]]))
+        await gateway.send_text(event.chat_id, "🗺️ Карта · GFS data\n📍 Укажите город, координаты или геолокацию.", keyboard=menu_keyboard([[UiButton("📍 Геолокация", "request_location")]]))
 
     async def _resolve_point(self, event: NormalizedEvent, gateway: MessengerGateway, raw: str, params: dict[str, Any]) -> None:
         try:
@@ -335,8 +335,8 @@ class MapMessengerRouter(IcingMessengerRouter):
             return
         pin = "★ Открепить" if recipe.pinned else "⭐ Закрепить"
         await gateway.edit_text(event.chat_id, status.message_id, _card_text(SimplePoint(point), p, run), keyboard=menu_keyboard([
-            [UiButton("▶ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],
-            [UiButton(pin, "callback", encode_callback("recipe", "toggle", recipe.recipe_id)), UiButton("⚙ Изменить", "callback", encode_callback("recipe", "change", recipe.recipe_id))],
+            [UiButton("▶️ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],
+            [UiButton(pin, "callback", encode_callback("recipe", "toggle", recipe.recipe_id)), UiButton("⚙️ Изменить", "callback", encode_callback("recipe", "change", recipe.recipe_id))],
         ]))
 
     async def _run(self, event: NormalizedEvent, gateway: MessengerGateway, point: Any, params: dict[str, Any], run: Any | None) -> bool:

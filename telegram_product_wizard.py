@@ -3,6 +3,7 @@ from __future__ import annotations
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from forecast_menu import menu_run
 from forecast_time import forecast_lead_label, forecast_range_lines
+from messenger.menu_catalog import PRODUCT_LABELS, product_button_label
 
 from telegram_ui import button_rows
 
@@ -62,15 +63,7 @@ def start_map_wizard_state(default_lead: int = 24) -> dict[str, object]:
 
 
 def product_title(product: str) -> str:
-    if product == "aero":
-        return "Аэрологическая диаграмма GFS"
-    if product == "windgram":
-        return "Windgram GFS"
-    if product == "cloudgram":
-        return "Cloudgram GFS"
-    if product == "map":
-        return "Карта GFS"
-    return "Продукт GFS"
+    return f"{product_button_label(product)} · GFS data" if product in PRODUCT_LABELS else "🌦️ GFS data"
 
 
 def point_prompt_text(state: dict[str, object]) -> str:
@@ -92,8 +85,8 @@ def _short_label(label: str, max_chars: int = 56) -> str:
 
 
 def place_keyboard(labels: list[str]) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(_short_label(label, 58), callback_data=f"wiz:place:{index}")] for index, label in enumerate(labels[:5])]
-    rows.append([InlineKeyboardButton("Отмена", callback_data="wiz:cancel")])
+    rows = [[InlineKeyboardButton(f"📍 {_short_label(label, 56)}", callback_data=f"wiz:place:{index}")] for index, label in enumerate(labels[:5])]
+    rows.append([InlineKeyboardButton("✖️ Отмена", callback_data="wiz:cancel")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -292,11 +285,11 @@ def params_keyboard(state: dict[str, object]) -> InlineKeyboardMarkup:
             rows.append([InlineKeyboardButton(("✓ " if current_step == value else "") + f"шаг {value}ч", callback_data=f"wiz:map:step:{value}") for value in _map_step_options(state)])
         current_basemap = str(state.get("basemap", "places"))
         rows.append([InlineKeyboardButton(("✓ " if current_basemap == key else "") + label, callback_data=f"wiz:map:basemap:{key}") for key, label in MAP_BASEMAPS])
-        rows.append([InlineKeyboardButton("Обледенение", callback_data="home:icing")])
+        rows.append([InlineKeyboardButton("❄️ Обледенение", callback_data="home:icing")])
 
-    run_label = "🕒 Далее: расписание" if state.get("_schedule_setup") else "Построить"
+    run_label = "🕒 Далее: расписание" if state.get("_schedule_setup") else "▶️ Построить"
     rows.append([InlineKeyboardButton(run_label, callback_data="wiz:run")])
-    rows.append([InlineKeyboardButton("Другая точка", callback_data="wiz:point"), InlineKeyboardButton("Отмена", callback_data="wiz:cancel")])
+    rows.append([InlineKeyboardButton("📍 Другая точка", callback_data="wiz:point"), InlineKeyboardButton("✖️ Отмена", callback_data="wiz:cancel")])
     return InlineKeyboardMarkup([
         chunk
         for row in rows

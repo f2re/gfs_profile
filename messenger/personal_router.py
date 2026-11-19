@@ -10,7 +10,7 @@ from forecast_time import forecast_time_lines, forecast_range_lines
 
 from .callback_codec import CallbackCodecError, decode_callback, encode_callback
 from .contracts import MessengerGateway, NormalizedEvent, ProgressEvent, UiButton
-from .menu_catalog import PRODUCT_LABELS
+from .menu_catalog import PRODUCT_LABELS, compact_point_label
 from .profile_service import cleanup_product_result
 from .router import MessengerRouter, RouterDependencies, _command_args, _profile_progress_text, menu_keyboard
 from .state import FlowState
@@ -50,21 +50,28 @@ class PersonalMessengerRouter(MessengerRouter):
         )
 
     def _home_quick_rows(self, event: NormalizedEvent, enabled: tuple[str, ...]) -> list[list[UiButton]]:
-        rows = []
+        buttons = []
+        locations = getattr(self, "locations", None)
+        active = locations.active(event.platform, event.user_id) if locations is not None else None
         for recipe in self.recipes.quick(event.platform, event.user_id, limit=2):
             if recipe.product not in enabled:
                 continue
             title = PRODUCT_LABELS.get(recipe.product, recipe.product)
-            point = (recipe.point or {}).get("label", "точка")
+            point = recipe.point or {}
+            same_point = (active is not None and "lat" in point and "lon" in point
+                          and abs(float(point["lat"]) - active.lat) < 1e-6
+                          and abs(float(point["lon"]) - active.lon) < 1e-6)
+            location = "" if same_point else compact_point_label(point.get("label", "точка"))
             if recipe.product == "route":
                 origin = recipe.params.get("origin", {})
                 destination = recipe.params.get("destination", {})
-                point = f"{origin.get('label', 'старт')} → {destination.get('label', 'финиш')}"
+                location = f"{compact_point_label(origin.get('label', 'старт'))} → {compact_point_label(destination.get('label', 'финиш'))}"
             suffix = f" · +{int(recipe.params.get('lead', 24))} ч" if recipe.product in {"profile", "aero"} else ""
-            marker = "★" if recipe.pinned else "▶"
-            label = f"{marker} {title} · {point}{suffix}"[:62]
-            rows.append([UiButton(label, "callback", encode_callback("recipe", "run", recipe.recipe_id))])
-        return rows
+            marker = "📌" if recipe.pinned else "▶️"
+            label = f"{marker} {title}{suffix}" + (f" · {location}" if location else "")
+            label = label if len(label) <= 62 else label[:61] + "…"
+            buttons.append(UiButton(label, "callback", encode_callback("recipe", "run", recipe.recipe_id)))
+        return [buttons] if len(buttons) == 2 and all(len(button.text) <= 28 for button in buttons) else [[button] for button in buttons]
 
 
     async def _text(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
@@ -184,7 +191,7 @@ class PersonalMessengerRouter(MessengerRouter):
             f"📈 Профиль GFS\n📍 {point.get('label', 'точка')}\n{timing}",
             keyboard=menu_keyboard(
                 [
-                    [UiButton("▶ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],
+                    [UiButton("▶️ Построить", "callback", encode_callback("recipe", "run", recipe.recipe_id))],
                     [
                         UiButton(pin_text, "callback", encode_callback("recipe", "toggle", recipe.recipe_id)),
                         UiButton("📍 Другая точка", "callback", encode_callback("recipe", "change", recipe.recipe_id)),

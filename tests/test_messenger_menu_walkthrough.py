@@ -10,7 +10,7 @@ from geocode import GeoPoint
 from gfs_core import GfsRun, canonical_leads
 from messenger.callback_codec import decode_callback, encode_callback
 from messenger.contracts import CommonProductResult, Location, NormalizedEvent, PlatformMessage
-from messenger.menu_catalog import PRODUCT_LABELS
+from messenger.menu_catalog import PRODUCT_ICONS, PRODUCT_LABELS
 from messenger.router import RouterDependencies
 from messenger.schedule_router import ScheduleMessengerRouter
 from messenger.state import FlowState
@@ -99,8 +99,13 @@ class ProductionMenuWalkthroughTests(unittest.IsolatedAsyncioTestCase):
                     await self.router.handle(self.event(platform, user, text="/start"), gateway)
                     home = gateway.keyboard()
                     self.assertTrue(all(len(row) <= 2 for row in home.rows))
+                    product_rows = [tuple(decode_callback(b.payload).value for b in row)
+                                    for row in home.rows if row[0].payload and
+                                    decode_callback(row[0].payload).scope == "product"]
+                    self.assertEqual(product_rows, [("profile", "aero"), ("windgram", "cloudgram"),
+                                                    ("meteogram", "map"), ("icing", "route")])
                     button = next(b for row in home.rows for b in row if b.payload == encode_callback("product", "open", product))
-                    self.assertEqual(button.text, PRODUCT_LABELS[product])
+                    self.assertEqual(button.text, f"{PRODUCT_ICONS[product]} {PRODUCT_LABELS[product]}")
                     await self.click(gateway, user, button.payload)
                     self.assertEqual(self.router.sessions.get(platform, user, user).product, product)
                     self.assert_keyboard(gateway.keyboard())
@@ -121,7 +126,32 @@ class ProductionMenuWalkthroughTests(unittest.IsolatedAsyncioTestCase):
                     self.assert_keyboard(gateway.keyboard())
                     await self.click(gateway, user, encode_callback("flow", "home"))
                     self.assertIsNone(self.router.sessions.get(platform, user, user))
-                    self.assertTrue(gateway.calls[-1][1].startswith("GFS data"))
+                    self.assertTrue(gateway.calls[-1][1].startswith("🌦️ GFS data"))
+
+    async def test_home_quick_recipes_keep_distinct_leads_and_locations_readable(self):
+        gateway, user = Gateway("max"), "quick"
+        point = GeoPoint(58.7352, 29.8479, "г Луга, Лужский р-н, Ленинградская обл", "test")
+        first = self.store.record_success("max", user, "profile", {"lead": 21}, point)
+        second = self.store.record_success("max", user, "profile", {"lead": 24}, point)
+        await self.router.handle(self.event("max", user, text="/start"), gateway)
+        home = gateway.keyboard()
+        self.assertEqual(len(home.rows[0]), 2)
+        self.assertEqual({decode_callback(b.payload).value for b in home.rows[0]},
+                         {str(first.recipe_id), str(second.recipe_id)})
+        self.assertTrue(any("+21" in b.text for b in home.rows[0]))
+        self.assertTrue(any("+24" in b.text for b in home.rows[0]))
+        self.assertIn("Луга · Ленинградская обл", gateway.calls[-1][1])
+        self.assertNotIn("Лужский р-н", gateway.calls[-1][1])
+
+        other = GeoPoint(55.75, 37.62, "г Москва", "test")
+        self.store.record_success("max", user, "profile", {"lead": 24}, other)
+        self.router.locations.remember("max", user, other, activate=True)
+        await self.router.handle(self.event("max", user, text="/start"), gateway)
+        quick = [b for row in gateway.keyboard().rows for b in row
+                 if b.payload and decode_callback(b.payload).scope == "recipe"]
+        self.assertEqual(len(quick), 2)
+        self.assertNotEqual(quick[0].text, quick[1].text)
+        self.assertTrue(any("Луга" in b.text and "+24" in b.text for b in quick))
 
     async def test_profile_command_and_old_home_buttons_survive_full_router(self):
         gateway, user = Gateway("max"), "fresh"
@@ -150,11 +180,11 @@ class ProductionMenuWalkthroughTests(unittest.IsolatedAsyncioTestCase):
         self.router.sessions.set("max", user, user, FlowState(product="weathernext3", step="params"))
         with patch.dict("os.environ", {"WEATHERNEXT3_ENABLED": "0"}):
             await self.click(gateway, user, encode_callback("flow", "home"))
-        self.assertTrue(gateway.calls[-1][1].startswith("GFS data"))
+        self.assertTrue(gateway.calls[-1][1].startswith("🌦️ GFS data"))
         for action, value in (("freq", 1), ("time", "06:00"), ("save", None)):
             await self.click(gateway, user, encode_callback("schedule", action, value))
             self.assertIn("Выбор устарел", gateway.calls[-1][1])
-            self.assertTrue(any(b.text == "Меню" for row in gateway.keyboard().rows for b in row))
+            self.assertTrue(any(b.text == "🏠 Меню" for row in gateway.keyboard().rows for b in row))
         await self.click(gateway, user, encode_callback("flow", "help"))
         self.assertIn("/icing", gateway.calls[-1][1])
         self.assert_keyboard(gateway.keyboard())

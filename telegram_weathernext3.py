@@ -37,11 +37,11 @@ def get_router():
 
 
 def telegram_markup(keyboard):
-    from telegram_ui import native_callback_payload
+    from telegram_ui import CANCEL_TEXT, native_callback_payload
     if keyboard is None:
         return None
     if any(button.action == 'request_location' for row in keyboard.rows for button in row):
-        return ReplyKeyboardMarkup([[KeyboardButton('📍 Геолокация', request_location=True)], [KeyboardButton('✖ Отмена')]],
+        return ReplyKeyboardMarkup([[KeyboardButton('📍 Геолокация', request_location=True)], [KeyboardButton(CANCEL_TEXT)]],
                                    resize_keyboard=True, one_time_keyboard=True)
     rows = []
     for row in keyboard.rows:
@@ -198,7 +198,8 @@ def _insert_wn3_button(keyboard: InlineKeyboardMarkup) -> InlineKeyboardMarkup:
     if any(button.callback_data == "home:wn3" for row in rows for button in row):
         return keyboard
     insert_at = max(0, len(rows) - 1)
-    rows.insert(insert_at, [InlineKeyboardButton("🛰 WeatherNext 3", callback_data="home:wn3")])
+    from messenger.menu_catalog import product_button_label
+    rows.insert(insert_at, [InlineKeyboardButton(product_button_label("weathernext3"), callback_data="home:wn3")])
     return InlineKeyboardMarkup(rows)
 
 

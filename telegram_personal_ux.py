@@ -19,8 +19,8 @@ from telegram.ext import ApplicationHandlerStop, CallbackQueryHandler, CommandHa
 
 from geocode import GeoPoint
 from gfs_core import canonical_leads
-from messenger.menu_catalog import PRODUCT_LABELS
-from telegram_ui import COMMON_LEADS, product_button_rows
+from messenger.menu_catalog import PRODUCT_LABELS, PRODUCT_ICONS, compact_point_label
+from telegram_ui import COMMON_LEADS, button_rows, product_button_rows
 from forecast_menu import UNVERIFIED_TIME_TEXT, ensure_menu_run
 from forecast_time import forecast_lead_label, forecast_time_lines
 from telegram_product_wizard import PRODUCT_WIZARD_KEY
@@ -220,8 +220,8 @@ def _summary(preference: ProductPreference) -> str:
     if product == "map":
         mode = str(params.get("mode", "gif"))
         if mode == "single":
-            return f"🗺 Одна карта · +{int(params.get('lead', 24))} ч"
-        title = "🗺 Анимация" if mode == "gif" else "🗺 Серия PNG"
+            return f"Одна карта · +{int(params.get('lead', 24))} ч"
+        title = "Анимация" if mode == "gif" else "Серия PNG"
         return (
             f"{title} · +{int(params.get('from', 0))}…+{int(params.get('to', 48))} ч · "
             f"шаг {int(params.get('time_step', 3))} ч"
@@ -244,20 +244,33 @@ def _summary(preference: ProductPreference) -> str:
 
 def home_text(user_id: int) -> str:
     active = get_active_location(user_id)
-    point = (f"📍 {active.label} · {active.lat:.4f}, {active.lon:.4f}"
-             if active else "Город, координаты или геолокация")
-    return f"GFS data\n{point}\n\nВыберите продукт."
+    point = (f"📍 {compact_point_label(active.label)}"
+             if active else "📍 Город, координаты или геолокация")
+    return f"🌦️ GFS data\n{point}\n\nВыберите продукт 👇"
+
+
+def _home_quick_label(preference: ProductPreference, active=None) -> str:
+    """Name the stored point when it differs from the home screen's point."""
+    label = _summary(preference)
+    point = preference.point
+    if point and (active is None or abs(float(point['lat']) - active.lat) > 1e-5
+                  or abs(float(point['lon']) - active.lon) > 1e-5):
+        label += f" · {compact_point_label(point.get('label', 'точка'))}"
+    marker = "📌" if preference.kind == "pinned" else "▶️"
+    return f"{marker} {label}"[:64]
 
 
 def home_keyboard(user_id: int) -> InlineKeyboardMarkup:
-    rows = [[InlineKeyboardButton(("▶ " + _summary(preference))[:64],
-             callback_data=f"quick:{preference.product}")]
-            for preference in get_quick_preferences(user_id, 2)]
+    active = get_active_location(user_id)
+    quick = [InlineKeyboardButton(_home_quick_label(preference, active),
+             callback_data=f"quick:{preference.product}")
+             for preference in get_quick_preferences(user_id, 2)]
+    rows = button_rows(quick, 2 if all(len(button.text) <= 28 for button in quick) else 1)
     rows.extend(product_button_rows())
     rows.extend([
-        [InlineKeyboardButton("Расписания", callback_data="home:schedule"),
-         InlineKeyboardButton("Настройки", callback_data="home:settings")],
-        [InlineKeyboardButton("Помощь", callback_data="home:help")],
+        [InlineKeyboardButton("🕒 Расписания", callback_data="home:schedule"),
+         InlineKeyboardButton("⚙️ Настройки", callback_data="home:settings")],
+        [InlineKeyboardButton("❓ Помощь", callback_data="home:help")],
     ])
     return InlineKeyboardMarkup(rows)
 
@@ -318,7 +331,7 @@ def _settings_keyboard(user_id: int) -> InlineKeyboardMarkup:
         [
             [InlineKeyboardButton("🧹 Очистить последние точки", callback_data="prefs:locations:confirm")],
             [InlineKeyboardButton("🗑 Удалить мои настройки", callback_data="prefs:all:confirm")],
-            [InlineKeyboardButton("🏠 Главное меню", callback_data="prefs:home")],
+            [InlineKeyboardButton("🏠 Меню", callback_data="prefs:home")],
         ]
     )
     return InlineKeyboardMarkup(rows)
@@ -349,7 +362,7 @@ def _locations_keyboard(user_id: int) -> InlineKeyboardMarkup:
                 )
             ]
         )
-    rows.append([InlineKeyboardButton("← Настройки", callback_data="home:settings")])
+    rows.append([InlineKeyboardButton("⬅️ Настройки", callback_data="home:settings")])
     return InlineKeyboardMarkup(rows)
 
 
@@ -373,8 +386,8 @@ def _profile_keyboard(lead: int, run=None) -> InlineKeyboardMarkup:
     ]
     return InlineKeyboardMarkup(
         [buttons[index:index + 2] for index in range(0, len(buttons), 2)] + [
-            [InlineKeyboardButton("Все сроки →", callback_data="personal:profile:all")],
-            [InlineKeyboardButton(f"▶ Построить +{lead} ч", callback_data="personal:profile:run")],
+            [InlineKeyboardButton("🕒 Все сроки →", callback_data="personal:profile:all")],
+            [InlineKeyboardButton(f"▶️ Построить +{lead} ч", callback_data="personal:profile:run")],
             [
                 InlineKeyboardButton("📍 Другая точка", callback_data="personal:profile:point"),
                 InlineKeyboardButton("🏠 Меню", callback_data="prefs:home"),
@@ -406,12 +419,12 @@ async def _show_profile_parameters(message, context, state, namespace, *, query=
 
 def _quick_card(preference: ProductPreference) -> tuple[str, InlineKeyboardMarkup]:
     point = preference.point
-    text = _summary(preference)
+    text = f"{PRODUCT_ICONS.get(preference.product, '🌦️')} {_summary(preference)}"
     if point:
         text += "\n" + _point_line(point)
     keyboard = InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("▶ Построить", callback_data=f"quick:{preference.product}")],
+            [InlineKeyboardButton("▶️ Построить", callback_data=f"quick:{preference.product}")],
             [
                 InlineKeyboardButton("⚙️ Изменить", callback_data=f"personal:edit:{preference.product}"),
                 InlineKeyboardButton("🏠 Меню", callback_data="prefs:home"),
@@ -641,7 +654,7 @@ def _patch_schedule_result_keyboard() -> None:
                     InlineKeyboardButton("🔄 Обновить", callback_data="quick:last"),
                     InlineKeyboardButton("⚙️ Изменить", callback_data="personal:last:change"),
                 ],
-                [InlineKeyboardButton("🏠 Главное меню", callback_data="prefs:home")],
+                [InlineKeyboardButton("🏠 Меню", callback_data="prefs:home")],
             ]
         )
 
@@ -1133,7 +1146,7 @@ def register(application, namespace: dict[str, Any]) -> None:
                 reply_markup=InlineKeyboardMarkup(
                     [
                         [InlineKeyboardButton("Удалить точки", callback_data="prefs:locations:delete")],
-                        [InlineKeyboardButton("Отмена", callback_data="home:settings")],
+                        [InlineKeyboardButton("✖️ Отмена", callback_data="home:settings")],
                     ]
                 ),
             )
@@ -1153,7 +1166,7 @@ def register(application, namespace: dict[str, Any]) -> None:
                 reply_markup=InlineKeyboardMarkup(
                     [
                         [InlineKeyboardButton("Удалить мои настройки", callback_data="prefs:all:delete")],
-                        [InlineKeyboardButton("Отмена", callback_data="home:settings")],
+                        [InlineKeyboardButton("✖️ Отмена", callback_data="home:settings")],
                     ]
                 ),
             )

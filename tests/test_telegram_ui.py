@@ -12,18 +12,18 @@ class TelegramUiTests(unittest.TestCase):
         labels = [button.text for row in markup.inline_keyboard for button in row]
         self.assertIn("+24 ч", labels)
         self.assertIn("+384 ч", labels)
-        self.assertIn("Все сроки →", labels)
+        self.assertIn("🕒 Все сроки →", labels)
 
     def test_lead_pagination_has_multiple_pages(self) -> None:
         self.assertGreater(lead_page_count(), 1)
         markup = lead_keyboard(1)
         labels = [button.text for row in markup.inline_keyboard for button in row]
         self.assertIn("1/", " ".join(labels))
-        self.assertIn("Популярные", labels)
+        self.assertIn("⭐ Популярные", labels)
 
     def test_lead_page_text_is_compact(self) -> None:
-        self.assertEqual(lead_page_text(0), "Выберите срок.")
-        self.assertIn("страница", lead_page_text(1))
+        self.assertEqual(lead_page_text(0), "🕒 Выберите срок.")
+        self.assertIn("1/", lead_page_text(1))
 
     def test_location_keyboard_is_temporary_and_stage_specific(self) -> None:
         markup = location_keyboard(
@@ -37,7 +37,7 @@ class TelegramUiTests(unittest.TestCase):
         self.assertEqual(rows[0], ["📍 Моя геолокация"])
         self.assertEqual(rows[1], ["🕘 Москва", "🕘 Пятигорск"])
         self.assertEqual(rows[2], ["🕘 Краснодар"])
-        self.assertEqual(rows[-1], ["✖ Отмена"])
+        self.assertEqual(rows[-1], ["✖️ Отмена"])
         self.assertTrue(markup.one_time_keyboard)
         self.assertFalse(markup.is_persistent)
         self.assertTrue(markup.selective)

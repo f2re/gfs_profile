@@ -13,7 +13,7 @@ from forecast_time import forecast_lead_label, forecast_time_lines, forecast_ran
 
 from .callback_codec import CallbackCodecError, decode_callback, encode_callback
 from .contracts import MessengerGateway, NormalizedEvent, ProgressEvent, UiButton, UiKeyboard
-from .menu_catalog import HOME_TEXT, PRODUCT_LABELS, product_rows
+from .menu_catalog import HOME_TEXT, compact_point_label, product_button_label, product_rows
 from .profile_service import ParsedProfileInput, build_profile_product, cleanup_product_result, parse_profile_input
 from .state import FlowState, InMemorySessionStore
 
@@ -21,7 +21,7 @@ QUICK_LEADS = (0, 3, 6, 12, 24, 48)
 LEAD_PAGE_SIZE = 12
 START_TEXT = HOME_TEXT
 HELP_TEXT = (
-    "GFS data\n\n"
+    "❓ Помощь · GFS data\n\n"
     "Москва → выбор срока. Москва +24 → профиль сразу.\n"
     "Координаты и геолокация работают так же. Сроки — до +384 ч, время — UTC.\n\n"
     "/profile — профиль · /aero — аэрограмма\n"
@@ -34,7 +34,7 @@ HELP_TEXT = (
 
 
 def home_button() -> UiButton:
-    return UiButton("Меню", "callback", encode_callback("flow", "home"))
+    return UiButton("🏠 Меню", "callback", encode_callback("flow", "home"))
 
 
 def menu_keyboard(rows: list[list[UiButton]]) -> UiKeyboard:
@@ -143,23 +143,23 @@ class MessengerRouter:
     async def _start(self, event: NormalizedEvent, gateway: MessengerGateway) -> None:
         self.sessions.clear(event.platform, event.user_id, event.chat_id)
         enabled = tuple(product for product in self.home_products if product_available(product))
+        point_label = self._home_point_label(event)
         rows = self._home_quick_rows(event, enabled)
         rows.extend([
-            [UiButton(PRODUCT_LABELS[product], "callback", encode_callback("product", "open", product)) for product in row]
+            [UiButton(product_button_label(product), "callback", encode_callback("product", "open", product)) for product in row]
             for row in product_rows(enabled)
         ])
         utility = []
-        if self.home_settings:
-            utility.append(UiButton("Настройки", "callback", encode_callback("settings", "open")))
         if self.home_schedule:
-            utility.append(UiButton("Расписания", "callback", encode_callback("schedule", "open")))
+            utility.append(UiButton("🕒 Расписания", "callback", encode_callback("schedule", "open")))
+        if self.home_settings:
+            utility.append(UiButton("⚙️ Настройки", "callback", encode_callback("settings", "open")))
         if utility:
             rows.append(utility)
-        rows.append([UiButton("Геолокация", "request_location"), UiButton("Справка", "callback", encode_callback("flow", "help"))])
+        rows.append([UiButton("📍 Геолокация", "request_location"), UiButton("❓ Помощь", "callback", encode_callback("flow", "help"))])
         text = HOME_TEXT
-        point_label = self._home_point_label(event)
         if point_label:
-            text += f"\n\nОсновная точка: {point_label}"
+            text = f"🌦️ GFS data\n📍 {compact_point_label(point_label)}\n\nВыберите продукт 👇"
         if "weathernext3" in enabled:
             text += "\nWeatherNext 3 — дополнительный источник."
         await gateway.send_text(event.chat_id, text, keyboard=UiKeyboard.from_rows(rows))
@@ -212,8 +212,8 @@ class MessengerRouter:
         self.sessions.set(event.platform, event.user_id, event.chat_id, FlowState(step="await_point"))
         await gateway.send_text(
             event.chat_id,
-            "Профиль · GFS data\nУкажите город, координаты или отправьте геолокацию.",
-            keyboard=UiKeyboard.from_rows([[UiButton("Геолокация", "request_location"), home_button()]]),
+            "📈 Профиль · GFS data\n📍 Укажите город, координаты или отправьте геолокацию.",
+            keyboard=UiKeyboard.from_rows([[UiButton("📍 Геолокация", "request_location"), home_button()]]),
         )
 
     async def _resolve_profile_text(self, event: NormalizedEvent, gateway: MessengerGateway, raw: str) -> None:
@@ -238,7 +238,7 @@ class MessengerRouter:
                 [UiButton(_short_label(point), "callback", encode_callback("profile", "place", index))]
                 for index, point in enumerate(state.candidates)
             ]
-            rows.append([UiButton("Отмена", "callback", encode_callback("flow", "cancel"))])
+            rows.append([UiButton("✖️ Отмена", "callback", encode_callback("flow", "cancel"))])
             await gateway.send_text(event.chat_id, "Найдено несколько точек. Выберите нужную:", keyboard=UiKeyboard.from_rows(rows))
             return
         point = candidates[0]
@@ -385,7 +385,7 @@ class MessengerRouter:
         if page <= 0:
             values = [lead for lead in QUICK_LEADS if lead in leads]
             rows = _lead_rows(values, run)
-            rows.append([UiButton("Все сроки до +384", "callback", encode_callback("profile", "leadpage", 1))])
+            rows.append([UiButton("🗓️ Все сроки до +384", "callback", encode_callback("profile", "leadpage", 1))])
             page_text = "быстрые сроки"
         else:
             start = (page - 1) * LEAD_PAGE_SIZE
@@ -398,7 +398,7 @@ class MessengerRouter:
             nav: list[UiButton] = []
             if page > 1:
                 nav.append(UiButton("‹", "callback", encode_callback("profile", "leadpage", page - 1)))
-            nav.append(UiButton("Быстрые", "callback", encode_callback("profile", "leadpage", 0)))
+            nav.append(UiButton("⚡ Быстрые", "callback", encode_callback("profile", "leadpage", 0)))
             if start + LEAD_PAGE_SIZE < len(leads):
                 nav.append(UiButton("›", "callback", encode_callback("profile", "leadpage", page + 1)))
             rows.append(nav)
@@ -406,11 +406,11 @@ class MessengerRouter:
         state.lead_page = page
         state.step = "choose_lead"
         self.sessions.set(event.platform, event.user_id, event.chat_id, state)
-        rows.append([UiButton("Другая точка", "callback", encode_callback("product", "open", "profile")), home_button()])
+        rows.append([UiButton("📍 Другая точка", "callback", encode_callback("product", "open", "profile")), home_button()])
         timing = forecast_time_lines(run, self.default_lead) if run is not None else UNVERIFIED_TIME_TEXT
         await gateway.edit_text(
             event.chat_id, status.message_id,
-            f"📍 {getattr(state.point, 'label', 'выбранная точка')}\n{timing}\n\nВыберите срок GFS ({page_text}, UTC):",
+            f"📈 Профиль\n📍 {getattr(state.point, 'label', 'выбранная точка')}\n{timing}\n\n🕒 Выберите срок ({page_text}, UTC):",
             keyboard=menu_keyboard(rows),
         )
 
